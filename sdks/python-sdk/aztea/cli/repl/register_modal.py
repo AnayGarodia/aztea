@@ -26,10 +26,16 @@
 #     about to be entered, or a validation error when one fires.
 #   - On success, save the returned raw_api_key to ~/.aztea/config.json
 #     so the user is immediately signed in. Same effect as /login.
+#   - Submission runs on a background thread so the modal keeps painting
+#     "Creating your account…" instead of freezing for up to 30s (the
+#     AzteaClient default request timeout). The done-callback marshals
+#     back to the prompt_toolkit loop via call_soon_threadsafe so all
+#     output capture + history append happens on the UI thread.
 """
 from __future__ import annotations
 
 import re
+import threading
 from typing import Any, Callable, Optional
 
 from prompt_toolkit.filters import Condition
@@ -96,6 +102,11 @@ _modal_visible: list[bool] = [False]
 _modal_step: list[str] = [STEP_USERNAME]
 _modal_status: list[str] = [""]
 
+# True while the network round-trip is in flight. Used to (a) ignore
+# extra Enter presses so the user can't fire two registrations and
+# (b) render the inline "Creating your account…" hint via _status_text.
+_submitting: list[bool] = [False]
+
 # Stash collected values between steps so the final submit has everything.
 _collected = {"username": "", "email": "", "password": ""}
 
@@ -147,6 +158,7 @@ def _invalidate() -> None:
 def _reset_state() -> None:
     _modal_step[0] = STEP_USERNAME
     _modal_status[0] = ""
+    _submitting[0] = False
     _collected.update(username="", email="", password="")
     for ref in (_username_field, _email_field, _password_field, _confirm_field):
         if ref[0] is not None:
@@ -238,6 +250,11 @@ def _on_password_accept(buff) -> bool:
 
 def _on_confirm_accept(buff) -> bool:
     """Confirm step: ensure match, then submit."""
+    if _submitting[0]:
+        # Already mid-flight — swallow Enter so the user can't fire a
+        # second registration while the first is still in the network.
+        buff.text = ""
+        return False
     value = buff.text
     buff.text = ""
     if value != _collected["password"]:
@@ -257,42 +274,126 @@ def _on_confirm_accept(buff) -> bool:
 # ── Submission ────────────────────────────────────────────────────────────
 
 
+_SUBMITTING_STATUS = "Creating your account…  this can take up to 30 seconds."
+
+# Base URL is named so both the worker (which calls the API) and the
+# UI-thread renderer (which writes save_config) agree on a single value.
+_REGISTER_BASE_URL = "https://aztea.ai"
+
+
 def _submit() -> None:
-    """Send collected credentials to client.auth.register, route the result."""
-    captured = _do_register(
-        username=_collected["username"],
-        email=_collected["email"],
-        password=_collected["password"],
-    )
+    """Send collected credentials to client.auth.register, route the result.
+
+    The HTTP call goes through `client.auth.register`, which can block for
+    up to 30s (the AzteaClient default request timeout). Running it inline
+    would freeze the prompt_toolkit event loop — the modal would appear
+    dead until the call returned. Instead:
+
+      1. Mark the modal as submitting and paint the status line.
+      2. Run the blocking HTTP call on a worker thread.
+      3. Marshal the result back to the asyncio loop via
+         ``call_soon_threadsafe`` and render there. Output capture +
+         ``save_config`` + modal hide all happen on the UI thread to
+         avoid touching shared globals (``sys.stdout``, prompt_toolkit
+         state) from the worker.
+    """
+    _submitting[0] = True
+    _modal_status[0] = _SUBMITTING_STATUS
+    _invalidate()
+
+    # Snapshot creds before the modal state gets cleared on hide. The
+    # worker thread reads only these locals, never the module dicts.
+    username = _collected["username"]
+    email = _collected["email"]
+    password = _collected["password"]
+
+    loop = _get_running_loop()
+    if loop is None:
+        # No running asyncio loop (tests, head-less use). Fall back to
+        # the original sync behavior so tests don't need an event loop.
+        outcome = _perform_register_call(username, email, password)
+        _finalize_submit(username, email, outcome)
+        return
+
+    def _worker() -> None:
+        # Runs off the UI thread. Do NOT touch prompt_toolkit state or
+        # capture output here — both reach into shared globals. The
+        # work this thread owns is exactly the blocking HTTP call; the
+        # outcome dict is marshaled back to the loop for rendering.
+        outcome = _perform_register_call(username, email, password)
+        loop.call_soon_threadsafe(
+            _finalize_submit,
+            username,
+            email,
+            outcome,
+        )
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def _get_running_loop():
+    """Return the running asyncio loop, or None if we aren't inside one."""
+    import asyncio
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+
+def _perform_register_call(username: str, email: str, password: str) -> dict:
+    """Make the actual HTTP call. Safe to run off-thread — no globals touched.
+
+    Returns ``{"ok": True, "result": <server-payload>}`` on success or
+    ``{"ok": False, "exc": <exception>}`` on any failure. Never raises.
+    """
+    from ...client import AzteaClient
+    try:
+        client = AzteaClient(
+            base_url=_REGISTER_BASE_URL, client_id="aztea-cli-register",
+        )
+        result = client.auth.register(
+            username=username, email=email, password=password,
+        )
+        return {"ok": True, "result": result}
+    except Exception as exc:  # all errors flow through _surface_register_error
+        return {"ok": False, "exc": exc}
+
+
+def _finalize_submit(username: str, email: str, outcome: dict) -> None:
+    """Render the registration outcome on the UI thread and close the modal."""
+    try:
+        captured = _render_register_outcome(
+            username=username, email=email, outcome=outcome,
+        )
+    finally:
+        _submitting[0] = False
     _append_to_history(captured)
     _push_welcome_if_signed_in(captured)
     hide_register_modal()
 
 
-def _do_register(*, username: str, email: str, password: str) -> str:
-    """Call client.auth.register under output-capture; return captured text.
+def _render_register_outcome(
+    *, username: str, email: str, outcome: dict,
+) -> str:
+    """Turn a worker-thread outcome into captured panel text.
 
     On success: save the returned raw_api_key to ~/.aztea/config.json so
-    the user is signed in immediately. On failure: surface the server's
-    error message via Aztea's standard error() panel.
+    the user is signed in immediately. On failure: surface the error via
+    Aztea's standard error() panel, friendly-ing common network failures.
+
+    Must run on the UI thread — uses ``_capture_command_output`` which
+    swaps ``sys.stdout`` globally.
     """
-    from ...client import AzteaClient
     from ...config import save_config
     from ..output import error, success
     from .app import _capture_command_output
 
-    base_url = "https://aztea.ai"
-
     with _capture_command_output() as cap:
-        try:
-            client = AzteaClient(base_url=base_url, client_id="aztea-cli-register")
-            result = client.auth.register(
-                username=username, email=email, password=password,
-            )
-        except Exception as exc:
-            _surface_register_error(exc)
+        if not outcome.get("ok"):
+            _surface_register_error(outcome.get("exc") or RuntimeError("Registration failed."))
             return cap.getvalue()
 
+        result = outcome.get("result") or {}
         raw_key = str(result.get("raw_api_key") or "").strip()
         if not raw_key:
             error(
@@ -305,7 +406,7 @@ def _do_register(*, username: str, email: str, password: str) -> str:
             )
             return cap.getvalue()
 
-        save_config(api_key=raw_key, base_url=base_url, username=username)
+        save_config(api_key=raw_key, base_url=_REGISTER_BASE_URL, username=username)
         success(
             f"Account created — signed in as {username}",
             detail=email,
@@ -317,11 +418,19 @@ def _do_register(*, username: str, email: str, password: str) -> str:
 def _surface_register_error(exc: Exception) -> None:
     """Map common registration failures to actionable messages.
 
-    The server emits structured error codes; we friendly-fy a few of the
-    common ones so the user knows the precise fix.
+    Client-side network failures (timeout, DNS, unreachable host) flow
+    through the shared ``render_network_error`` helper so every surface
+    in the CLI tells the same story. Server-emitted Aztea errors get
+    specific copy for the cases the user can act on (taken username,
+    rate limited); everything else falls through to a generic panel.
     """
-    from ..output import error
+    from ..output import error, render_network_error
     from ...errors import AzteaError
+
+    # Check network shapes first — they come back as plain requests/urllib3
+    # exceptions, NOT AzteaError, and the raw urllib3 message is hostile.
+    if render_network_error(exc, code_prefix="register"):
+        return
 
     msg = str(exc).strip() or "Registration failed."
 

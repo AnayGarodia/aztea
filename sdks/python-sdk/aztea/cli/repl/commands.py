@@ -472,16 +472,20 @@ def _claude_code(argv: list[str]) -> None:
 
     Aztea CLI is a marketplace control room; Claude Code is the
     natural-language surface. /claude-code passes the user from one to
-    the other — when they exit Claude Code, they land back at their
-    original bash shell (NOT in Aztea), because nesting two alt-screen
-    apps caused render conflicts (V12: Aztea's leftovers stayed at the
-    top of the screen while Claude Code rendered at the bottom).
+    the other. When Claude Code exits, ``start()`` reopens the Aztea
+    REPL so the user lands back at the home screen rather than
+    dropping out to bash — a /claude-code call is a detour, not a
+    one-way door. The V12 render conflict (Aztea alt-screen leftovers
+    bleeding through Claude Code's draw) is avoided by fully exiting
+    Aztea before launching, and aggressively clearing the screen
+    (visible + scrollback) on both sides of the subprocess via
+    ``_wipe_terminal``.
 
     Implementation: schedule the subprocess via
     ``request_subprocess_on_exit`` and exit the Application. The
     Aztea ``start()`` function runs the subprocess after its
-    ``Application.run()`` returns — with the alt-buffer fully closed,
-    Claude Code owns the terminal cleanly.
+    ``Application.run()`` returns, then loops back into a fresh
+    Application instance.
     """
     if not shutil.which("claude"):
         error(
@@ -508,7 +512,7 @@ def _claude_code(argv: list[str]) -> None:
     info("Or just ask Claude to do something Aztea handles, e.g.")
     info('  "audit my requirements.txt for known CVEs"')
     info("— Claude will call `do_specialist_task` automatically.")
-    info("When you exit Claude Code, you'll be back at your shell.")
+    info("When you exit Claude Code, you'll land back on the Aztea home screen.")
 
     # Schedule + exit. The subprocess runs after Application.run() returns
     # from start(), which guarantees the alt-screen is fully closed before

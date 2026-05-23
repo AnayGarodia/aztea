@@ -208,6 +208,14 @@ def _clear_output() -> None:
 # ── Overlay state ─────────────────────────────────────────────────────────
 
 
+# The browse overlay starts ``_OVERLAY_TOP_ROW`` rows from the top of
+# the screen. The AZTEA wordmark is 6 rows of ASCII art + 1 blank
+# separator; anchoring here keeps the wordmark visible while letting
+# the overlay reclaim every row below it (Signed-in chip, init tip,
+# Quickstart panel, the /help hint) for results. Tuned for /agents
+# specifically — more agents on screen at once is a recurring ask.
+_OVERLAY_TOP_ROW = 7
+
 _overlay_visible: list[bool] = [False]
 _overlay_text: list[str] = [""]
 _overlay_title: list[str] = [""]
@@ -240,14 +248,12 @@ def _overlay_ansi():
 def _overlay_label():
     title = _overlay_title[0] or "result"
     total = _overlay_total_lines[0]
-    offset = _overlay_scroll[0]
-    # Show position when there's something to scroll. Hides the scroll
-    # hint for short outputs that fit in one screen.
+    # Show the scroll hint when the result is taller than a screen; for
+    # short overlays just show how to close. The exact line position
+    # (e.g. "line 1/64") used to render here but read as visual noise —
+    # the user only needs to know that scrolling is possible.
     if total > 0:
-        return (
-            f" {title}  ·  line {offset + 1}/{total}  ·  "
-            f"↑↓ PgUp/PgDn to scroll  ·  Esc to close "
-        )
+        return f" {title}  ·  ↑↓ PgUp/PgDn to scroll  ·  Esc to close "
     return f" {title}  ·  press Esc to close "
 
 
@@ -333,8 +339,12 @@ def _make_accept_handler():
                 get_app().exit()
                 return False
             except Exception as exc:
-                from ..output import error as _err
-                _err(f"Command failed: {exc}")
+                from ..output import error as _err, render_network_error
+                # Friendly-fy timeouts / connection failures so users
+                # don't see raw HTTPSConnectionPool(...) strings when
+                # aztea.ai is slow or unreachable.
+                if not render_network_error(exc, code_prefix="repl"):
+                    _err(f"Command failed: {exc}")
         captured = cap.getvalue()
 
         if not captured.strip():
@@ -473,10 +483,16 @@ def _build_application() -> Application:
 
     # ── Overlay (Float) ──
     #
-    # Anchored below the banner so the AZTEA wordmark and the Quickstart
-    # panel stay visible while an overlay is open. Earlier positioning
-    # (top=2) covered rows 2+ of the layout — i.e. all but the top two
-    # rows of the wordmark.
+    # Anchored just below the AZTEA wordmark so browse-style overlays
+    # (e.g. /agents) get as much vertical room as possible. The wordmark
+    # block is ~6 rows of ASCII art; ``_OVERLAY_TOP_ROW`` is that height
+    # plus one blank separator. The "Signed in as ..." line, the optional
+    # init tip, the Quickstart panel and the "Type /help …" hint are all
+    # intentionally covered while an overlay is open — per user feedback,
+    # more agents visible at once is worth more than keeping those
+    # always-on chrome rows on-screen during a browse. Earlier positioning
+    # (``top=banner_lines + 1`` ≈ row 23) left only a few agent rows
+    # visible before the overlay's bottom edge.
     overlay_control = FormattedTextControl(_overlay_ansi, focusable=False)
     overlay_window = Window(overlay_control, wrap_lines=True, always_hide_cursor=True)
     overlay_frame = Frame(overlay_window, title=_overlay_label)
@@ -485,13 +501,13 @@ def _build_application() -> Application:
             content=overlay_frame,
             filter=_overlay_is_visible,
         ),
-        # Full screen width below the banner. Earlier positioning
+        # Full screen width below the wordmark. Earlier positioning
         # (left=6, right=6) left vertical strips at columns 0-5 and
         # right-5..right where the output_window underneath bled
         # through — chat history fragments visible alongside the
         # overlay. Float positions are screen-absolute; with
         # left=0/right=0 the Frame border IS the visual edge.
-        top=banner_lines + 1,
+        top=_OVERLAY_TOP_ROW,
         left=0,
         right=0,
         bottom=4,
@@ -613,35 +629,69 @@ def _build_application() -> Application:
 
 
 def start() -> None:
-    """Open the full-screen REPL. Returns when the user exits."""
-    _clear_output()
-    _hide_overlay()
-    application = _build_application()
-    try:
-        application.run()
-    except KeyboardInterrupt:
-        return
+    """Open the full-screen REPL. Returns when the user exits.
 
-    # If a slash command queued a subprocess via request_subprocess_on_exit
-    # (today: only /claude-code), run it now — the Application's alt-screen
-    # is closed and the subprocess can own the terminal cleanly. When the
-    # subprocess returns, the user is back at their original bash shell.
-    pending = _consume_pending_subprocess()
-    if pending:
-        import os
-        import subprocess
-        import sys
-        # Wipe the screen before handing off. Without this, bash
-        # scrollback from previous `aztea` invocations stays visible at
-        # the top of the terminal (we saw 5 echoed prompt lines before
-        # Claude Code's banner in V18). ANSI 2J clears the visible
-        # screen, H homes the cursor. Most modern terminals also have
-        # \x1b[3J which clears scrollback too — adding it for thoroughness.
-        sys.stdout.write("\x1b[3J\x1b[2J\x1b[H")
-        sys.stdout.flush()
+    Loops the Application so a slash command that hands off to a
+    subprocess (today: only /claude-code) brings the user back to the
+    Aztea home screen when the subprocess exits, rather than dropping
+    straight to bash. The loop terminates on a normal exit (Ctrl-D,
+    /exit) with no pending subprocess.
+    """
+    # Warm the /agents cache in the background so the user's first
+    # browse is usually instant. Safe to call repeatedly across loop
+    # iterations — prewarm de-dupes via its own in-flight flag.
+    from .. import _agents_cache
+    _agents_cache.prewarm()
+
+    while True:
+        _clear_output()
+        _hide_overlay()
+        application = _build_application()
         try:
-            subprocess.run(pending, cwd=os.getcwd(), check=False)
-        except FileNotFoundError:
-            # Already validated in the slash handler; if it disappeared
-            # between the check and now, fall through silently.
-            pass
+            application.run()
+        except KeyboardInterrupt:
+            return
+
+        pending = _consume_pending_subprocess()
+        if pending is None:
+            return  # Normal exit, no handoff queued.
+
+        _run_pending_subprocess(pending)
+        # Re-enter the REPL after the subprocess returns — the user
+        # said /claude-code expecting a quick detour, not a one-way
+        # door out of Aztea. The loop body rebuilds the Application
+        # fresh so banner state (login, MCP wiring) reflects whatever
+        # happened in the subprocess.
+
+def _run_pending_subprocess(cmd: list[str]) -> None:
+    """Hand the terminal to ``cmd`` (e.g. ``["claude"]``).
+
+    Wipes the screen before AND after so we never sandwich the
+    subprocess between Aztea alt-screen residue. ``ANSI 2J`` clears
+    the visible screen, ``3J`` clears scrollback (modern terminals),
+    ``H`` homes the cursor. Same wipe used to be inline; lifted to
+    a helper so the loop body in ``start()`` reads as one line per
+    concern.
+
+    Failures are swallowed: the existence check happens in the
+    slash-command handler (e.g. ``shutil.which("claude")``), and if
+    the binary vanishes between that check and now there's nothing
+    actionable to print.
+    """
+    import os
+    import subprocess
+    import sys
+
+    _wipe_terminal()
+    try:
+        subprocess.run(cmd, cwd=os.getcwd(), check=False)
+    except FileNotFoundError:
+        pass
+    _wipe_terminal()
+
+
+def _wipe_terminal() -> None:
+    """Clear visible screen + scrollback + home the cursor."""
+    import sys
+    sys.stdout.write("\x1b[3J\x1b[2J\x1b[H")
+    sys.stdout.flush()
