@@ -630,7 +630,7 @@ def _render_doctor(
         head.append(f"{BAR} ", style="success")
         head.append("integration healthy", style="success")
         head.append(f"   {DOT}   ", style="border")
-        head.append(f"quit and relaunch {target.label} to pick up changes", style="muted")
+        head.append(f"quit and relaunch {label} to pick up changes", style="muted")
         panel = Panel(
             Group(head, Text(""), summary),
             border_style="border_dim",

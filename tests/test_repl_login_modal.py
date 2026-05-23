@@ -7,7 +7,15 @@ copy instead of leaking raw urllib3 messages.
 """
 from __future__ import annotations
 
-from aztea.cli.repl import login_modal as lm
+import pytest
+
+# The REPL package pulls in prompt_toolkit on import (login_modal builds
+# a Float container at module load). prompt_toolkit is a CLI extra, not
+# a core dep — when CI runs the base test job without it, skip cleanly
+# instead of erroring at collection time.
+pytest.importorskip("prompt_toolkit")
+
+from aztea.cli.repl import login_modal as lm  # noqa: E402
 
 
 def test_surface_login_error_maps_read_timeout(capsys) -> None:

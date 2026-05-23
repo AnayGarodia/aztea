@@ -680,7 +680,6 @@ def _run_pending_subprocess(cmd: list[str]) -> None:
     """
     import os
     import subprocess
-    import sys
 
     _wipe_terminal()
     try:

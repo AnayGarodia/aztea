@@ -9,7 +9,15 @@ behavior is preserved.
 """
 from __future__ import annotations
 
-from aztea.cli.repl import register_modal as rm
+import pytest
+
+# The REPL package pulls in prompt_toolkit on import (register_modal
+# builds a Float container at module load). prompt_toolkit is a CLI
+# extra, not a core dep — when CI runs the base test job without it,
+# skip cleanly instead of erroring at collection time.
+pytest.importorskip("prompt_toolkit")
+
+from aztea.cli.repl import register_modal as rm  # noqa: E402
 
 
 class _FakeAuthApi:
