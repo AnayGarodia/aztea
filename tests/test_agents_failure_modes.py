@@ -38,8 +38,6 @@ _REASONING_LOOP_TARGETS = [
      {"test_path": "tests/foo.py", "repo_root": "/tmp/x"}),
     ("bisect_and_blame", "bisect_configured",
      {"good_ref": "abc", "bad_ref": "def", "repro_cmd": "x"}),
-    ("fuzz_and_find", "fuzz_and_find_configured",
-     {"function_source": "def f(): pass", "property_spec": "p"}),
 ]
 
 
@@ -249,36 +247,7 @@ def test_compliance_attestor_signing_failure_returns_envelope(monkeypatch, tmp_p
 
 
 # ---------------------------------------------------------------------------
-# 8. Workspace write fails — runner pool reports partial results
-# ---------------------------------------------------------------------------
-
-
-def test_runner_pool_workspace_write_failure_does_not_crash(monkeypatch):
-    """A failed workspace artifact write should be logged but not crash
-    the aggregation. The runner pool already tests this directly; this is
-    a meta-check that the contract holds end-to-end."""
-    from core.runners import FanOutRunner, FanOutSpec, FailurePolicy
-    from core import workspaces as ws
-
-    def _bad_write(*args, **kwargs):
-        raise OSError("disk full")
-    monkeypatch.setattr(ws, "write_artifact", _bad_write)
-
-    # Build a dummy spec with a workspace_id. The runner should still finish.
-    spec = FanOutSpec(
-        worker_fn=lambda p: {"squared": p["n"] ** 2},
-        payloads=[{"n": 1}, {"n": 2}],
-        aggregator_fn=lambda rs: {"sum": sum(r.output["squared"] for r in rs)},
-        max_concurrency=2,
-        workspace_id="fake-workspace-id",  # write will fail
-    )
-    result = FanOutRunner().run(spec)
-    # Runner returns despite workspace error.
-    assert result.output == {"sum": 5}
-
-
-# ---------------------------------------------------------------------------
-# 9. Embedding backend returns degenerate vector — D16 doesn't crash
+# 8. Embedding backend returns degenerate vector — D16 doesn't crash
 # ---------------------------------------------------------------------------
 
 

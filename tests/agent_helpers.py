@@ -1,9 +1,9 @@
 """
-agent_helpers.py — shared mocks + fixtures for the 25-agent test suite.
+agent_helpers.py — shared mocks + fixtures for the slate test suite.
 
 # OWNS: LLM stubs, signing stubs, git-fixture builders, ingest helpers,
 #       invariant-assertion utilities, pytest fixtures used across the
-#       30-file agent test suite.
+#       per-agent test files.
 # NOT OWNS: per-agent business assertions (those live in tests/test_agent_*.py).
 #
 # Why centralised: every per-agent test file would otherwise repeat 50 lines
@@ -165,10 +165,9 @@ def _last_user_content(req: CompletionRequest) -> str:
 
 _LLM_CALLSITES = [
     "core.llm.fallback",  # canonical source
-    "agents._reasoning_scaffold",  # used by 22 scaffolded agents
+    "agents._reasoning_scaffold",  # used by the scaffolded agents
     "agents.codebase_reviewer",  # D16 imports directly
     "agents.compliance_attestor",  # C11 imports directly
-    "agents.ai_code_provenance_stamp",  # E25 imports directly
     "agents.flake_hunter",  # imports directly (pre-scaffold version)
 ]
 
@@ -222,7 +221,7 @@ def patch_signing_everywhere(monkeypatch) -> tuple[Callable, Callable]:
     import importlib
     callsites = [
         "core.crypto", "core.identity",
-        "agents.compliance_attestor", "agents.ai_code_provenance_stamp",
+        "agents.compliance_attestor",
     ]
     for modpath in callsites:
         try:
@@ -245,54 +244,12 @@ def patch_signing_everywhere(monkeypatch) -> tuple[Callable, Callable]:
 _ENV_SCENARIOS: dict[str, dict[str, str]] = {
     "flake_hunter_configured": {"AZTEA_RUNNER_JOB_LIFECYCLE_ENABLED": "1"},
     "bisect_configured": {"AZTEA_RUNNER_JOB_LIFECYCLE_ENABLED": "1"},
-    "deploy_canary_configured": {
-        "AZTEA_DEPLOY_API_TOKEN": "tok-fake",
-        "AZTEA_METRICS_API_URL": "https://metrics.example/api",
-    },
-    "migration_pilot_configured": {
-        "AZTEA_MIGRATION_REPLICA_DSN": "postgres://localhost/test",
-    },
-    "pr_watch_configured": {
-        "AZTEA_RUNNER_JOB_LIFECYCLE_ENABLED": "1",
-        "GITHUB_APP_ID": "12345",
-        # github_app.is_configured also checks the private key file; tests
-        # that need this scenario also need to point GITHUB_APP_PRIVATE_KEY_PATH
-        # at a tmp file via monkeypatch.
-    },
-    "fuzz_and_find_configured": {"AZTEA_RUNNER_JOB_LIFECYCLE_ENABLED": "1"},
-    "mutation_doctor_configured": {"AZTEA_RUNNER_JOB_LIFECYCLE_ENABLED": "1"},
-    "refactor_verifier_configured": {"AZTEA_RUNNER_JOB_LIFECYCLE_ENABLED": "1"},
-    "llm_eval_configured": {
-        "AZTEA_RUNNER_JOB_LIFECYCLE_ENABLED": "1",
-        "OPENAI_API_KEY": "sk-fake-1",
-        "ANTHROPIC_API_KEY": "sk-fake-2",
-    },
-    "config_solver_configured": {"AZTEA_RUNNER_JOB_LIFECYCLE_ENABLED": "1"},
-    "dmarc_configured": {
-        "SMTP_HOST": "smtp.example", "SMTP_USER": "u", "SMTP_PASS": "p",
-        "AZTEA_DMARC_CANARY_INBOX": "canary@example.com",
-    },
     "stripe_settler_configured": {"STRIPE_API_KEY": "sk_test_fake"},
-    "incident_captain_configured": {
-        "PAGERDUTY_API_TOKEN": "tok-pd",
-        "SENTRY_API_TOKEN": "tok-sentry",
-        "AZTEA_INCIDENT_DOC_TARGET": "https://docs.example/war-room",
-    },
     "prod_trace_replayer_configured": {"AZTEA_RUNNER_JOB_LIFECYCLE_ENABLED": "1"},
-    "redteam_configured": {
-        "AZTEA_RUNNER_JOB_LIFECYCLE_ENABLED": "1",
-        "AZTEA_REDTEAM_CONSENT_SIGNING_KEY": "fake-consent-key",
-    },
-    "privacy_tracer_configured": {
-        "AZTEA_OTEL_COLLECTOR_URL": "https://otel.example/v1",
-        "AZTEA_EBPF_AGENT_SOCKET": "/var/run/ebpf.sock",
-    },
     # The reference agents (D16, C11) don't need env vars; they're listed
     # so tests can refer to them by scenario name uniformly.
     "codebase_reviewer_configured": {},
     "compliance_attestor_configured": {},
-    "api_contract_negotiator_configured": {},
-    "ai_provenance_configured": {},
 }
 
 
@@ -559,7 +516,7 @@ def ingested_repo(tmp_path):
 def clean_namespaces():
     """Clean any vector_store namespaces used by tests, before+after."""
     from core import vector_store as vs
-    namespaces = ["test_d16", "test_d17", "test_e21"]
+    namespaces = ["test_d16"]
     for ns in namespaces:
         try:
             vs.delete_namespace(ns)

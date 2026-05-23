@@ -1,5 +1,5 @@
 """
-test_specs_part11_contract.py — shape + invariant tests for the 18 new
+test_specs_part11_contract.py — shape + invariant tests for the seven new
 agent specs returned by load_builtin_specs_part11().
 
 Tests the spec data independently of the catalog assembler so a contract
@@ -41,9 +41,9 @@ _REQUIRED_TOP_LEVEL = {
 # ---------------------------------------------------------------------------
 
 
-def test_returns_18_specs(specs):
-    """After 2026-05-22 cull (7 weakest agents removed: B7/B8/B9/B10/D20/E21/E23)."""
-    assert len(specs) == 18
+def test_returns_seven_specs(specs):
+    """After the 2026-05-23 editorial cut: 2 reference agents + 5 pending."""
+    assert len(specs) == 7
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +173,7 @@ def test_d16_and_c11_have_category_and_cacheable(specs):
 
 
 def test_pending_agents_lack_category(specs):
-    """The 23 pending-infra agents bypass the stricter normalisation gate
+    """The five pending-infra agents bypass the stricter normalisation gate
     so they don't need category/cacheable. This is INTENTIONAL: their
     specs only become production-grade once their external dep is wired."""
     by_id = {s["agent_id"]: s for s in specs}

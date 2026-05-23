@@ -1,12 +1,12 @@
-"""Smoke tests for the 25-agent strategy-doc slate (2026-05-22).
+"""Smoke tests for the strategy-doc 7-agent slate (post-editorial cut).
 
-Confirms each new agent is:
+Confirms each agent is:
   * registered in BUILTIN_INTERNAL_ENDPOINTS,
   * importable via the catalog-registered Python module,
   * returns a dict with either an ``error`` envelope or top-level output keys,
   * (when in CURATED_BUILTIN) carries a normalised spec with category/cacheable.
 
-The 16 pending-infra agents intentionally return a structured
+The five pending-infra agents intentionally return a structured
 ``requires_configuration`` envelope when their external dep is missing —
 that's the v0 contract, not a bug.
 """
@@ -29,29 +29,13 @@ _NEW_AGENTS: list[tuple[str, str, str, str | None]] = [
     # A family — longitudinal
     ("flake_hunter", "FLAKE_HUNTER_AGENT_ID", "A", "flake_hunter.requires_configuration"),
     ("bisect_and_blame", "BISECT_AND_BLAME_AGENT_ID", "A", "bisect_and_blame.requires_configuration"),
-    ("deploy_canary_pilot", "DEPLOY_CANARY_PILOT_AGENT_ID", "A", "deploy_canary_pilot.requires_configuration"),
-    ("migration_pilot", "MIGRATION_PILOT_AGENT_ID", "A", "migration_pilot.requires_configuration"),
-    ("pr_watch", "PR_WATCH_AGENT_ID", "A", "pr_watch.requires_configuration"),
-    # B family — compute-heavy (B7/B8/B9/B10 culled 2026-05-22: scored 3 on the
-    # "Claude Code can't do this" test — no structural moat)
-    ("fuzz_and_find", "FUZZ_AND_FIND_AGENT_ID", "B", "fuzz_and_find.requires_configuration"),
     # C family — liability-bearing (C11 is a reference agent and works today)
     ("compliance_attestor", "COMPLIANCE_ATTESTOR_AGENT_ID", "C", None),
-    ("vulnerability_disclosure_submitter", "VULNERABILITY_DISCLOSURE_SUBMITTER_AGENT_ID", "C", None),
-    ("dmarc_email_verifier", "DMARC_EMAIL_VERIFIER_AGENT_ID", "C", None),
     ("stripe_connect_settler", "STRIPE_CONNECT_SETTLER_AGENT_ID", "C", None),
-    ("production_incident_captain", "PRODUCTION_INCIDENT_CAPTAIN_AGENT_ID", "C", None),
-    # D family — org-memory (D16 is a reference agent and works today;
-    # D20 cost_forecaster culled 2026-05-22: Claude guesses cost about as well)
+    # D family — org-memory (D16 is a reference agent and works today)
     ("codebase_reviewer", "CODEBASE_REVIEWER_AGENT_ID", "D", None),
-    ("author_style_reviewer", "AUTHOR_STYLE_REVIEWER_AGENT_ID", "D", None),
     ("prod_trace_replayer", "PROD_TRACE_REPLAYER_AGENT_ID", "D", None),
     ("schema_migration_planner", "SCHEMA_MIGRATION_PLANNER_AGENT_ID", "D", None),
-    # E family — specialized (E21 hallucination_auditor + E23 api_contract_negotiator
-    # culled 2026-05-22: Claude does both natively at similar quality)
-    ("adversarial_red_teamer", "ADVERSARIAL_RED_TEAMER_AGENT_ID", "E", None),
-    ("privacy_flow_tracer", "PRIVACY_FLOW_TRACER_AGENT_ID", "E", None),
-    ("ai_code_provenance_stamp", "AI_CODE_PROVENANCE_STAMP_AGENT_ID", "E", None),
 ]
 
 
@@ -127,14 +111,6 @@ def test_pending_agent_returns_requires_configuration_with_valid_inputs(
     valid_payloads = {
         "flake_hunter": {"test_path": "tests/foo.py", "repo_root": "/tmp/x"},
         "bisect_and_blame": {"good_ref": "abc", "bad_ref": "def", "repro_cmd": "x"},
-        "deploy_canary_pilot": {"deploy_cmd": "deploy", "slo_thresholds": {"p95": 500}},
-        "migration_pilot": {"target_sql": "SELECT 1"},
-        "pr_watch": {"pr_url": "https://github.com/o/r/pull/1"},
-        "fuzz_and_find": {"function_source": "def f(): pass", "property_spec": "x"},
-        "mutation_test_doctor": {"repo_root": "/tmp/x", "test_cmd": "pytest"},
-        "refactor_safety_verifier": {"diff": "x", "repo_root": "/tmp/x"},
-        "llm_eval": {"prompts": ["a"], "ground_truth": ["b"], "models": ["m1", "m2"]},
-        "combinatorial_config_solver": {"dimensions": {"a": [1]}, "test_cmd": "pytest"},
     }
     payload = valid_payloads[slug]
     module = importlib.import_module(f"agents.{slug}")
@@ -161,9 +137,9 @@ def test_agent_runner_wired_in_executor(slug, id_name, family, _expected_err,
 
 
 def test_pending_infra_set_is_exhaustive(constants):
-    """The 23 stub agents are in PENDING_INFRA_AGENT_IDS; the 2 reference
-    agents (D16, C11) are in CURATED_PUBLIC. PENDING_INFRA and
-    CURATED_PUBLIC are disjoint by construction."""
+    """The five stub agents are in PENDING_INFRA_AGENT_IDS; the two reference
+    agents (D16, C11) are in CURATED_PUBLIC. PENDING_INFRA and CURATED_PUBLIC
+    are disjoint by construction."""
     pending = constants.PENDING_INFRA_AGENT_IDS
     curated = constants.CURATED_PUBLIC_BUILTIN_AGENT_IDS
     assert len(pending & curated) == 0, "pending and curated must be disjoint"
@@ -176,8 +152,8 @@ def test_pending_infra_set_is_exhaustive(constants):
         getattr(constants, name) for _slug, name, _fam, _exp in _NEW_AGENTS
         if getattr(constants, name) not in reference_ids
     }
-    assert len(expected_pending) == 16, (
-        f"expected 16 pending agents (18 total - 2 reference), got {len(expected_pending)}"
+    assert len(expected_pending) == 5, (
+        f"expected 5 pending agents (7 total - 2 reference), got {len(expected_pending)}"
     )
     missing_from_pending = expected_pending - pending
     extra_in_pending = pending - expected_pending
@@ -196,8 +172,8 @@ def test_reference_agents_in_curated_public(constants):
     assert constants.COMPLIANCE_ATTESTOR_AGENT_ID in curated
 
 
-def test_all_25_specs_present_in_catalog_loader():
-    """Every new agent must have a spec entry, even pending ones."""
+def test_all_specs_present_in_catalog_loader():
+    """Every agent must have a spec entry."""
     from server.builtin_agents.specs_part11 import load_builtin_specs_part11
     specs = load_builtin_specs_part11()
     spec_ids = {s["agent_id"] for s in specs}

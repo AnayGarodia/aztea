@@ -1,11 +1,10 @@
 """
-test_new_agents_e2e.py — end-to-end integration tests for the 25-agent slate.
+test_new_agents_e2e.py — end-to-end integration tests for the seven-agent
+slate (post-editorial cut).
 
 Uses the project's isolated_db + client fixtures from
 tests/integration/conftest.py. Mocks the LLM provider chain and the
 signing key so tests don't depend on real credentials.
-
-All 13 tests from the test plan, in order.
 """
 
 from __future__ import annotations
@@ -223,7 +222,7 @@ def test_pending_agent_hire_via_direct_id_returns_requires_configuration_with_re
 
 
 def test_list_agents_excludes_pending_infra_by_default(client):
-    """GET /registry/agents should NOT show the 23 pending-infra agents
+    """GET /registry/agents should NOT show the five pending-infra agents
     in the default public catalog."""
     user, api_key = _setup_caller()
     resp = client.get("/registry/agents", headers=_auth_headers(api_key))

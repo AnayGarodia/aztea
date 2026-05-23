@@ -458,25 +458,14 @@ BUILTIN_AGENT_RUNNERS: dict[str, Callable[[Any], dict]] = {
     _GITHUB_RELEASES_AGENT_ID: _module_runner(agent_github_releases),
     _HCL_TERRAFORM_ANALYZER_AGENT_ID: _module_runner(agent_hcl_terraform_analyzer),
     _QUANT_PATCH_VALIDATOR_AGENT_ID: _module_runner(agent_quant_patch_validator),
-    # 2026-05-22 — strategy-doc 25-agent slate
+    # 2026-05-22 — strategy-doc 7-agent slate (post-editorial cut)
     _FLAKE_HUNTER_AGENT_ID: _module_runner(agent_flake_hunter),
     _BISECT_AND_BLAME_AGENT_ID: _module_runner(agent_bisect_and_blame),
-    _DEPLOY_CANARY_PILOT_AGENT_ID: _module_runner(agent_deploy_canary_pilot),
-    _MIGRATION_PILOT_AGENT_ID: _module_runner(agent_migration_pilot),
-    _PR_WATCH_AGENT_ID: _module_runner(agent_pr_watch),
-    _FUZZ_AND_FIND_AGENT_ID: _module_runner(agent_fuzz_and_find),
     _COMPLIANCE_ATTESTOR_AGENT_ID: _module_runner(agent_compliance_attestor),
-    _VULNERABILITY_DISCLOSURE_SUBMITTER_AGENT_ID: _module_runner(agent_vulnerability_disclosure_submitter),
-    _DMARC_EMAIL_VERIFIER_AGENT_ID: _module_runner(agent_dmarc_email_verifier),
     _STRIPE_CONNECT_SETTLER_AGENT_ID: _module_runner(agent_stripe_connect_settler),
-    _PRODUCTION_INCIDENT_CAPTAIN_AGENT_ID: _module_runner(agent_production_incident_captain),
     _CODEBASE_REVIEWER_AGENT_ID: _module_runner(agent_codebase_reviewer),
-    _AUTHOR_STYLE_REVIEWER_AGENT_ID: _module_runner(agent_author_style_reviewer),
     _PROD_TRACE_REPLAYER_AGENT_ID: _module_runner(agent_prod_trace_replayer),
     _SCHEMA_MIGRATION_PLANNER_AGENT_ID: _module_runner(agent_schema_migration_planner),
-    _ADVERSARIAL_RED_TEAMER_AGENT_ID: _module_runner(agent_adversarial_red_teamer),
-    _PRIVACY_FLOW_TRACER_AGENT_ID: _module_runner(agent_privacy_flow_tracer),
-    _AI_CODE_PROVENANCE_STAMP_AGENT_ID: _module_runner(agent_ai_code_provenance_stamp),
 }
 
 

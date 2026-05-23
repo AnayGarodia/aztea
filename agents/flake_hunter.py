@@ -2,7 +2,7 @@
 flake_hunter.py — A1: characterize and (where possible) fix a flaky test.
 
 # OWNS: reasoning-loop scaffold for flake characterization.
-# v0 STATUS: requires JobLifecycleBackend (core/runners) to fan out
+# v0 STATUS: requires the cross-process job lifecycle backend to fan out
 #   parallel re-runs. Without it, returns requires_configuration with the
 #   exact env-flag needed.
 # REASONING LOOP: (1) plan factor matrix → (2) interpret rerun outcomes
@@ -78,8 +78,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             {
                 "missing": ["AZTEA_RUNNER_JOB_LIFECYCLE_ENABLED=1"],
                 "hint": "v0 ships the in-process runner only; the lifecycle "
-                        "backend lands with the first consumer agent. See "
-                        "core/runners/dispatch.py::JobLifecycleBackend.",
+                        "backend lands with the first consumer agent.",
                 "test_path": test_path,
                 "planned_trials": trials,
             },

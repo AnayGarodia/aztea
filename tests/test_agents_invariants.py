@@ -3,9 +3,10 @@ test_agents_invariants.py — cross-cutting contracts every new agent must
 honour. Failures here mean a slate agent violated the per-agent contract
 the strategy doc's Section 6 sets out.
 
-Parametrised across all 25 agents from PENDING_INFRA_AGENT_IDS + the two
-reference agents (D16, C11). When a future agent gets added to the slate,
-inclusion in `_ALL_AGENT_SLUGS` is the only edit needed here.
+Parametrised across the seven post-cut agents (two reference agents that
+work today — D16, C11 — plus five pending-infra agents). When a future
+agent gets added to the slate, inclusion in ``_ALL_AGENT_SLUGS`` is the
+only edit needed here.
 """
 
 from __future__ import annotations
@@ -35,21 +36,12 @@ from tests.agent_helpers import (
 
 
 _ALL_AGENT_SLUGS = [
-    # A
-    "flake_hunter", "bisect_and_blame", "deploy_canary_pilot",
-    "migration_pilot", "pr_watch",
-    # B (B7/B8/B9/B10 culled — Claude does them given time)
-    "fuzz_and_find",
-    # C
-    "compliance_attestor", "vulnerability_disclosure_submitter",
-    "dmarc_email_verifier", "stripe_connect_settler",
-    "production_incident_captain",
-    # D (D20 culled — Claude guesses cost about as well)
-    "codebase_reviewer", "author_style_reviewer", "prod_trace_replayer",
-    "schema_migration_planner",
-    # E (E21 + E23 culled — Claude does them natively)
-    "adversarial_red_teamer", "privacy_flow_tracer",
-    "ai_code_provenance_stamp",
+    # A — longitudinal
+    "flake_hunter", "bisect_and_blame",
+    # C — liability-bearing
+    "compliance_attestor", "stripe_connect_settler",
+    # D — org-memory
+    "codebase_reviewer", "prod_trace_replayer", "schema_migration_planner",
 ]
 
 # Map slug -> a syntactically valid payload (input validation passes; the
@@ -58,40 +50,16 @@ _ALL_AGENT_SLUGS = [
 _VALID_PAYLOADS: dict[str, dict] = {
     "flake_hunter": {"test_path": "tests/foo.py", "repo_root": "/tmp/x"},
     "bisect_and_blame": {"good_ref": "abc", "bad_ref": "def", "repro_cmd": "x"},
-    "deploy_canary_pilot": {"deploy_cmd": "deploy",
-                            "slo_thresholds": {"p95": 500}},
-    "migration_pilot": {"target_sql": "SELECT 1"},
-    "pr_watch": {"pr_url": "https://github.com/o/r/pull/1"},
-    "fuzz_and_find": {"function_source": "def f(): pass",
-                      "property_spec": "monotonic"},
     "compliance_attestor": {"control": "SOC2_CC6_1", "pr_ref": "o/r#1",
                              "check_results": []},
-    "vulnerability_disclosure_submitter": {
-        "finding": {"title": "x"},
-        "vendor_disclosure_url": "https://example.com/security",
-    },
-    "dmarc_email_verifier": {
-        "sample_email": {"from": "a@b.c", "body": "hi"},
-        "target_domains": ["d.com"],
-    },
     "stripe_connect_settler": {"month": "2026-04",
                                 "internal_ledger_source": "ledger.csv"},
-    "production_incident_captain": {"page_id": "PD-123"},
     "codebase_reviewer": {"repo_id": "nonexistent",
                           "hunks": [{"file": "a.py", "text": "x = 1"}]},
-    "author_style_reviewer": {"repo_id": "nonexistent",
-                              "author_handle": "u",
-                              "hunks": [{"file": "a.py", "text": "x"}]},
     "prod_trace_replayer": {"candidate_url": "https://c.example",
                              "trace_bundle_path": "/tmp/bundle"},
     "schema_migration_planner": {"current_schema": "s1",
                                   "target_schema": "s2"},
-    "adversarial_red_teamer": {"target_url": "https://t.example",
-                                "goal": "find a bypass",
-                                "consent_token": "consent-fake"},
-    "privacy_flow_tracer": {"repo_root": "/tmp/x", "pii_tags": ["ssn"]},
-    "ai_code_provenance_stamp": {"pr_ref": "o/r#1",
-                                  "hunks": [{"file": "a.py", "text": "x"}]},
 }
 
 
@@ -159,8 +127,7 @@ def test_error_codes_are_slug_prefixed(slug):
 # ---------------------------------------------------------------------------
 
 _PENDING_SLUGS = [s for s in _ALL_AGENT_SLUGS
-                   if s not in {"codebase_reviewer", "compliance_attestor",
-                                "ai_code_provenance_stamp"}]
+                   if s not in {"codebase_reviewer", "compliance_attestor"}]
 
 
 @pytest.mark.parametrize("slug", _PENDING_SLUGS)
@@ -168,24 +135,15 @@ def test_requires_configuration_lists_missing_keys(slug, monkeypatch):
     """Each pending agent's requires_configuration envelope must have
     details.missing as a non-empty list of strings."""
     # Clear any test env vars that might satisfy the gate.
-    for var in ("AZTEA_RUNNER_JOB_LIFECYCLE_ENABLED", "STRIPE_API_KEY",
-                "AZTEA_DEPLOY_API_TOKEN", "AZTEA_METRICS_API_URL",
-                "AZTEA_MIGRATION_REPLICA_DSN", "PAGERDUTY_API_TOKEN",
-                "SENTRY_API_TOKEN", "AZTEA_INCIDENT_DOC_TARGET",
-                "SMTP_HOST", "AZTEA_DMARC_CANARY_INBOX",
-                "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY_PATH",
-                "AZTEA_OTEL_COLLECTOR_URL", "AZTEA_EBPF_AGENT_SOCKET",
-                "AZTEA_REDTEAM_CONSENT_SIGNING_KEY",
-                "AZTEA_PACKAGE_INDEX_PATH",
-                "AZTEA_REVIEW_COMMENT_CORPUS_PATH",):
+    for var in ("AZTEA_RUNNER_JOB_LIFECYCLE_ENABLED", "STRIPE_API_KEY"):
         monkeypatch.delenv(var, raising=False)
 
     mod = _import_agent(slug)
     payload = _VALID_PAYLOADS[slug]
     out = mod.run(payload)
     err = out["error"]
-    # Some agents fire authorization_required (E22) or repo_not_indexed
-    # (D16/D17) before the config gate. Those are also valid honest paths.
+    # D16 returns repo_not_indexed before the config gate when fed a
+    # nonexistent repo_id. That is also a valid honest path.
     if err["code"].endswith(".requires_configuration"):
         details = err.get("details", {})
         missing = details.get("missing")
@@ -210,7 +168,6 @@ def test_requires_configuration_lists_missing_keys(slug, monkeypatch):
 _REASONING_LOOP_SCENARIOS = [
     ("flake_hunter", "flake_hunter_configured"),
     ("bisect_and_blame", "bisect_configured"),
-    ("fuzz_and_find", "fuzz_and_find_configured"),
     ("prod_trace_replayer", "prod_trace_replayer_configured"),
 ]
 
@@ -229,9 +186,8 @@ def test_reasoning_loops_make_at_least_two_llm_calls(
         bundle = tmp_path / "bundle"
         bundle.write_text("trace")
         payload["trace_bundle_path"] = str(bundle)
-    if slug in {"flake_hunter", "mutation_test_doctor",
-                 "refactor_safety_verifier"}:
-        # Absolute path required, doesn't need to exist for these.
+    if slug == "flake_hunter":
+        # Absolute path required, doesn't need to exist for the gate.
         pass
 
     mod = _import_agent(slug)
@@ -348,12 +304,12 @@ def test_budget_cents_is_respected(slug, scenario, monkeypatch, tmp_path):
 
 
 def test_all_agents_appear_exactly_once_in_specs_part11():
-    """After 2026-05-22 cull: 25 - 7 (B7/B8/B9/B10/D20/E21/E23) = 18."""
+    """After the 2026-05-23 editorial cut: seven agents (2 reference + 5 pending)."""
     from server.builtin_agents.specs_part11 import load_builtin_specs_part11
     specs = load_builtin_specs_part11()
     ids = [s["agent_id"] for s in specs]
-    assert len(ids) == 18
-    assert len(set(ids)) == 18, "duplicate agent_ids in specs_part11"
+    assert len(ids) == 7
+    assert len(set(ids)) == 7, "duplicate agent_ids in specs_part11"
 
 
 def test_no_agent_id_collides_with_existing_builtin():
@@ -379,27 +335,15 @@ def test_pending_agent_returns_requires_configuration_or_authorization(
 ):
     """No env-var leakage; valid payload; must surface a *configuration*
     style error (not invalid_input or llm_error)."""
-    # Clear all relevant env vars.
-    for var in ("AZTEA_RUNNER_JOB_LIFECYCLE_ENABLED", "STRIPE_API_KEY",
-                "AZTEA_DEPLOY_API_TOKEN", "AZTEA_METRICS_API_URL",
-                "AZTEA_MIGRATION_REPLICA_DSN", "PAGERDUTY_API_TOKEN",
-                "SENTRY_API_TOKEN", "AZTEA_INCIDENT_DOC_TARGET",
-                "SMTP_HOST", "AZTEA_DMARC_CANARY_INBOX",
-                "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY_PATH",
-                "AZTEA_OTEL_COLLECTOR_URL", "AZTEA_EBPF_AGENT_SOCKET",
-                "AZTEA_REDTEAM_CONSENT_SIGNING_KEY",
-                "AZTEA_PACKAGE_INDEX_PATH",):
+    # Clear all env vars the pending agents inspect.
+    for var in ("AZTEA_RUNNER_JOB_LIFECYCLE_ENABLED", "STRIPE_API_KEY"):
         monkeypatch.delenv(var, raising=False)
 
     mod = _import_agent(slug)
     out = mod.run(_VALID_PAYLOADS[slug])
     code = out["error"]["code"]
-    # Acceptable terminal codes for a pending agent without config:
-    acceptable = {
-        f"{slug}.requires_configuration",
-        f"{slug}.authorization_required",  # E22 specifically
-        f"{slug}.repo_not_indexed",  # D17 with nonexistent repo_id
-    }
+    # Acceptable terminal codes for a pending agent without config.
+    acceptable = {f"{slug}.requires_configuration"}
     assert code in acceptable, (
         f"{slug}: expected one of {acceptable}, got {code!r}. Full out: {out!r}"
     )
@@ -484,7 +428,6 @@ def test_no_agent_imports_from_server_routes_or_application_parts(slug):
 
 _FLOAT_ALLOWLIST = {
     # confidence_threshold + similar non-money floats are fine.
-    "production_incident_captain",  # escalation_confidence_threshold
     "codebase_reviewer",  # score rounding only (uses round(), not float())
 }
 
