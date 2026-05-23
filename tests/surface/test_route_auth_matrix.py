@@ -67,6 +67,10 @@ _PUBLIC_PATH_PREFIXES = (
     "/assets",
     "/favicon.ico",
     "/robots.txt",
+    # /sitemap.xml served by sitemap_xml() in part_013.py with no auth
+    # dependency — search engines need it without auth, matching the
+    # contract of /robots.txt and /.well-known/security.txt above.
+    "/sitemap.xml",
     "/config/public",
     "/public/docs",
     "/docs/oauth2-redirect",

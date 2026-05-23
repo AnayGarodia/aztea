@@ -164,7 +164,12 @@ def test_triage_closure_on_lookahead_bug():
             "reference_code": ref,
             "candidate_code": cand,
             "fuzz_budget": "quick",
-            "fuzz_seconds": 4,
+            # CI hardware is slower than a dev box; 4s wasn't enough to
+            # reliably catch the lookahead divergence (passed locally but
+            # flaked on the GitHub runner with "equivalent"). 15s gives the
+            # fuzzer ~4× headroom while still keeping the property suite
+            # under the 60s pytest timeout.
+            "fuzz_seconds": 15,
         }
     )
     assert out["verdict"] == "regressions_found"
