@@ -72,6 +72,22 @@ HCL_TERRAFORM_ANALYZER_AGENT_ID = "9ad19220-a46b-54b0-9190-dded9399b45c"
 # and `benchmarks/quant_bench/`.
 QUANT_PATCH_VALIDATOR_AGENT_ID = "0552b418-026d-5609-8446-2fe7af0efa56"
 
+# 2026-05-22 — seven new agents from the strategy-doc slate. D16 Codebase
+# Reviewer + C11 Compliance Attestor work today; the other five (A1, A2,
+# C14, D18, D19) are wired reasoning-agent modules that return a
+# structured requires_configuration envelope until their external infra
+# (lifecycle runner backend for fan-out, Stripe API for the settler,
+# query log for the schema planner, trace bundle for the replayer) lands.
+# As each lands, the corresponding ID graduates from PENDING_INFRA_AGENT_IDS
+# into CURATED_PUBLIC_BUILTIN_AGENT_IDS in a follow-up PR.
+FLAKE_HUNTER_AGENT_ID = "99237d10-b9e0-53c9-b538-6195f91eb8f6"
+BISECT_AND_BLAME_AGENT_ID = "d43868e9-6bfb-5ec2-b6ad-ad2d6151d65b"
+COMPLIANCE_ATTESTOR_AGENT_ID = "3937a468-7602-5a34-88ad-5ca37b568f61"
+STRIPE_CONNECT_SETTLER_AGENT_ID = "7e1e3de0-1abf-5b7f-96d5-e83dcc5567f2"
+CODEBASE_REVIEWER_AGENT_ID = "c5e772b8-2230-57c3-b1d9-888fdadc44c7"
+PROD_TRACE_REPLAYER_AGENT_ID = "1fdb9aaf-cdda-5c2f-bb36-195bbdb293fb"
+SCHEMA_MIGRATION_PLANNER_AGENT_ID = "b869300e-f2f9-5d49-b76b-07f296522dbb"
+
 BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     QUALITY_JUDGE_AGENT_ID: "internal://quality-judge",
     CVELOOKUP_AGENT_ID: "internal://cve-lookup",
@@ -111,6 +127,14 @@ BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     GITHUB_RELEASES_AGENT_ID: "internal://github_releases",
     HCL_TERRAFORM_ANALYZER_AGENT_ID: "internal://hcl_terraform_analyzer",
     QUANT_PATCH_VALIDATOR_AGENT_ID: "internal://quant_patch_validator",
+    # 2026-05-22 — strategy-doc 7-agent slate
+    FLAKE_HUNTER_AGENT_ID: "internal://flake_hunter",
+    BISECT_AND_BLAME_AGENT_ID: "internal://bisect_and_blame",
+    COMPLIANCE_ATTESTOR_AGENT_ID: "internal://compliance_attestor",
+    STRIPE_CONNECT_SETTLER_AGENT_ID: "internal://stripe_connect_settler",
+    CODEBASE_REVIEWER_AGENT_ID: "internal://codebase_reviewer",
+    PROD_TRACE_REPLAYER_AGENT_ID: "internal://prod_trace_replayer",
+    SCHEMA_MIGRATION_PLANNER_AGENT_ID: "internal://schema_migration_planner",
 }
 
 BUILTIN_LEGACY_ROUTE_ENDPOINTS: dict[str, str] = {
@@ -211,8 +235,36 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         JWT_VALIDATOR_AGENT_ID,
         HCL_TERRAFORM_ANALYZER_AGENT_ID,
         QUANT_PATCH_VALIDATOR_AGENT_ID,
+        # 2026-05-22 — strategy-doc reference agents that work TODAY.
+        # The other 23 from the slate are in PENDING_INFRA_AGENT_IDS until
+        # their external dependencies ship.
+        CODEBASE_REVIEWER_AGENT_ID,
+        COMPLIANCE_ATTESTOR_AGENT_ID,
     }
 )
+
+# 2026-05-22 — agents from the strategy-doc slate that are wired and
+# hireable but require external configuration / infra not present in v0
+# (lifecycle runner backend for fan-out, Stripe API for the settler, query
+# log for the schema planner, trace bundle for the replayer). Listed here so:
+#   * tests can assert these IDs are present in BUILTIN_INTERNAL_ENDPOINTS,
+#   * the catalog renderer can hint "configure X to use this",
+#   * each entry can graduate to CURATED_PUBLIC_BUILTIN_AGENT_IDS as its
+#     external dependency lands.
+# Importantly: these are NOT sunset — they're active agents that return a
+# structured requires_configuration envelope until their deps are wired.
+PENDING_INFRA_AGENT_IDS: frozenset[str] = frozenset({
+    FLAKE_HUNTER_AGENT_ID,
+    BISECT_AND_BLAME_AGENT_ID,
+    STRIPE_CONNECT_SETTLER_AGENT_ID,
+    PROD_TRACE_REPLAYER_AGENT_ID,
+    SCHEMA_MIGRATION_PLANNER_AGENT_ID,
+})
+# Sanity: pending-infra and curated-public are disjoint by construction.
+assert not (PENDING_INFRA_AGENT_IDS & CURATED_PUBLIC_BUILTIN_AGENT_IDS), (
+    "PENDING_INFRA_AGENT_IDS must not overlap CURATED_PUBLIC_BUILTIN_AGENT_IDS"
+)
+
 # Sanity: a sunset agent must never accidentally re-appear in the public set.
 assert not (SUNSET_DEPRECATED_AGENT_IDS & CURATED_PUBLIC_BUILTIN_AGENT_IDS), (
     "Sunset agents must not be in the curated public catalog"

@@ -114,6 +114,14 @@ from agents import pypi_metadata as agent_pypi_metadata
 from agents import github_releases as agent_github_releases
 from agents import hcl_terraform_analyzer as agent_hcl_terraform_analyzer
 from agents import quant_patch_validator as agent_quant_patch_validator
+# 2026-05-22 — strategy-doc 7-agent slate (post-editorial cut)
+from agents import flake_hunter as agent_flake_hunter
+from agents import bisect_and_blame as agent_bisect_and_blame
+from agents import compliance_attestor as agent_compliance_attestor
+from agents import stripe_connect_settler as agent_stripe_connect_settler
+from agents import codebase_reviewer as agent_codebase_reviewer
+from agents import prod_trace_replayer as agent_prod_trace_replayer
+from agents import schema_migration_planner as agent_schema_migration_planner
 from core import agent_generator as _agent_generator
 from core import auth as _auth
 from core import cache as _cache
@@ -348,6 +356,14 @@ _PYPI_METADATA_AGENT_ID = _builtin_constants.PYPI_METADATA_AGENT_ID
 _GITHUB_RELEASES_AGENT_ID = _builtin_constants.GITHUB_RELEASES_AGENT_ID
 _HCL_TERRAFORM_ANALYZER_AGENT_ID = _builtin_constants.HCL_TERRAFORM_ANALYZER_AGENT_ID
 _QUANT_PATCH_VALIDATOR_AGENT_ID = _builtin_constants.QUANT_PATCH_VALIDATOR_AGENT_ID
+# 2026-05-22 — strategy-doc 7-agent slate (post-editorial cut)
+_FLAKE_HUNTER_AGENT_ID = _builtin_constants.FLAKE_HUNTER_AGENT_ID
+_BISECT_AND_BLAME_AGENT_ID = _builtin_constants.BISECT_AND_BLAME_AGENT_ID
+_COMPLIANCE_ATTESTOR_AGENT_ID = _builtin_constants.COMPLIANCE_ATTESTOR_AGENT_ID
+_STRIPE_CONNECT_SETTLER_AGENT_ID = _builtin_constants.STRIPE_CONNECT_SETTLER_AGENT_ID
+_CODEBASE_REVIEWER_AGENT_ID = _builtin_constants.CODEBASE_REVIEWER_AGENT_ID
+_PROD_TRACE_REPLAYER_AGENT_ID = _builtin_constants.PROD_TRACE_REPLAYER_AGENT_ID
+_SCHEMA_MIGRATION_PLANNER_AGENT_ID = _builtin_constants.SCHEMA_MIGRATION_PLANNER_AGENT_ID
 
 _normalize_endpoint_ref = _builtin_constants.normalize_endpoint_ref
 _BUILTIN_INTERNAL_ENDPOINTS = _builtin_constants.BUILTIN_INTERNAL_ENDPOINTS

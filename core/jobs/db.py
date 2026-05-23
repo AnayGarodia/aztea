@@ -23,6 +23,7 @@ clarifications without holding open HTTP connections.
 
 import hashlib
 import json
+import os
 import queue
 import sqlite3
 import sys
@@ -51,6 +52,38 @@ def _resolved_db_path() -> str:
 
 _CANONICAL_CREATED_AT = "1970-01-01T00:00:00+00:00"
 DEFAULT_LEASE_SECONDS = 300
+
+# Hard upper bound on any single lease window. Reasoning agents need
+# minutes-scale leases (a 30-minute mutation-test run, a 1-hour fuzz
+# campaign). Capping at 4h keeps a buggy agent from holding a worker
+# indefinitely, while leaving headroom for everything in the Section 3
+# slate. Env-overridable so operators can extend or tighten without a
+# deploy. The cap applies to both initial claims and heartbeat-driven
+# lease extensions.
+MAX_LONG_LEASE_SECONDS: int = max(
+    1, int(os.environ.get("AZTEA_MAX_LONG_LEASE_SECONDS", "14400"))
+)
+
+
+def _validate_lease_seconds(lease_seconds: int) -> int:
+    """Pure: validate lease window. Returns the value on success; raises ValueError.
+
+    Why pure helper: the same check fires from claim_job, heartbeat_job_lease,
+    add_message (progress messages extend the lease). Centralising the
+    invariant means a future cap change happens in one place.
+    """
+    if not isinstance(lease_seconds, int) or isinstance(lease_seconds, bool):
+        raise ValueError(
+            f"lease_seconds must be an int, got {type(lease_seconds).__name__}"
+        )
+    if lease_seconds <= 0:
+        raise ValueError(f"lease_seconds must be > 0, got {lease_seconds}")
+    if lease_seconds > MAX_LONG_LEASE_SECONDS:
+        raise ValueError(
+            f"lease_seconds must be <= {MAX_LONG_LEASE_SECONDS} "
+            f"(AZTEA_MAX_LONG_LEASE_SECONDS); got {lease_seconds}"
+        )
+    return lease_seconds
 _CLAIM_EVENT_MSG_TYPE = "claim_event"
 _CLAIM_EVENT_ACTOR = "system:jobs"
 _ACTIVE_CLAIM_EVENT_TYPES = {

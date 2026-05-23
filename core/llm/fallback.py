@@ -21,9 +21,16 @@ from __future__ import annotations
 
 import threading
 from dataclasses import replace
+from typing import Callable
 
-from .base import CompletionRequest, LLMResponse
-from .errors import LLMError, LLMRateLimitError, LLMTimeoutError
+from .base import CompletionRequest, LLMResponse, Usage
+from .errors import BudgetExceededError, LLMError, LLMRateLimitError, LLMTimeoutError
+from .pricing import estimate_cost, estimate_request_cost
+
+# Per-hire default ceiling. 50¢ is roughly 25k tokens on the workhorse
+# providers — enough for several reasoning-loop steps without enabling
+# silent runaway spend. Agents that need more pass an explicit override.
+_DEFAULT_LLM_BUDGET_CENTS: int = 50
 
 
 # H-7 (audit 2026-05-19): ``llm_used`` in the response envelope was set
@@ -54,11 +61,18 @@ def llm_call_observed() -> bool:
     return bool(getattr(_LLM_OBSERVED, "observed", False))
 
 
+def _request_prompt_chars(req: CompletionRequest) -> int:
+    """Pure: total prompt character count across every message in the request."""
+    return sum(len(msg.content or "") for msg in req.messages)
+
+
 def run_with_fallback(
     req_template: CompletionRequest,
     model_chain: list[str] | None = None,
     *,
     caller_api_key_id: str | None = None,
+    budget_cents: int | None = None,
+    usage_callback: Callable[[Usage], None] | None = None,
 ) -> LLMResponse:
     """Dispatch a completion request through the provider chain.
 
@@ -77,6 +91,18 @@ def run_with_fallback(
     default is used and a once-per-process warning is logged so operators
     can spot the shared-quota gap.
 
+    ``budget_cents`` is a hard per-call ceiling on cumulative estimated cost
+    across the fallback chain. Before each provider attempt, the upper-bound
+    cost of that attempt is added to the running total; if it would exceed
+    ``budget_cents``, ``BudgetExceededError`` is raised before the call
+    is made. Defaults to ``_DEFAULT_LLM_BUDGET_CENTS``; pass an explicit
+    value (including a very large one) to override. Passing 0 disables the
+    cap entirely — use only for trusted internal callers.
+
+    ``usage_callback`` (if provided) fires once per successful provider
+    attempt with the cumulative ``Usage`` seen so far on this call. Used by
+    reasoning agents to feed their TraceRecorder without manual plumbing.
+
     Raises the last encountered ``LLMError`` if every provider fails, or a
     plain ``LLMError`` with provider="none" if the chain is empty / all
     providers are unavailable.
@@ -85,6 +111,18 @@ def run_with_fallback(
 
     chain = model_chain if model_chain is not None else DEFAULT_CHAIN
     last_error: LLMError | None = None
+    effective_budget = (
+        budget_cents if budget_cents is not None else _DEFAULT_LLM_BUDGET_CENTS
+    )
+    cumulative_prompt_tokens = 0
+    cumulative_completion_tokens = 0
+    cumulative_cents = 0
+    prompt_chars = _request_prompt_chars(req_template)
+    # max_tokens may be None for unbounded calls; treat as a generous
+    # ceiling so the pre-flight estimate stays conservative. The value
+    # matches the per-completion ceiling enforced by every provider
+    # implementation in core/llm/providers/.
+    max_completion_tokens = req_template.max_tokens or 2048
 
     for spec in chain:
         try:
@@ -100,12 +138,45 @@ def run_with_fallback(
         if not provider.is_available():
             continue
 
+        # Budget gate: refuse the call if its upper-bound cost would push
+        # the running total past the ceiling. Budget == 0 means "no cap".
+        if effective_budget > 0:
+            attempt_estimate = estimate_request_cost(
+                provider.name, model, prompt_chars, max_completion_tokens,
+            )
+            if cumulative_cents + attempt_estimate > effective_budget:
+                raise BudgetExceededError(
+                    provider.name,
+                    model,
+                    f"LLM cost cap reached: budget={effective_budget}c "
+                    f"spent={cumulative_cents}c next={attempt_estimate}c",
+                    budget_cents=effective_budget,
+                    spent_cents=cumulative_cents,
+                    estimated_next_cents=attempt_estimate,
+                )
+
         req = replace(req_template, model=model)
         try:
             response = provider.complete(req)
             # H-7: mark the worker-thread flag so honesty fields downstream
             # (llm_used) reflect actual telemetry, not spec metadata.
             _LLM_OBSERVED.observed = True
+            # Update cumulative spend from observed usage so future attempts
+            # in the same call (if a callback chains another) see the real
+            # cost, not just the estimate.
+            cumulative_prompt_tokens += response.usage.prompt_tokens
+            cumulative_completion_tokens += response.usage.completion_tokens
+            cumulative_cents += estimate_cost(
+                response.provider,
+                response.model,
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens,
+            )
+            if usage_callback is not None:
+                usage_callback(Usage(
+                    prompt_tokens=cumulative_prompt_tokens,
+                    completion_tokens=cumulative_completion_tokens,
+                ))
             return response
         except (LLMRateLimitError, LLMTimeoutError) as exc:
             last_error = exc

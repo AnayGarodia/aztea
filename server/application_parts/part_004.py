@@ -458,6 +458,14 @@ BUILTIN_AGENT_RUNNERS: dict[str, Callable[[Any], dict]] = {
     _GITHUB_RELEASES_AGENT_ID: _module_runner(agent_github_releases),
     _HCL_TERRAFORM_ANALYZER_AGENT_ID: _module_runner(agent_hcl_terraform_analyzer),
     _QUANT_PATCH_VALIDATOR_AGENT_ID: _module_runner(agent_quant_patch_validator),
+    # 2026-05-22 — strategy-doc 7-agent slate (post-editorial cut)
+    _FLAKE_HUNTER_AGENT_ID: _module_runner(agent_flake_hunter),
+    _BISECT_AND_BLAME_AGENT_ID: _module_runner(agent_bisect_and_blame),
+    _COMPLIANCE_ATTESTOR_AGENT_ID: _module_runner(agent_compliance_attestor),
+    _STRIPE_CONNECT_SETTLER_AGENT_ID: _module_runner(agent_stripe_connect_settler),
+    _CODEBASE_REVIEWER_AGENT_ID: _module_runner(agent_codebase_reviewer),
+    _PROD_TRACE_REPLAYER_AGENT_ID: _module_runner(agent_prod_trace_replayer),
+    _SCHEMA_MIGRATION_PLANNER_AGENT_ID: _module_runner(agent_schema_migration_planner),
 }
 
 

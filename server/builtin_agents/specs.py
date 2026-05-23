@@ -57,6 +57,7 @@ from server.builtin_agents.specs_part7 import load_builtin_specs_part7
 from server.builtin_agents.specs_part8 import load_builtin_specs_part8
 from server.builtin_agents.specs_part9 import load_builtin_specs_part9
 from server.builtin_agents.specs_part10 import load_builtin_specs_part10
+from server.builtin_agents.specs_part11 import load_builtin_specs_part11
 
 _DEFAULT_CATEGORY_BY_AGENT_ID = {
     QUALITY_JUDGE_AGENT_ID: "Internal",
@@ -526,6 +527,7 @@ def _all_builtin_specs() -> tuple[dict[str, Any], ...]:
     specs.extend(load_builtin_specs_part8())
     specs.extend(load_builtin_specs_part9())
     specs.extend(load_builtin_specs_part10())
+    specs.extend(load_builtin_specs_part11())
     normalized = [_normalize_builtin_spec(spec) for spec in specs]
     seen_ids: set[str] = set()
     seen_endpoints: set[str] = set()

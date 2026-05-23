@@ -371,8 +371,8 @@ def add_message(
     to awaiting_clarification; 'clarification_response' resumes running.
     Lease, status, and deadline updates commit atomically with the insert.
     """
-    if lease_seconds <= 0:
-        raise ValueError("lease_seconds must be > 0.")
+    from core.jobs.db import _validate_lease_seconds
+    _validate_lease_seconds(lease_seconds)
     n = _normalize_message_for_insert(msg_type, payload, correlation_id)
     now_dt = _now_dt()
     now = now_dt.isoformat()
