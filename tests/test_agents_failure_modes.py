@@ -184,7 +184,6 @@ def test_trace_recorder_step_outputs_failure_returns_clean_output(monkeypatch):
     # Patch record_outputs to raise. The step's __exit__ should still
     # commit the step (with status=failed), and the outer try/except
     # eventually surfaces an envelope.
-    original_record = rt.TraceRecorder.record_outputs
 
     def _bad_outputs(self, *args, **kwargs):
         raise RuntimeError("simulated record_outputs failure")

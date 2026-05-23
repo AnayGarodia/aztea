@@ -84,7 +84,7 @@ def test_max_hunks_clamped_to_25(monkeypatch, tmp_path):
     patch_llm_everywhere(monkeypatch, stub)
 
     hunks = [{"file": f"h{i}.py", "text": f"def fn{i}(): pass"} for i in range(50)]
-    out = _agent().run({
+    _agent().run({
         "repo_id": result.repo_id, "hunks": hunks, "max_hunks": 1000,
     })
     # Each hunk triggers ≥ 1 per-hunk LLM call + 1 synthesis. So upper bound
@@ -221,7 +221,7 @@ def test_hunk_text_clipped_to_4000_chars(monkeypatch, tmp_path):
     patch_llm_everywhere(monkeypatch, stub)
 
     big_hunk = "x = 1\n" * 2000  # 12000 chars
-    out = _agent().run({
+    _agent().run({
         "repo_id": result.repo_id,
         "hunks": [{"file": "h.py", "text": big_hunk}],
     })
