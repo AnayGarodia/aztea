@@ -72,6 +72,40 @@ HCL_TERRAFORM_ANALYZER_AGENT_ID = "9ad19220-a46b-54b0-9190-dded9399b45c"
 # and `benchmarks/quant_bench/`.
 QUANT_PATCH_VALIDATOR_AGENT_ID = "0552b418-026d-5609-8446-2fe7af0efa56"
 
+# 2026-05-22 — twenty-five new agents from the strategy doc's slate (Section
+# 3). D16 Codebase Reviewer + C11 Compliance Attestor are the two reference
+# agents that work today. The other twenty-three are real reasoning-agent
+# modules with proper input validation, ≥2 internal LLM calls, and a
+# requires_configuration envelope for missing external dependencies. As
+# each agent's infra lands (GitHub App + lifecycle runner + package
+# index), the corresponding ID moves from PENDING_INFRA_AGENT_IDS into
+# CURATED_PUBLIC_BUILTIN_AGENT_IDS in a follow-up PR.
+FLAKE_HUNTER_AGENT_ID = "99237d10-b9e0-53c9-b538-6195f91eb8f6"
+BISECT_AND_BLAME_AGENT_ID = "d43868e9-6bfb-5ec2-b6ad-ad2d6151d65b"
+DEPLOY_CANARY_PILOT_AGENT_ID = "83d23571-b327-5a82-8865-5a024d6a0d9f"
+MIGRATION_PILOT_AGENT_ID = "dcda0034-4b01-55c3-a9da-f75a9a478ea3"
+PR_WATCH_AGENT_ID = "3b0fe398-d348-5032-b8c3-6f2d74d46390"
+FUZZ_AND_FIND_AGENT_ID = "69d7d2df-e752-5574-bedd-60c8d819ccd4"
+# 2026-05-22 — culled from the slate: B7 mutation_test_doctor, B8
+# refactor_safety_verifier, B9 llm_eval, B10 combinatorial_config_solver
+# all scored 3 on the "Claude Code can't do this" test (Claude can do
+# them given time; no structural moat). They were stubs returning
+# requires_configuration; removed to keep the catalog honest.
+COMPLIANCE_ATTESTOR_AGENT_ID = "3937a468-7602-5a34-88ad-5ca37b568f61"
+VULNERABILITY_DISCLOSURE_SUBMITTER_AGENT_ID = "c504105b-3fbb-5af1-a05b-a373be07a03e"
+DMARC_EMAIL_VERIFIER_AGENT_ID = "6eabf048-316a-5bf7-8292-c39b576850f7"
+STRIPE_CONNECT_SETTLER_AGENT_ID = "7e1e3de0-1abf-5b7f-96d5-e83dcc5567f2"
+PRODUCTION_INCIDENT_CAPTAIN_AGENT_ID = "a077adb6-1288-5bac-a955-fbc2484b9f3b"
+CODEBASE_REVIEWER_AGENT_ID = "c5e772b8-2230-57c3-b1d9-888fdadc44c7"
+AUTHOR_STYLE_REVIEWER_AGENT_ID = "1cfae0b1-bd62-5419-9eec-37c1f169e12c"
+PROD_TRACE_REPLAYER_AGENT_ID = "1fdb9aaf-cdda-5c2f-bb36-195bbdb293fb"
+SCHEMA_MIGRATION_PLANNER_AGENT_ID = "b869300e-f2f9-5d49-b76b-07f296522dbb"
+# Culled 2026-05-22 (Claude-can-do-this test): D20 cost_forecaster,
+# E21 hallucination_auditor, E23 api_contract_negotiator.
+ADVERSARIAL_RED_TEAMER_AGENT_ID = "db8ea0be-8b51-5ddc-8848-ac42bfcaabf9"
+PRIVACY_FLOW_TRACER_AGENT_ID = "d89794da-64a5-50e1-b1f5-1a69390bee30"
+AI_CODE_PROVENANCE_STAMP_AGENT_ID = "7ac22a84-8133-53a3-886f-cc0647e703a3"
+
 BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     QUALITY_JUDGE_AGENT_ID: "internal://quality-judge",
     CVELOOKUP_AGENT_ID: "internal://cve-lookup",
@@ -111,6 +145,25 @@ BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     GITHUB_RELEASES_AGENT_ID: "internal://github_releases",
     HCL_TERRAFORM_ANALYZER_AGENT_ID: "internal://hcl_terraform_analyzer",
     QUANT_PATCH_VALIDATOR_AGENT_ID: "internal://quant_patch_validator",
+    # 2026-05-22 — strategy-doc 25-agent slate
+    FLAKE_HUNTER_AGENT_ID: "internal://flake_hunter",
+    BISECT_AND_BLAME_AGENT_ID: "internal://bisect_and_blame",
+    DEPLOY_CANARY_PILOT_AGENT_ID: "internal://deploy_canary_pilot",
+    MIGRATION_PILOT_AGENT_ID: "internal://migration_pilot",
+    PR_WATCH_AGENT_ID: "internal://pr_watch",
+    FUZZ_AND_FIND_AGENT_ID: "internal://fuzz_and_find",
+    COMPLIANCE_ATTESTOR_AGENT_ID: "internal://compliance_attestor",
+    VULNERABILITY_DISCLOSURE_SUBMITTER_AGENT_ID: "internal://vulnerability_disclosure_submitter",
+    DMARC_EMAIL_VERIFIER_AGENT_ID: "internal://dmarc_email_verifier",
+    STRIPE_CONNECT_SETTLER_AGENT_ID: "internal://stripe_connect_settler",
+    PRODUCTION_INCIDENT_CAPTAIN_AGENT_ID: "internal://production_incident_captain",
+    CODEBASE_REVIEWER_AGENT_ID: "internal://codebase_reviewer",
+    AUTHOR_STYLE_REVIEWER_AGENT_ID: "internal://author_style_reviewer",
+    PROD_TRACE_REPLAYER_AGENT_ID: "internal://prod_trace_replayer",
+    SCHEMA_MIGRATION_PLANNER_AGENT_ID: "internal://schema_migration_planner",
+    ADVERSARIAL_RED_TEAMER_AGENT_ID: "internal://adversarial_red_teamer",
+    PRIVACY_FLOW_TRACER_AGENT_ID: "internal://privacy_flow_tracer",
+    AI_CODE_PROVENANCE_STAMP_AGENT_ID: "internal://ai_code_provenance_stamp",
 }
 
 BUILTIN_LEGACY_ROUTE_ENDPOINTS: dict[str, str] = {
@@ -211,8 +264,47 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         JWT_VALIDATOR_AGENT_ID,
         HCL_TERRAFORM_ANALYZER_AGENT_ID,
         QUANT_PATCH_VALIDATOR_AGENT_ID,
+        # 2026-05-22 — strategy-doc reference agents that work TODAY.
+        # The other 23 from the slate are in PENDING_INFRA_AGENT_IDS until
+        # their external dependencies ship.
+        CODEBASE_REVIEWER_AGENT_ID,
+        COMPLIANCE_ATTESTOR_AGENT_ID,
     }
 )
+
+# 2026-05-22 — agents from the strategy-doc slate (Section 3) that are
+# wired and hireable but require external configuration / infra not present
+# in v0 (lifecycle runner backend, GitHub App for PR Watch, Stripe API for
+# Settler, etc.). Listed here so:
+#   * tests can assert these IDs are present in BUILTIN_INTERNAL_ENDPOINTS,
+#   * the catalog renderer can hint "configure X to use this",
+#   * each entry can graduate to CURATED_PUBLIC_BUILTIN_AGENT_IDS as its
+#     external dependency lands.
+# Importantly: these are NOT sunset — they're active agents that return a
+# structured requires_configuration envelope until their deps are wired.
+PENDING_INFRA_AGENT_IDS: frozenset[str] = frozenset({
+    FLAKE_HUNTER_AGENT_ID,
+    BISECT_AND_BLAME_AGENT_ID,
+    DEPLOY_CANARY_PILOT_AGENT_ID,
+    MIGRATION_PILOT_AGENT_ID,
+    PR_WATCH_AGENT_ID,
+    FUZZ_AND_FIND_AGENT_ID,
+    VULNERABILITY_DISCLOSURE_SUBMITTER_AGENT_ID,
+    DMARC_EMAIL_VERIFIER_AGENT_ID,
+    STRIPE_CONNECT_SETTLER_AGENT_ID,
+    PRODUCTION_INCIDENT_CAPTAIN_AGENT_ID,
+    AUTHOR_STYLE_REVIEWER_AGENT_ID,
+    PROD_TRACE_REPLAYER_AGENT_ID,
+    SCHEMA_MIGRATION_PLANNER_AGENT_ID,
+    ADVERSARIAL_RED_TEAMER_AGENT_ID,
+    PRIVACY_FLOW_TRACER_AGENT_ID,
+    AI_CODE_PROVENANCE_STAMP_AGENT_ID,
+})
+# Sanity: pending-infra and curated-public are disjoint by construction.
+assert not (PENDING_INFRA_AGENT_IDS & CURATED_PUBLIC_BUILTIN_AGENT_IDS), (
+    "PENDING_INFRA_AGENT_IDS must not overlap CURATED_PUBLIC_BUILTIN_AGENT_IDS"
+)
+
 # Sanity: a sunset agent must never accidentally re-appear in the public set.
 assert not (SUNSET_DEPRECATED_AGENT_IDS & CURATED_PUBLIC_BUILTIN_AGENT_IDS), (
     "Sunset agents must not be in the curated public catalog"
