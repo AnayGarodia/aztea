@@ -67,6 +67,9 @@ _PUBLIC_PATH_PREFIXES = (
     "/assets",
     "/favicon.ico",
     "/robots.txt",
+    # /sitemap.xml is the SEO sitemap — public by definition, mirrors
+    # /robots.txt above. Served by part_013.sitemap_xml.
+    "/sitemap.xml",
     "/config/public",
     "/public/docs",
     "/docs/oauth2-redirect",

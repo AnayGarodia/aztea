@@ -159,15 +159,23 @@ def test_triage_closure_on_lookahead_bug():
     cand = ref.replace("range(window, p.size)", "range(window-1, p.size)").replace(
         "p[i-window:i]", "p[i-window+1:i+1]"
     )
+    # 2026-05-23 (second bump, after CI run 77511627921): even 10s on
+    # slow CI runners still occasionally returned ``equivalent``. Drop
+    # the override so we use the full ``quick`` tier budget (30s). The
+    # local run finishes in seconds; CI gets the full budget when it
+    # needs it. Marked @pytest.mark.slow so deselectable via
+    # ``-m "not slow"`` when fast iteration matters.
     out = validator_run(
         {
             "reference_code": ref,
             "candidate_code": cand,
             "fuzz_budget": "quick",
-            "fuzz_seconds": 4,
         }
     )
-    assert out["verdict"] == "regressions_found"
+    assert out["verdict"] == "regressions_found", (
+        f"validator did not find the lookahead-bug regression "
+        f"(verdict={out.get('verdict')!r})"
+    )
     valid_cluster_verdicts = {"regression", "expected", "both_wrong"}
     for cluster in out["confirmed_regressions"] + out["expected_divergences"]:
         assert cluster["verdict"] in valid_cluster_verdicts, cluster["verdict"]

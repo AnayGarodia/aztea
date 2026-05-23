@@ -39,6 +39,129 @@ def _agent_registration_discoverability(request: Request) -> JSONResponse:
     return _registration_moved_response()
 
 
+# Price-jump caps (2026-05-22). A probation listing cannot raise price
+# more than 2× per PATCH; an approved listing cannot more than 5×. These
+# are intentionally generous — legitimate publishers occasionally adjust
+# pricing — but cap the 100×-after-graduation scam pattern described in
+# tests/security/GAP_REPORT.md D4. Override per-deploy via
+# AZTEA_PRICE_JUMP_MAX_RATIO_PROBATION / _APPROVED.
+_PROBATION_PRICE_JUMP_MAX_RATIO_DEFAULT = 2.0
+_APPROVED_PRICE_JUMP_MAX_RATIO_DEFAULT = 5.0
+
+
+def _enforce_price_jump_cap(*, existing: dict, new_price: float) -> None:
+    """Refuse a PATCH that raises price beyond the per-listing-state cap.
+
+    Pure-effect: raises HTTPException(400) with a structured error or
+    returns without raising. The check fires only when the *new* price
+    strictly exceeds the cap — lowering the price is always allowed.
+    """
+    try:
+        old_price = float(existing.get("price_per_call_usd") or 0.0)
+    except (TypeError, ValueError):
+        return
+    if new_price <= old_price:
+        return
+    if old_price <= 0:
+        return
+    review_status = str(existing.get("review_status") or "").lower()
+    if review_status == "probation":
+        cap = float(os.environ.get(
+            "AZTEA_PRICE_JUMP_MAX_RATIO_PROBATION",
+            _PROBATION_PRICE_JUMP_MAX_RATIO_DEFAULT,
+        ))
+    else:
+        cap = float(os.environ.get(
+            "AZTEA_PRICE_JUMP_MAX_RATIO_APPROVED",
+            _APPROVED_PRICE_JUMP_MAX_RATIO_DEFAULT,
+        ))
+    ratio = new_price / old_price
+    if ratio > cap:
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                "listing.price_jump_capped",
+                (
+                    f"Price increase from ${old_price:.4f} to ${new_price:.4f} "
+                    f"exceeds the {cap:.1f}x cap for listings in state "
+                    f"'{review_status or 'approved'}'. Raise price in "
+                    f"smaller steps."
+                ),
+                {
+                    "old_price": old_price,
+                    "new_price": new_price,
+                    "max_ratio": cap,
+                    "review_status": review_status or "approved",
+                },
+            ),
+        )
+
+
+# Owner-level reputation gate (2026-05-22). A scammer whose agent is
+# sunset or admin-rejected can re-register fresh under a new name because
+# probation lives on the agent row. Cap the count of such rows per owner.
+_OWNER_REJECTED_AGENT_CAP_DEFAULT = 3
+
+
+# Name-normalisation entry points (2026-05-22). Strips zero-width and
+# bidi control characters that would otherwise let a scammer pin to the
+# top of sort-by-name listings, and NFKC-folds so visually-identical
+# inputs collapse to one canonical form (so two registrations of the
+# same visual name actually trigger the uniqueness constraint).
+_NAME_INVISIBLE_RE = re.compile(
+    r"[​-‏‪-‮⁠-⁯﻿]"
+)
+
+
+def _normalize_agent_name(name: str) -> str:
+    if not name:
+        return name
+    import unicodedata as _ud  # local — see part_000 line budget note
+    n = _ud.normalize("NFKC", name)
+    n = _NAME_INVISIBLE_RE.sub("", n)
+    return n.strip()
+
+
+def _refuse_if_owner_has_too_many_rejections(owner_id: str) -> None:
+    """Refuse registration when the owner has too many rejected/sunset agents."""
+    cap = int(os.environ.get(
+        "AZTEA_OWNER_REJECTED_AGENT_CAP",
+        _OWNER_REJECTED_AGENT_CAP_DEFAULT,
+    ))
+    if cap <= 0:
+        return
+    try:
+        # Use registry's connection (which honours the monkeypatched
+        # DB_PATH in integration tests) rather than ``_db._conn()`` which
+        # falls back to the process-wide default path.
+        from core.registry.core_schema import _conn as _registry_conn
+        with _registry_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n FROM agents
+                WHERE owner_id = %s
+                  AND review_status IN ('rejected', 'sunset')
+                """,
+                (owner_id,),
+            ).fetchone()
+    except Exception:  # noqa: BLE001 — owner-history check is best-effort
+        return
+    rejected = int((row or {}).get("n") or 0)
+    if rejected >= cap:
+        raise HTTPException(
+            status_code=403,
+            detail=error_codes.make_error(
+                "registry.owner_history_capped",
+                (
+                    f"You have {rejected} previously rejected or sunset listings. "
+                    "New registrations are blocked while owner reputation is "
+                    "poor. Contact support to appeal."
+                ),
+                {"rejected_count": rejected, "cap": cap},
+            ),
+        )
+
+
 @app.post(
     "/registry/register",
     status_code=201,
@@ -69,6 +192,12 @@ def registry_register(
                     {"current": current_count, "max": _MAX_AGENTS_PER_OWNER},
                 ),
             )
+        # Owner-level reputation gate: too many prior rejections → refuse.
+        _refuse_if_owner_has_too_many_rejections(caller["owner_id"])
+    # Normalise the agent name BEFORE the safety scan so leading zero-
+    # width characters and homoglyphs cannot pin the row to the top of
+    # sort-by-name listings (tests/security/GAP_REPORT.md H5).
+    body.name = _normalize_agent_name(body.name)
     try:
         safe_endpoint_url = _validate_agent_endpoint_url(request, body.endpoint_url)
         # Defence-in-depth: refuse anyone trying to register against an
@@ -104,6 +233,27 @@ def registry_register(
             safe_verifier_url = _validate_outbound_url(
                 body.output_verifier_url, "output_verifier_url"
             )
+            # 2026-05-22: also run the aztea-suffix / homoglyph check the
+            # endpoint URL is subject to. Without this the verifier slot
+            # becomes a back door — an attacker can register a malicious
+            # listing whose verifier URL points at aztea.ai (causing the
+            # verifier call to 405 but the listing to still land on
+            # probation marked unverified). See tests/security/GAP_REPORT
+            # I2.
+            verifier_findings = _listing_safety.scan_agent_md_endpoint(safe_verifier_url)
+            if _listing_safety.has_block(verifier_findings):
+                block = next(
+                    f for f in verifier_findings
+                    if f.level == _listing_safety.LEVEL_BLOCK
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=error_codes.make_error(
+                        "listing.safety_block",
+                        f"output_verifier_url: {block.message}",
+                        {"code": block.code, "detail": block.detail},
+                    ),
+                )
         registration_payload = {
             "name": body.name,
             "description": body.description,
@@ -1650,9 +1800,16 @@ def registry_update_agent(
     # Without this, an author could register a clean listing and then PATCH
     # the description to inject prompt-injection content or leak an API key
     # after the listing has earned trust.
-    mutable_text_parts = [
+    #
+    # 2026-05-22: extended to also re-scan tags (each tag) so a PATCH
+    # cannot smuggle prompt-injection into the marketplace surface via the
+    # tag slot. ``output_examples`` is not in AgentUpdateRequest so cannot
+    # be PATCHed; if that changes, scan it here too.
+    mutable_text_parts: list[str] = [
         part for part in (body.name, body.description) if part
     ]
+    if body.tags:
+        mutable_text_parts.extend(str(tag) for tag in body.tags if tag)
     if mutable_text_parts:
         combined = "\n".join(mutable_text_parts)
         update_findings = _listing_safety.scan_skill_md(combined)
@@ -1667,6 +1824,17 @@ def registry_update_agent(
                     "listing.safety_block", block.message,
                     {"code": block.code, "detail": block.detail},
                 ),
+            )
+    # Price-change cooldown: a probation listing must not raise its price
+    # more than _PROBATION_PRICE_JUMP_MAX_RATIO×, and an approved listing
+    # must not jump more than _APPROVED_PRICE_JUMP_MAX_RATIO× per call.
+    # Without this, a scammer who graduates probation can immediately 100×
+    # the price and harvest one expensive call before reviewers notice.
+    if body.price_per_call_usd is not None and caller["type"] != "master":
+        existing = registry.get_agent(agent_id, include_unapproved=True)
+        if existing is not None:
+            _enforce_price_jump_cap(
+                existing=existing, new_price=float(body.price_per_call_usd),
             )
     try:
         updated = registry.update_agent(
