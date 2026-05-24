@@ -1,0 +1,18 @@
+.hcg {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.hcg__layer {
+  position: absolute;
+  inset: 0;
+  filter: blur(40px) saturate(120%);
+  opacity: 0.9;
+  mix-blend-mode: multiply;
+}
+
+.hcg__layer--static {
+  background: radial-gradient(circle 480px at 50% 50%, var(--terracotta-bg), transparent 65%);
+}

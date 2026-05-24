@@ -1,0 +1,92 @@
+.hjm {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.hjm__mark {
+  position: absolute;
+  pointer-events: none;
+  color: var(--terracotta);
+}
+
+.hjm__mark--primary {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  opacity: 0.06;
+  animation: hjm-breathe-primary 12s var(--ease) infinite;
+}
+
+.hjm__mark--secondary {
+  top: 18%;
+  right: 12%;
+  opacity: 0.04;
+  animation: hjm-breathe-secondary 9s var(--ease) infinite;
+}
+
+.hjm__gradient {
+  position: absolute;
+  width: 60vmax;
+  height: 60vmax;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.55;
+  mix-blend-mode: multiply;
+  pointer-events: none;
+}
+
+.hjm__gradient--terracotta {
+  background: radial-gradient(circle, var(--terracotta-bg) 0%, transparent 70%);
+  top: -20vh;
+  left: -20vw;
+  animation: hjm-drift-a 18s ease-in-out infinite;
+}
+
+.hjm__gradient--copper {
+  background: radial-gradient(circle, var(--copper-bg) 0%, transparent 70%);
+  bottom: -20vh;
+  right: -20vw;
+  animation: hjm-drift-b 22s ease-in-out infinite;
+}
+
+.hjm__gradient--accent {
+  background: radial-gradient(circle, var(--accent-faint) 0%, transparent 70%);
+  top: 30%;
+  left: 40%;
+  width: 40vmax;
+  height: 40vmax;
+  opacity: 0.4;
+  animation: hjm-drift-c 16s ease-in-out infinite;
+}
+
+@keyframes hjm-breathe-primary {
+  0%, 100% { transform: translate(-50%, -50%) scale(1); opacity: 0.06; }
+  50%      { transform: translate(-50%, -50%) scale(1.05); opacity: 0.09; }
+}
+
+@keyframes hjm-breathe-secondary {
+  0%, 100% { transform: scale(1); opacity: 0.04; }
+  50%      { transform: scale(1.08); opacity: 0.07; }
+}
+
+@keyframes hjm-drift-a {
+  0%, 100% { transform: translate(0, 0); }
+  50%      { transform: translate(8vw, 6vh); }
+}
+
+@keyframes hjm-drift-b {
+  0%, 100% { transform: translate(0, 0); }
+  50%      { transform: translate(-8vw, -6vh); }
+}
+
+@keyframes hjm-drift-c {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50%      { transform: translate(-4vw, 5vh) scale(1.12); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hjm__mark--primary,
+  .hjm__mark--secondary,
+  .hjm__gradient { animation: none; }
+}

@@ -1,13 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
 import {
   Moon, Sun, Menu, X, Copy, Check, ArrowRight, Globe, FileText,
   Code2, ShieldAlert, Zap, FlaskConical, Database,
-  Terminal, Plus, Minus,
+  Terminal, Plus, Minus, ChevronDown,
   User, Bot, CircleDollarSign, Wallet, Package, ShieldCheck, Coins, Star,
 } from 'lucide-react'
+import { motion, AnimatePresence, useMotionValueEvent, useScroll, useTransform } from 'motion/react'
 import { fetchAgents } from '../api'
 import AzteaMark from '../brand/AzteaMark'
 import {
@@ -15,6 +16,13 @@ import {
   JaaliArchRow, JaaliRosette, JaaliWeave,
 } from '../brand/JaaliPattern'
 import AuthDialog from '../features/auth/AuthDialog'
+import { SmoothScrollProvider, useLenis, scrollToTarget } from '../utils/useSmoothScroll'
+import TextReveal from '../ui/motion/TextReveal'
+import Parallax from '../ui/motion/Parallax'
+import Magnetic from '../ui/motion/Magnetic'
+import PinScrub from '../ui/motion/PinScrub'
+import HeroJaaliMesh from './preview/HeroJaaliMesh'
+import HeroCursorGlow from './preview/HeroCursorGlow'
 import './LandingPage.css'
 
 const CATALOG = [
@@ -67,6 +75,68 @@ const FAQ = [
   { q: 'How do I list an agent?',
     a: 'Two paths. Run an HTTP server that accepts a JSON POST and returns a JSON body, or upload a SKILL.md file that Aztea hosts and runs. Both paths use the same billing flow. Builders earn 90% of every successful call.' },
 ]
+
+function TraceFocus({ steps, progress }) {
+  const [activeIdx, setActiveIdx] = useState(0)
+  const fallback = useRef({ get: () => 0, on: () => () => {} }).current
+  const source = progress ?? fallback
+  useMotionValueEvent(source, 'change', (p) => {
+    if (!progress) return
+    const idx = Math.min(steps.length - 1, Math.max(0, Math.floor(p * steps.length)))
+    if (idx !== activeIdx) setActiveIdx(idx)
+  })
+  const step = steps[activeIdx]
+  return (
+    <div className="lp__trace-focus" aria-live="polite">
+      <span className="lp__trace-focus-step">Step {String(activeIdx + 1).padStart(2, '0')} / {String(steps.length).padStart(2, '0')}</span>
+      <p className="lp__trace-focus-title">{step.title}</p>
+      <p className="lp__trace-focus-evidence">{step.evidence}</p>
+    </div>
+  )
+}
+
+function TraceStep({ step, index, total, progress }) {
+  const Icon = step.icon
+  const start = index / total
+  const peak = (index + 0.4) / total
+  const release = (index + 1) / total
+  const fallback = useRef({ get: () => 1, on: () => () => {} }).current
+  const source = progress ?? fallback
+  // Keep every step clearly visible at all times (opacity 0.85 → 1.0); the
+  // active state — terracotta marker + scale bloom — is what differentiates
+  // the current step. Previously un-revealed steps faded to 0.18 which read
+  // as "broken / half the row is dull".
+  const opacity = useTransform(source, [start, peak], [0.85, 1])
+  const y = useTransform(source, [start, peak], [8, 0])
+  const scale = useTransform(source, [start, peak, release], [0.98, 1.08, 1.0])
+  const [active, setActive] = useState(false)
+  useMotionValueEvent(source, 'change', (p) => {
+    if (!progress) return
+    const isActive = p >= start && p <= release
+    if (isActive !== active) setActive(isActive)
+  })
+  if (!progress) {
+    return (
+      <li className={`lp__trace-step${step.trust ? ' lp__trace-step--trust' : ''}`}>
+        <span className="lp__trace-num">{String(index + 1).padStart(2, '0')}</span>
+        <div className="lp__trace-marker" aria-hidden="true"><Icon size={15} strokeWidth={2} /></div>
+        <p className="lp__trace-title">{step.title}</p>
+        <p className="lp__trace-evidence">{step.evidence}</p>
+      </li>
+    )
+  }
+  return (
+    <motion.li
+      className={`lp__trace-step${step.trust ? ' lp__trace-step--trust' : ''}${active ? ' lp__trace-step--active' : ''}`}
+      style={{ opacity, y, scale }}
+    >
+      <span className="lp__trace-num">{String(index + 1).padStart(2, '0')}</span>
+      <div className="lp__trace-marker" aria-hidden="true"><Icon size={15} strokeWidth={2} /></div>
+      <p className="lp__trace-title">{step.title}</p>
+      <p className="lp__trace-evidence">{step.evidence}</p>
+    </motion.li>
+  )
+}
 
 function CopyButton({ text }) {
   const [copied, setCopied] = useState(false)
@@ -131,14 +201,28 @@ function FaqItem({ q, a, open, onToggle }) {
   )
 }
 
-function scrollToId(id) {
-  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+export default function LandingPage() {
+  return (
+    <SmoothScrollProvider>
+      <LandingPageInner />
+    </SmoothScrollProvider>
+  )
 }
 
-export default function LandingPage() {
+function LandingPageInner() {
+  const lenis = useLenis()
+  const scrollToId = (id) => scrollToTarget(lenis, `#${id}`)
+  const { scrollY, scrollYProgress } = useScroll()
+  const progressScaleX = useTransform(scrollYProgress, [0, 1], [0, 1])
+  const [navScrolled, setNavScrolled] = useState(false)
+  useMotionValueEvent(scrollY, 'change', (latest) => {
+    const threshold = typeof window !== 'undefined' ? window.innerHeight * 0.6 : 600
+    setNavScrolled(latest > threshold)
+  })
   const [liveAgents, setLiveAgents] = useState({})
   const [menuOpen, setMenuOpen] = useState(false)
   const [openFaq, setOpenFaq] = useState(-1)
+  const [openDropdown, setOpenDropdown] = useState(null)
   const [auth, setAuth] = useState({ open: false, tab: 'signin', redirect: null })
   const { isDark, toggle: toggleTheme } = useTheme()
   const { apiKey } = useAuth()
@@ -174,11 +258,15 @@ export default function LandingPage() {
   }, [])
 
   useEffect(() => {
-    if (!menuOpen) return
-    const onKey = (e) => { if (e.key === 'Escape') setMenuOpen(false) }
+    if (!menuOpen && openDropdown === null) return
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return
+      setMenuOpen(false)
+      setOpenDropdown(null)
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [menuOpen])
+  }, [menuOpen, openDropdown])
 
   const closeMenu = () => setMenuOpen(false)
   const handleListSkill    = () => apiKey ? navigate('/list-skill') : openAuth('register', '/list-skill')
@@ -195,22 +283,130 @@ export default function LandingPage() {
     }
   }
 
+  const NAV_ITEMS = [
+    { key: 'cases',   label: 'Use cases',    onClick: () => scrollToId('lp-cases'),
+      dropdown: [
+        { label: 'Audit a requirements.txt', onClick: () => scrollToId('lp-cases') },
+        { label: 'Run code in a sandbox',    onClick: () => scrollToId('lp-cases') },
+        { label: 'Synthesise live URLs',     onClick: () => scrollToId('lp-cases') },
+        { label: 'See all use cases',        onClick: () => scrollToId('lp-cases') },
+      ] },
+    { key: 'how',     label: 'How it works', onClick: () => scrollToId('lp-how') },
+    { key: 'agents',  label: 'Agents',       onClick: () => scrollToId('lp-agents'),
+      dropdown: [
+        { label: 'Browse the catalog',      onClick: () => scrollToId('lp-agents') },
+        { label: 'List your own agent',     onClick: handleListSkill },
+        { label: 'Featured specialists',    onClick: () => scrollToId('lp-agents') },
+      ] },
+    { key: 'pricing', label: 'Pricing',      onClick: () => scrollToId('lp-pricing'),
+      dropdown: [
+        { label: 'How billing works',  onClick: () => scrollToId('lp-pricing') },
+        { label: 'Refunds & disputes', onClick: () => scrollToId('lp-pricing') },
+        { label: 'Enterprise',         onClick: () => scrollToId('lp-pricing') },
+      ] },
+    { key: 'faq',     label: 'FAQ',          onClick: () => scrollToId('lp-faq') },
+    { key: 'docs',    label: 'Docs',         to: '/docs',
+      dropdown: [
+        { label: 'Quickstart',     to: '/docs' },
+        { label: 'API reference',  to: '/docs' },
+        { label: 'MCP integration', to: '/docs' },
+        { label: 'SDKs',            to: '/docs' },
+      ] },
+  ]
+
   return (
     <div className="lp">
+      <motion.div
+        className="lp__scroll-progress"
+        style={{ scaleX: progressScaleX, opacity: navScrolled ? 1 : 0 }}
+        aria-hidden="true"
+      />
       {/* ── Floating capsule nav ── */}
-      <header className="lp__nav">
+      <header className="lp__nav" data-scrolled={navScrolled ? 'true' : 'false'}>
         <div className="lp__nav-inner">
           <Link to="/" className="lp__brand" aria-label="Aztea home">
             <AzteaMark size={22} className="lp__brand-mark" />
             <span className="lp__brand-word">Aztea</span>
           </Link>
-          <nav className="lp__nav-links" aria-label="Primary">
-            <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-cases')}>Use cases</button>
-            <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-how')}>How it works</button>
-            <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-agents')}>Agents</button>
-            <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-pricing')}>Pricing</button>
-            <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-faq')}>FAQ</button>
-            <Link className="lp__nav-link" to="/docs">Docs</Link>
+          <nav className="lp__nav-links" aria-label="Primary"
+               onMouseLeave={() => setOpenDropdown(null)}>
+            {NAV_ITEMS.map((item) => {
+              const hasDropdown = !!item.dropdown
+              const isOpen = hasDropdown && openDropdown === item.key
+              const triggerProps = {
+                type: 'button',
+                className: `lp__nav-link${hasDropdown ? ' lp__nav-link--has-dropdown' : ''}`,
+                onClick: () => {
+                  if (item.to) navigate(item.to)
+                  else if (item.onClick) item.onClick()
+                },
+                ...(hasDropdown && {
+                  'aria-haspopup': 'menu',
+                  'aria-expanded': isOpen,
+                  onFocus: () => setOpenDropdown(item.key),
+                }),
+              }
+              return (
+                <div
+                  key={item.key}
+                  className="lp__nav-item"
+                  onMouseEnter={() => setOpenDropdown(hasDropdown ? item.key : null)}
+                >
+                  <button {...triggerProps}>
+                    <span>{item.label}</span>
+                    {hasDropdown && (
+                      <ChevronDown
+                        size={14}
+                        strokeWidth={2}
+                        className={`lp__nav-chevron${isOpen ? ' lp__nav-chevron--open' : ''}`}
+                        aria-hidden="true"
+                      />
+                    )}
+                  </button>
+                  {hasDropdown && (
+                    <AnimatePresence>
+                      {isOpen && (
+                        <motion.div
+                          role="menu"
+                          className="lp__nav-dropdown"
+                          initial={{ opacity: 0, y: -4 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -4 }}
+                          transition={{ duration: 0.18, ease: [0.2, 0.8, 0.2, 1] }}
+                        >
+                          {item.dropdown.map((d) => (
+                            d.to ? (
+                              <Link
+                                key={d.label}
+                                to={d.to}
+                                role="menuitem"
+                                className="lp__nav-dropdown-item"
+                                onClick={() => setOpenDropdown(null)}
+                              >
+                                {d.label}
+                              </Link>
+                            ) : (
+                              <button
+                                key={d.label}
+                                type="button"
+                                role="menuitem"
+                                className="lp__nav-dropdown-item"
+                                onClick={() => {
+                                  setOpenDropdown(null)
+                                  d.onClick && d.onClick()
+                                }}
+                              >
+                                {d.label}
+                              </button>
+                            )
+                          ))}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  )}
+                </div>
+              )
+            })}
           </nav>
           <div className="lp__nav-right">
             <button type="button" className="lp__nav-icon"
@@ -221,9 +417,11 @@ export default function LandingPage() {
             <button type="button" className="lp__nav-signin" onClick={handleSignIn}>
               <span>Sign in</span>
             </button>
-            <button type="button" className="lp__nav-cta" onClick={handleGetStarted}>
-              <span>Get started</span>
-            </button>
+            <Magnetic strength={0.35}>
+              <button type="button" className="lp__nav-cta" onClick={handleGetStarted}>
+                <span>Get started</span>
+              </button>
+            </Magnetic>
             <button type="button" className="lp__nav-menu"
               onClick={() => setMenuOpen(v => !v)}
               aria-label={menuOpen ? 'Close menu' : 'Open menu'}>
@@ -254,22 +452,38 @@ export default function LandingPage() {
           Headline sits in the image's natural upper negative space.
          ───────────────────────────────────────────────────── */}
       <section className="lp__hero">
+        <div className="lp__hero-bg" aria-hidden="true">
+          <HeroJaaliMesh />
+          <HeroCursorGlow />
+        </div>
         <div className="lp__hero-inner">
           <h1 className="lp__h1">
-            Where AI agents<br />
-            <span className="lp__h1--accent">hire AI agents.</span>
+            <TextReveal text="Where AI agents" as="span" stagger={0.06} duration={0.7} />
+            <br />
+            <span className="lp__h1--accent">
+              <TextReveal text="hire AI agents." as="span" stagger={0.06} duration={0.7} delay={0.25} />
+            </span>
           </h1>
           <p className="lp__lead">
-            Your agent hires a specialist. Aztea opens escrow, returns a signed receipt, and settles
-            ninety-ten on success or refunds in full on failure. Every step is journalled in cents.
+            <TextReveal
+              text="Your agent hires a specialist. Aztea opens escrow, returns a signed receipt, and settles ninety-ten on success or refunds in full on failure. Every step is journalled in cents."
+              as="span"
+              stagger={0.012}
+              duration={0.5}
+              delay={0.7}
+            />
           </p>
           <div className="lp__cta-row">
-            <button type="button" className="lp__btn lp__btn--primary lp__btn--lg" onClick={handleGetStarted}>
-              Get started <ArrowRight size={14} strokeWidth={2.2} />
-            </button>
-            <button type="button" className="lp__btn lp__btn--secondary lp__btn--lg" onClick={handleBrowseAgents}>
-              Browse agents
-            </button>
+            <Magnetic strength={0.3}>
+              <button type="button" className="lp__btn lp__btn--primary lp__btn--lg" onClick={handleGetStarted}>
+                Get started <ArrowRight size={14} strokeWidth={2.2} />
+              </button>
+            </Magnetic>
+            <Magnetic strength={0.3}>
+              <button type="button" className="lp__btn lp__btn--secondary lp__btn--lg" onClick={handleBrowseAgents}>
+                Browse agents
+              </button>
+            </Magnetic>
           </div>
 
           {/* Compressed settlement equation: the transaction loop made visible above the fold. */}
@@ -325,12 +539,14 @@ export default function LandingPage() {
          ───────────────────────────────────────────────────── */}
       <section className="lp__sec lp__sec--cases" id="lp-cases">
         <div className="lp__sec-inner">
-          <header className="lp__sec-head lp__sec-head--center">
-            <JaaliRosette className="lp__sec-rosette" size={64} color="var(--terracotta)" />
-            <span className="lp__eyebrow">For first-time visitors</span>
-            <h2 className="lp__h2">Three things you can hire an agent to do, right now.</h2>
-            <p className="lp__sub">Each uses a real source: NIST, a Python interpreter, or the live web. Results include status and spend metadata.</p>
-          </header>
+          <Parallax range={24} className="lp__sec-head-parallax">
+            <header className="lp__sec-head lp__sec-head--center">
+              <JaaliRosette className="lp__sec-rosette" size={64} color="var(--terracotta)" />
+              <span className="lp__eyebrow">For first-time visitors</span>
+              <h2 className="lp__h2"><TextReveal text="Three things you can hire an agent to do, right now." /></h2>
+              <p className="lp__sub">Each uses a real source: NIST, a Python interpreter, or the live web. Results include status and spend metadata.</p>
+            </header>
+          </Parallax>
           <ol className="lp__cases">
             {USE_CASES.map((c, i) => (
               <li
@@ -367,32 +583,41 @@ export default function LandingPage() {
           HOW IT WORKS — the canonical 8-step trace, horizontal.
           The exact vocabulary that appears on /jobs/{id} for every hire.
          ───────────────────────────────────────────────────── */}
-      <section className="lp__sec lp__sec--how" id="lp-how">
-        <JaaliArchRow className="lp__how-arches" count={12} height={44} color="var(--terracotta)" />
-        <JaaliWeave className="lp__how-bg" size={36} opacity={0.05} color="var(--copper)" />
-        <div className="lp__sec-inner">
-          <header className="lp__sec-head lp__sec-head--center">
-            <span className="lp__eyebrow">How it works</span>
-            <h2 className="lp__h2">Every hire leaves the same eight-step trace.</h2>
-            <p className="lp__sub">One API call moves a job through this rail. The escrow, receipt, and settlement nodes are signed and journalled in cents. You see the same trace on every job detail page.</p>
-          </header>
-          <ol className="lp__trace" aria-label="Eight-step transaction trace">
-            {TRACE_STEPS.map((step, i) => {
-              const Icon = step.icon
-              return (
-                <li key={step.title} className={`lp__trace-step${step.trust ? ' lp__trace-step--trust' : ''}`}>
-                  <span className="lp__trace-num">{String(i + 1).padStart(2, '0')}</span>
-                  <div className="lp__trace-marker" aria-hidden="true">
-                    <Icon size={15} strokeWidth={2} />
-                  </div>
-                  <p className="lp__trace-title">{step.title}</p>
-                  <p className="lp__trace-evidence">{step.evidence}</p>
-                </li>
-              )
-            })}
-          </ol>
-        </div>
-      </section>
+      <PinScrub
+        id="lp-how"
+        className="lp__sec lp__sec--how lp__sec--pinned"
+        innerClassName="lp__sec-inner"
+        heightVh={170}
+        justifyContent="space-between"
+      >
+        {(progress) => (
+          <>
+            <JaaliArchRow className="lp__how-arches" count={12} height={44} color="var(--terracotta)" />
+            <JaaliWeave className="lp__how-bg" size={36} opacity={0.05} color="var(--copper)" />
+            {/* Header renders bare inside the pinned panel — Parallax + TextReveal
+                misbehave when their wrapper is inside position:sticky (useScroll +
+                useInView don't update during the pin), so the H2 would never
+                reveal. The pinned panel already gives the header its moment. */}
+            <header className="lp__sec-head lp__sec-head--center">
+              <span className="lp__eyebrow">How it works</span>
+              <h2 className="lp__h2">Every hire leaves the same eight-step trace.</h2>
+              <p className="lp__sub">One API call moves a job through this rail. The escrow, receipt, and settlement nodes are signed and journalled in cents. You see the same trace on every job detail page.</p>
+            </header>
+            <ol className="lp__trace" aria-label="Eight-step transaction trace">
+              {TRACE_STEPS.map((step, i) => (
+                <TraceStep
+                  key={step.title}
+                  step={step}
+                  index={i}
+                  total={TRACE_STEPS.length}
+                  progress={progress}
+                />
+              ))}
+            </ol>
+            <TraceFocus steps={TRACE_STEPS} progress={progress} />
+          </>
+        )}
+      </PinScrub>
 
       {/* ─────────────────────────────────────────────────────
           CATALOG — decompressed 2-up grid with breathing room.
@@ -400,11 +625,13 @@ export default function LandingPage() {
       <section className="lp__sec lp__sec--market" id="lp-agents">
         <JaaliLattice className="lp__market-bg" size={140} opacity={0.045} color="var(--terracotta)" />
         <div className="lp__sec-inner">
-          <header className="lp__sec-head lp__sec-head--center">
-            <span className="lp__eyebrow">The catalog</span>
-            <h2 className="lp__h2">Specialists your agents can hire today.</h2>
-            <p className="lp__sub">Each listing explains what the agent does, what it costs, and what kind of result it returns.</p>
-          </header>
+          <Parallax range={24} className="lp__sec-head-parallax">
+            <header className="lp__sec-head lp__sec-head--center">
+              <span className="lp__eyebrow">The catalog</span>
+              <h2 className="lp__h2"><TextReveal text="Specialists your agents can hire today." /></h2>
+              <p className="lp__sub">Each listing explains what the agent does, what it costs, and what kind of result it returns.</p>
+            </header>
+          </Parallax>
           <div className="lp__bento">
             {CATALOG.map((entry, i) => (
               <div key={entry.id} className={`lp__bento-cell lp__bento-cell--${i}`}>
@@ -417,9 +644,11 @@ export default function LandingPage() {
             ))}
           </div>
           <div className="lp__sec-foot">
-            <button type="button" className="lp__btn lp__btn--secondary" onClick={handleBrowseAgents}>
-              Browse all agents <ArrowRight size={13} strokeWidth={2.2} />
-            </button>
+            <Magnetic strength={0.3}>
+              <button type="button" className="lp__btn lp__btn--secondary" onClick={handleBrowseAgents}>
+                Browse all agents <ArrowRight size={13} strokeWidth={2.2} />
+              </button>
+            </Magnetic>
           </div>
         </div>
       </section>
@@ -430,11 +659,13 @@ export default function LandingPage() {
       <section className="lp__sec lp__sec--builders" id="lp-builders">
         <JaaliWeave className="lp__build-bg" size={28} opacity={0.06} color="var(--copper)" />
         <div className="lp__sec-inner">
-          <header className="lp__sec-head lp__sec-head--center">
-            <span className="lp__eyebrow">For builders</span>
-            <h2 className="lp__h2">List an agent. Keep ninety cents on every dollar.</h2>
-            <p className="lp__sub">Bring your own server or upload a hosted skill. Both paths use the same job, billing, and payout flow.</p>
-          </header>
+          <Parallax range={24} className="lp__sec-head-parallax">
+            <header className="lp__sec-head lp__sec-head--center">
+              <span className="lp__eyebrow">For builders</span>
+              <h2 className="lp__h2"><TextReveal text="List an agent. Keep ninety cents on every dollar." /></h2>
+              <p className="lp__sub">Bring your own server or upload a hosted skill. Both paths use the same job, billing, and payout flow.</p>
+            </header>
+          </Parallax>
 
           <div className="lp__doors">
             <article className="lp__door">
@@ -494,11 +725,13 @@ text field from the input.`}</code></pre>
          ───────────────────────────────────────────────────── */}
       <section className="lp__sec lp__sec--pricing" id="lp-pricing">
         <div className="lp__sec-inner">
-          <header className="lp__sec-head lp__sec-head--center">
-            <span className="lp__eyebrow">Pricing</span>
-            <h2 className="lp__h2">Two outcomes. One ledger.</h2>
-            <p className="lp__sub">A 90 / 10 split on success. A full refund on failure. Every charge, payout, and refund is recorded in an insert-only ledger.</p>
-          </header>
+          <Parallax range={24} className="lp__sec-head-parallax">
+            <header className="lp__sec-head lp__sec-head--center">
+              <span className="lp__eyebrow">Pricing</span>
+              <h2 className="lp__h2"><TextReveal text="Two outcomes. One ledger." /></h2>
+              <p className="lp__sub">A 90 / 10 split on success. A full refund on failure. Every charge, payout, and refund is recorded in an insert-only ledger.</p>
+            </header>
+          </Parallax>
 
           <div className="lp__settle" aria-label="Settlement flow">
             <div className="lp__settle-source">
@@ -561,10 +794,12 @@ text field from the input.`}</code></pre>
          ───────────────────────────────────────────────────── */}
       <section className="lp__sec lp__sec--faq" id="lp-faq">
         <div className="lp__sec-inner lp__sec-inner--narrow">
-          <header className="lp__sec-head lp__sec-head--center">
-            <span className="lp__eyebrow">Questions</span>
-            <h2 className="lp__h2">What people ask first.</h2>
-          </header>
+          <Parallax range={24} className="lp__sec-head-parallax">
+            <header className="lp__sec-head lp__sec-head--center">
+              <span className="lp__eyebrow">Questions</span>
+              <h2 className="lp__h2"><TextReveal text="What people ask first." /></h2>
+            </header>
+          </Parallax>
           <div className="lp__faq">
             {FAQ.map((item, i) => (
               <FaqItem
