@@ -311,6 +311,72 @@ def warn(message: str) -> None:
         err_console.print(f"! {message}")
 
 
+# ── Network-failure helpers ────────────────────────────────────────────────
+#
+# The AzteaClient default request timeout is 30s. When `aztea.ai` is slow
+# or unreachable, any command that hits the network bubbles up a raw
+# urllib3/requests exception (e.g. ``HTTPSConnectionPool(host='aztea.ai',
+# port=443): Read timed out. (read timeout=30.0)``). Surfacing that raw
+# string to the user is hostile UX — they don't care about pool names.
+# These helpers detect the common shapes and render a single branded
+# panel with an actionable hint, so every catch-all (REPL dispatch,
+# login modal, register modal, …) tells the same story.
+
+
+def _is_timeout_exception(exc: BaseException) -> bool:
+    """Best-effort detect of read/connect timeouts without importing requests."""
+    name = type(exc).__name__
+    if name in ("ReadTimeout", "ConnectTimeout", "Timeout"):
+        return True
+    msg = str(exc).lower()
+    return "timed out" in msg or "read timeout" in msg
+
+
+def _is_connection_exception(exc: BaseException) -> bool:
+    """Best-effort detect of name-resolution / connection-refused / unreachable host."""
+    name = type(exc).__name__
+    if name in ("ConnectionError", "ConnectionRefusedError", "MaxRetryError"):
+        return True
+    msg = str(exc).lower()
+    return (
+        "failed to establish" in msg
+        or "name or service not known" in msg
+        or "nodename nor servname" in msg
+        or "connection refused" in msg
+        or "network is unreachable" in msg
+    )
+
+
+def render_network_error(exc: BaseException, *, code_prefix: str) -> bool:
+    """If ``exc`` is a network failure, render a friendly panel and return True.
+
+    ``code_prefix`` is namespaced into the error code so each surface
+    keeps its own taxonomy (e.g. ``code_prefix="register"`` → code
+    ``register.timeout`` / ``register.network``).
+
+    Returns False on any other exception — the caller is expected to
+    surface its own message in that case. Never raises.
+    """
+    if _is_timeout_exception(exc):
+        error(
+            "Aztea took too long to respond.",
+            hint=(
+                "Check your internet connection, then try again. "
+                "If aztea.ai is unreachable, retry in a minute."
+            ),
+            code=f"{code_prefix}.timeout",
+        )
+        return True
+    if _is_connection_exception(exc):
+        error(
+            "Couldn't reach aztea.ai.",
+            hint="Check your internet connection, then try again.",
+            code=f"{code_prefix}.network",
+        )
+        return True
+    return False
+
+
 def error(message: str, *, hint: str | None = None, code: str | None = None) -> None:
     """Print an error to stderr in a branded panel.
 

@@ -157,9 +157,11 @@ def init(  # noqa: PLR0913 — Typer signature is the public API.
     # Pretty summary.
     section("setup", "complete")
     if not no_mcp:
+        from . import mcp as _mcp_module
+        label = _mcp_module.client_label(client)
         success(
             "Aztea MCP registered",
-            detail="restart your editor to pick up the new server.",
+            detail=f"quit and relaunch {label} to pick up the new server.",
         )
     # The "Appended Aztea reflex snippet to CLAUDE.md" line and the
     # "Next: in your editor, try ..." nudge used to print here. Per

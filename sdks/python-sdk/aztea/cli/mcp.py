@@ -108,6 +108,18 @@ def _resolve_target(client: str) -> _ClientTarget:
     return _TARGETS[key]
 
 
+def client_label(client: str) -> str:
+    """Return the user-facing display name for ``client`` (e.g. "Claude Code").
+
+    Falls back to "your editor" when ``client`` is unknown so messages
+    relying on this never end up with a stray empty string. Used by
+    ``init.py`` and any other surface that needs to name the client
+    without holding a ``_ClientTarget`` ref.
+    """
+    target = _TARGETS.get((client or "").strip().lower())
+    return target.label if target is not None else "your editor"
+
+
 # ── Config IO ──────────────────────────────────────────────────────────────
 
 def _read_config(path: Path) -> dict[str, Any]:
@@ -385,7 +397,7 @@ def install(
             info(f"Added reflex rule to {_CLAUDE_MD_PATH}")
         if hook_written:
             info(f"Added PostToolUse hook to {_CLAUDE_SETTINGS_PATH}")
-        info("Restart your editor to activate.")
+        info(f"Quit and relaunch {target.label} to activate.")
     except typer.Exit:
         raise
     except Exception as exc:
@@ -618,7 +630,7 @@ def _render_doctor(
         head.append(f"{BAR} ", style="success")
         head.append("integration healthy", style="success")
         head.append(f"   {DOT}   ", style="border")
-        head.append("restart your editor to pick up changes", style="muted")
+        head.append(f"quit and relaunch {label} to pick up changes", style="muted")
         panel = Panel(
             Group(head, Text(""), summary),
             border_style="border_dim",

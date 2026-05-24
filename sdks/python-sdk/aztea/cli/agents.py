@@ -139,7 +139,13 @@ def list_cmd(
                         min_trust=min_trust,
                     )
                 else:
-                    agents = client.list_agents()
+                    # In long-lived processes (the REPL) the catalog is
+                    # cached for 60s so repeated /agents calls are
+                    # instant. One-shot CLI invocations always miss the
+                    # cache (new process = empty state) and hit the
+                    # network like before.
+                    from . import _agents_cache
+                    agents = _agents_cache.get_or_fetch(client)
                     if max_price is not None:
                         agents = [
                             a for a in agents

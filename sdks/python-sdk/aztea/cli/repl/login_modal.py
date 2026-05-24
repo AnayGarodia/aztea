@@ -302,9 +302,23 @@ def _do_login(**creds: Any) -> str:
             # already printed their result to the captured stream.
             pass
         except Exception as exc:  # defensive — auth.login normally uses Exit
-            from ..output import error as _err
-            _err(f"Sign-in failed: {exc}")
+            _surface_login_error(exc)
     return cap.getvalue()
+
+
+def _surface_login_error(exc: Exception) -> None:
+    """Render a friendly error for client-side login failures.
+
+    The AzteaClient default request timeout is 30s; if aztea.ai is slow
+    or unreachable, ``auth.login`` bubbles up a raw urllib3/requests
+    timeout. The shared ``render_network_error`` helper turns those into
+    actionable copy instead of the raw pool URL.
+    """
+    from ..output import error as _err, render_network_error
+
+    if render_network_error(exc, code_prefix="login"):
+        return
+    _err(f"Sign-in failed: {exc}")
 
 
 def _append_to_history(text: str) -> None:
