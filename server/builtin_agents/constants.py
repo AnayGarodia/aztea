@@ -188,6 +188,41 @@ BUILTIN_AGENT_IDS = frozenset(BUILTIN_INTERNAL_ENDPOINTS.keys())
 #     graduated past stability concerns and overlaps lighthouse_auditor screenshots.
 #   - archive_inspector: zip-slip guard is real but the inspect step is
 #     trivially Claude-doable for the audit use case.
+#
+# 2026-05-26: platform-pivot cull — seventeen more builtins sunsetted to
+# focus the curated catalog on agents that *demonstrate the platform's
+# unique primitives* (subprocess isolation, persistent sandbox, live
+# external data). The new bar is stricter than "real tool": each curated
+# agent must show off a capability third-party builders will want to
+# build on top of. Real-tool agents that miss the bar still keep their
+# endpoints wired (old job IDs and signed receipts resolve) and remain
+# hireable by direct slug or agent_id. Reasoning per agent:
+#   - secret_scanner: regex + Shannon entropy; no external work, Claude can scan files itself.
+#   - broken_link_crawler: HTTP HEAD scan — real, but a one-liner with curl
+#     for any integrator that already has network.
+#   - pdf_document_parser: pymupdf + pdfplumber over a fetched URL — fetch is
+#     real but parsing is mechanical library work.
+#   - sast_scanner: semgrep/bandit subprocess — real, but covered by every
+#     integrator's existing CI pipeline.
+#   - stripe_webhook_debugger: signed test events at caller endpoint — real,
+#     but a Stripe-specific niche unsuited to the curated catalog story.
+#   - load_tester: threaded HTTP benchmark — real, but bounded utility for
+#     the platform-demo wedge.
+#   - ci_failure_reproducer: sandboxed shell — overlaps live_sandbox without
+#     adding a distinct platform primitive.
+#   - dockerfile_analyzer: hadolint subprocess + regex fallback — real, but
+#     niche; dependency_auditor covers the security overlap.
+#   - openapi_validator: pure YAML/JSON parsing — Claude does this in-session.
+#   - coverage_runner: pytest+coverage subprocess — covered by python_executor.
+#   - k8s_manifest_validator: kubectl dry-run subprocess — real, niche.
+#   - terraform_plan_analyzer: pure JSON parse + pattern match — Claude can do.
+#   - jwt_validator: HMAC/JWKS decode — mechanical library work.
+#   - hcl_terraform_analyzer: checkov subprocess + regex fallback — niche.
+#   - quant_patch_validator: differential fuzzing — real but vertical-specific;
+#     ships better as a third-party listing once the quant audience exists.
+#   - codebase_reviewer: LLM-only reasoning agent; not a platform primitive.
+#   - compliance_attestor: LLM reasoning + Ed25519 signing; signing is
+#     mechanical, value is in the prompt — not a platform primitive.
 SUNSET_DEPRECATED_AGENT_IDS: frozenset[str] = frozenset({
     DOCS_GROUNDER_AGENT_ID,
     DIFF_ANALYZER_AGENT_ID,
@@ -201,45 +236,47 @@ SUNSET_DEPRECATED_AGENT_IDS: frozenset[str] = frozenset({
     WEB_SEARCH_AGENT_ID,
     VISUAL_REGRESSION_AGENT_ID,
     ARCHIVE_INSPECTOR_AGENT_ID,
+    # 2026-05-26 platform-pivot cull.
+    SECRET_SCANNER_AGENT_ID,
+    BROKEN_LINK_CRAWLER_AGENT_ID,
+    PDF_DOCUMENT_PARSER_AGENT_ID,
+    SAST_SCANNER_AGENT_ID,
+    STRIPE_WEBHOOK_DEBUGGER_AGENT_ID,
+    LOAD_TESTER_AGENT_ID,
+    CI_FAILURE_REPRODUCER_AGENT_ID,
+    DOCKERFILE_ANALYZER_AGENT_ID,
+    OPENAPI_VALIDATOR_AGENT_ID,
+    COVERAGE_RUNNER_AGENT_ID,
+    K8S_MANIFEST_VALIDATOR_AGENT_ID,
+    TERRAFORM_PLAN_ANALYZER_AGENT_ID,
+    JWT_VALIDATOR_AGENT_ID,
+    HCL_TERRAFORM_ANALYZER_AGENT_ID,
+    QUANT_PATCH_VALIDATOR_AGENT_ID,
+    CODEBASE_REVIEWER_AGENT_ID,
+    COMPLIANCE_ATTESTOR_AGENT_ID,
 })
 
-# The public catalog: agents that give a coding-agent integrator a primitive
-# they cannot trivially build themselves — isolation (sandboxes), live
-# external data (CVE/DNS/HTTP), or specialist runtimes (browser, pixel diff).
-# Sunsetted agents are explicitly NOT listed here; see SUNSET_DEPRECATED_AGENT_IDS
-# for the cull list and reasoning. 2026-05-20 cull dropped 11 builtins.
+# The public catalog: agents that demonstrate the platform's unique
+# primitives — subprocess isolation (python_executor, multi_language_executor,
+# db_sandbox, live_sandbox), live external data (cve_lookup, dependency_auditor,
+# dns_inspector), or specialist headless runtimes (browser_agent,
+# lighthouse_auditor, accessibility_auditor). Sunsetted agents are NOT
+# listed here; see SUNSET_DEPRECATED_AGENT_IDS for the cull list and
+# reasoning. 2026-05-26 platform-pivot cull narrowed this to 10 agents
+# that block Claude in-session and showcase what third-party builders
+# can build on top of.
 CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
     {
         CVELOOKUP_AGENT_ID,
-        PYTHON_EXECUTOR_AGENT_ID,
-        DNS_INSPECTOR_AGENT_ID,
         DEPENDENCY_AUDITOR_AGENT_ID,
+        DNS_INSPECTOR_AGENT_ID,
+        PYTHON_EXECUTOR_AGENT_ID,
+        MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
+        LIVE_SANDBOX_AGENT_ID,
         DB_SANDBOX_AGENT_ID,
         BROWSER_AGENT_ID,
-        MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
-        SECRET_SCANNER_AGENT_ID,
         LIGHTHOUSE_AUDITOR_AGENT_ID,
         ACCESSIBILITY_AUDITOR_AGENT_ID,
-        BROKEN_LINK_CRAWLER_AGENT_ID,
-        PDF_DOCUMENT_PARSER_AGENT_ID,
-        SAST_SCANNER_AGENT_ID,
-        STRIPE_WEBHOOK_DEBUGGER_AGENT_ID,
-        LOAD_TESTER_AGENT_ID,
-        CI_FAILURE_REPRODUCER_AGENT_ID,
-        DOCKERFILE_ANALYZER_AGENT_ID,
-        OPENAPI_VALIDATOR_AGENT_ID,
-        COVERAGE_RUNNER_AGENT_ID,
-        K8S_MANIFEST_VALIDATOR_AGENT_ID,
-        TERRAFORM_PLAN_ANALYZER_AGENT_ID,
-        LIVE_SANDBOX_AGENT_ID,
-        JWT_VALIDATOR_AGENT_ID,
-        HCL_TERRAFORM_ANALYZER_AGENT_ID,
-        QUANT_PATCH_VALIDATOR_AGENT_ID,
-        # 2026-05-22 — strategy-doc reference agents that work TODAY.
-        # The other 23 from the slate are in PENDING_INFRA_AGENT_IDS until
-        # their external dependencies ship.
-        CODEBASE_REVIEWER_AGENT_ID,
-        COMPLIANCE_ATTESTOR_AGENT_ID,
     }
 )
 
@@ -287,12 +324,22 @@ CURATED_BUILTIN_AGENT_IDS = frozenset(
 # locate every member by id without grepping spec text. Adding an agent
 # here without zeroing its spec price is a documentation bug, not a
 # behavior change — the spec price is authoritative.
+#
+# 2026-05-26: secret_scanner and dockerfile_analyzer removed alongside the
+# platform-pivot cull — they're sunset, so they no longer surface in the
+# catalog for free-tier discovery. Their spec prices remain $0.00 so
+# direct-slug callers still hit the free path; the set just stops
+# pointing at hidden agents.
 GATEWAY_FREE_TIER_AGENT_IDS = frozenset(
     {
-        SECRET_SCANNER_AGENT_ID,
-        DOCKERFILE_ANALYZER_AGENT_ID,
         CVELOOKUP_AGENT_ID,
     }
+)
+# Sanity: a sunset agent must never appear in the discovery free-tier
+# set. Fires at import time so a regression is caught loudly.
+assert not (GATEWAY_FREE_TIER_AGENT_IDS & SUNSET_DEPRECATED_AGENT_IDS), (
+    "GATEWAY_FREE_TIER_AGENT_IDS must not include sunset agents — they "
+    "are hidden from discovery, so subsidizing them confuses readers."
 )
 
 

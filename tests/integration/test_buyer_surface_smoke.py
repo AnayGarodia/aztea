@@ -243,7 +243,9 @@ def test_codex_tool_manifest_supports_meta_and_registry_execution(buyer_surface_
         client_id="codex",
     )
     assert ok_recipes is True
-    assert recipes["count"] >= 3
+    # 2026-05-26 platform-pivot cull dropped two secret-scanner-fan-out recipes;
+    # curated catalog is now {audit-deps, domain-health}.
+    assert recipes["count"] >= 2
 
     ok_run, result = _execute_platform_tool(
         manifest=manifest,
@@ -282,7 +284,7 @@ def test_gemini_tool_manifest_supports_meta_and_registry_execution(buyer_surface
         client_id="gemini-cli",
     )
     assert ok_recipes is True
-    assert recipes["count"] >= 3
+    assert recipes["count"] >= 2  # 2026-05-26 platform-pivot cull
 
     ok_run, result = _execute_platform_tool(
         manifest=manifest,

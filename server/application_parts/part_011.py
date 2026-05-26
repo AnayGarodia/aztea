@@ -2437,3 +2437,23 @@ app.include_router(
         require_admin_ip_allowlist=_require_admin_ip_allowlist,
     )
 )
+
+
+# Mount the anonymous public-integrations surface (/api/integrations/*).
+# 2026-05-26 platform-pivot wave 1: gives OpenAI Agents SDK / Codex /
+# Gemini Tools integrators a way to discover Aztea agents without an
+# API key. The router lives in ``server/routes/public_integrations.py``.
+# Wired here (not in part_007 next to the private tool endpoints) so
+# part_007 stays under shard line budget and so the public surface has a
+# clean module identity — separate file, separate cache, separate tests.
+app.include_router(
+    _public_integrations_routes.create_router(
+        limiter=limiter,
+        # WHY thunk vs direct reference: _mcp_active_agents is defined in a
+        # sibling shard and resolved through the shared application namespace.
+        # Tests (and any future swap-in) monkeypatch the symbol on
+        # ``server.application``; binding the callable through a lambda forces
+        # the name lookup to happen at call time, so the patched version wins.
+        active_agents_fn=lambda: _mcp_active_agents(),
+    )
+)

@@ -11,6 +11,8 @@ import GeometricDivider from '../brand/GeometricDivider'
 import { searchAgents } from '../api'
 import { useMarket } from '../context/MarketContext'
 import { Search, Zap } from 'lucide-react'
+import { usePageMeta } from '../seo/usePageMeta'
+import { SEO } from '../seo/copy'
 import './AgentsPage.css'
 
 const SEARCH_SUGGESTIONS = [
@@ -48,6 +50,11 @@ function sortAgents(list, sortBy) {
 }
 
 export default function AgentsPage() {
+  usePageMeta({
+    title: SEO.agents.title,
+    description: SEO.agents.description,
+    ogImage: SEO.agents.ogImage,
+  })
   const { agents, loading, apiKey, refresh } = useMarket()
   const [searchParams, setSearchParams] = useSearchParams()
   const [filtersOpen, setFiltersOpen] = useState(false)

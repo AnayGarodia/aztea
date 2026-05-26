@@ -24,7 +24,17 @@ from server.builtin_agents.constants import QUANT_PATCH_VALIDATOR_AGENT_ID
 _TRIVIAL_REF = "def f(x): return x * 2\n"
 
 
-pytestmark = pytest.mark.slow
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.skip(
+        reason=(
+            "Sunset 2026-05-26 platform-pivot cull: quant_patch_validator "
+            "moved to SUNSET_DEPRECATED_AGENT_IDS. The job-creation path "
+            "now rejects sunset agents. Re-enable when the agent returns "
+            "to CURATED_PUBLIC_BUILTIN_AGENT_IDS."
+        )
+    ),
+]
 
 
 def _poll_job(client, caller, job_id, deadline_s=30):

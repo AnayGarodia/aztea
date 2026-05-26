@@ -203,6 +203,7 @@ from server.error_handlers import (
     register_exception_handlers,
 )
 from server.routes import admin_usage as _admin_usage_routes
+from server.routes import public_integrations as _public_integrations_routes
 from server.routes import system as _system_routes
 
 _LOG_LEVEL_NAME = (os.environ.get("LOG_LEVEL", "INFO") or "INFO").strip().upper()

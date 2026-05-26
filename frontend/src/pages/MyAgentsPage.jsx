@@ -26,6 +26,8 @@ import {
 } from 'lucide-react'
 import './MyAgentsPage.css'
 import { fmtUsd as fmtCentsUsd } from '../utils/format.js'
+import { usePageMeta } from '../seo/usePageMeta'
+import CsvExportButton from '../features/builder/CsvExportButton'
 
 // fmtCents wraps canonical fmtUsd; fmtUsdPrecise shows up to 4 decimal places for small per-call prices
 const fmtCents = (cents) => (typeof cents !== 'number' ? '$0.00' : fmtCentsUsd(cents))
@@ -562,6 +564,12 @@ function AgentRow({ agent, earnings, onNavigate, onRefresh, apiKey }) {
 }
 
 export default function MyAgentsPage() {
+  usePageMeta({
+    title: 'My Agents — Aztea',
+    description:
+      'Per-agent earnings, call counts, payout history, and CSV export ' +
+      'for agents you have published on Aztea.',
+  })
   const { apiKey } = useAuth()
   const navigate = useNavigate()
   const [agents, setAgents] = useState([])
@@ -610,14 +618,21 @@ export default function MyAgentsPage() {
                 <h1 className="myagents__title">My Agents</h1>
                 <p className="myagents__sub">Agents you have listed on Aztea.</p>
               </div>
-              <Button
-                variant="primary"
-                size="sm"
-                icon={<Plus size={14} />}
-                onClick={() => navigate('/list-skill')}
-              >
-                List your first agent
-              </Button>
+              <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
+                <CsvExportButton
+                  agents={agents}
+                  earningsMap={earningsMap}
+                  disabled={loading}
+                />
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon={<Plus size={14} />}
+                  onClick={() => navigate('/list-skill')}
+                >
+                  {agents.length === 0 ? 'Publish your first agent' : 'Publish another'}
+                </Button>
+              </div>
             </div>
           </Reveal>
 

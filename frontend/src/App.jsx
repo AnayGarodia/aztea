@@ -34,6 +34,7 @@ const SkillUploadPage = lazy(() => import('./pages/SkillUploadPage'))
 const PlatformPage = lazy(() => import('./pages/PlatformPage'))
 const KeysPage = lazy(() => import('./pages/KeysPage'))
 const IntegrationsPage = lazy(() => import('./pages/IntegrationsPage'))
+const BuildPage = lazy(() => import('./pages/BuildPage'))
 
 function PublicMarketApp({ children }) {
   const { apiKey, booting } = useAuth()
@@ -173,6 +174,7 @@ export default function App() {
                 <Route path="/marketplace" element={<PublicMarketApp><AgentsPage /></PublicMarketApp>} />
                 <Route path="/agents" element={<PublicMarketApp><AgentsPage /></PublicMarketApp>} />
                 <Route path="/agents/:id" element={<PublicMarketApp><AgentDetailPage /></PublicMarketApp>} />
+                <Route path="/build" element={<PublicMarketApp><BuildPage /></PublicMarketApp>} />
                 <Route
                   path="/legal/accept"
                   element={

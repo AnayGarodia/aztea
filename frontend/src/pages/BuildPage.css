@@ -1,0 +1,288 @@
+/* /build — platform-pivot landing for agent builders.
+   Scoped class names start with `build-` so they don't collide with
+   the marketing-heavy LandingPage stylesheet. */
+
+.build-page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: clamp(2rem, 6vw, 4rem) clamp(1rem, 4vw, 2rem) 4rem;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(2.5rem, 6vw, 4.5rem);
+}
+
+/* ── Hero ────────────────────────────────────────────────────────────── */
+
+.build-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1.25rem;
+}
+
+.build-hero__pill {
+  margin-bottom: 0.25rem;
+}
+
+.build-hero__title {
+  font-family: var(--font-display, var(--font-sans));
+  font-size: clamp(2.25rem, 5vw, 3.75rem);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  margin: 0;
+  color: var(--text-strong, var(--text-1));
+}
+
+.build-hero__lede {
+  font-size: clamp(1rem, 1.4vw, 1.125rem);
+  line-height: 1.55;
+  color: var(--text-2, var(--text-muted));
+  max-width: 620px;
+  margin: 0;
+}
+
+.build-hero__secondary {
+  margin-top: 0.5rem;
+}
+
+/* ── Publish command block ───────────────────────────────────────────── */
+
+.build-cmd {
+  display: flex;
+  align-items: stretch;
+  gap: 0.75rem;
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border-1, rgba(255, 255, 255, 0.12));
+  border-radius: var(--radius-md, 10px);
+  padding: 0.75rem 0.75rem 0.75rem 1rem;
+  width: 100%;
+  max-width: 620px;
+}
+
+.build-cmd__text {
+  flex: 1;
+  font-family: var(--font-mono, ui-monospace, "JetBrains Mono", monospace);
+  font-size: 0.95rem;
+  color: var(--text-1);
+  align-self: center;
+  user-select: all;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+/* ── Revenue split ───────────────────────────────────────────────────── */
+
+.build-split__card {
+  padding: clamp(1.5rem, 3vw, 2.25rem);
+}
+
+.build-split__row {
+  display: flex;
+  gap: clamp(1.5rem, 4vw, 3rem);
+  align-items: baseline;
+  margin-bottom: 1rem;
+}
+
+.build-split__share {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+.build-split__pct {
+  font-family: var(--font-display, var(--font-sans));
+  font-size: clamp(2.5rem, 6vw, 4rem);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.build-split__share--builder .build-split__pct {
+  color: var(--accent, var(--gold, var(--text-1)));
+}
+
+.build-split__share--platform .build-split__pct {
+  color: var(--text-2, var(--text-muted));
+}
+
+.build-split__label {
+  font-size: 0.875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-2, var(--text-muted));
+}
+
+.build-split__copy {
+  margin: 0;
+  color: var(--text-2, var(--text-muted));
+  font-size: 0.95rem;
+  line-height: 1.55;
+  max-width: 540px;
+}
+
+/* ── Two tracks ──────────────────────────────────────────────────────── */
+
+.build-tracks__heading {
+  font-family: var(--font-display, var(--font-sans));
+  font-size: clamp(1.5rem, 2.5vw, 2rem);
+  letter-spacing: -0.015em;
+  margin: 0 0 1.25rem 0;
+}
+
+.build-tracks__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.build-track {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 1.5rem;
+  min-height: 200px;
+}
+
+.build-track__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.build-track__icon {
+  color: var(--accent, var(--gold, var(--text-1)));
+}
+
+.build-track__name {
+  font-family: var(--font-display, var(--font-sans));
+  font-size: 1.4rem;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.build-track__tagline {
+  margin: 0;
+  color: var(--text-1);
+  font-weight: 500;
+}
+
+.build-track__body {
+  margin: 0;
+  color: var(--text-2, var(--text-muted));
+  font-size: 0.93rem;
+  line-height: 1.5;
+  flex: 1;
+}
+
+.build-track__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--accent, var(--text-1));
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 0.93rem;
+}
+
+.build-track__link:hover {
+  text-decoration: underline;
+}
+
+/* ── Probation notice ─────────────────────────────────────────────────── */
+
+.build-probation__card {
+  display: flex;
+  gap: 1rem;
+  padding: 1.5rem;
+  border-left: 3px solid var(--accent, var(--gold, var(--text-1)));
+}
+
+.build-probation__icon {
+  color: var(--accent, var(--gold, var(--text-1)));
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.build-probation__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.build-probation__heading {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.build-probation__copy p {
+  margin: 0;
+  color: var(--text-2, var(--text-muted));
+  line-height: 1.55;
+  font-size: 0.93rem;
+}
+
+.build-probation__copy strong {
+  color: var(--text-1);
+}
+
+/* ── Next steps ──────────────────────────────────────────────────────── */
+
+.build-next__heading {
+  font-family: var(--font-display, var(--font-sans));
+  font-size: clamp(1.5rem, 2.5vw, 2rem);
+  letter-spacing: -0.015em;
+  margin: 0 0 1.25rem 0;
+}
+
+.build-next__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+}
+
+.build-next__card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1.25rem;
+}
+
+.build-next__icon {
+  color: var(--accent, var(--gold, var(--text-1)));
+}
+
+.build-next__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.build-next__body {
+  margin: 0;
+  color: var(--text-2, var(--text-muted));
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.build-next__footer {
+  margin-top: 1.5rem;
+  text-align: center;
+}
+
+/* ── Mobile ───────────────────────────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  .build-cmd {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .build-split__row {
+    flex-direction: row;
+    gap: 1.5rem;
+  }
+  .build-tracks__grid,
+  .build-next__grid {
+    grid-template-columns: 1fr;
+  }
+}

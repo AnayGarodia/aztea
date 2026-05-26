@@ -93,6 +93,45 @@ JOB_SELF_DISPUTE = "job.self_dispute_not_allowed"
 JOB_RATE_STATUS_INVALID = "job.rate_invalid_status"
 JOB_INVALID_RATING = "job.invalid_rating"
 
+# Public integrations (anonymous /api/integrations/* endpoints)
+INTEGRATIONS_UNKNOWN_SCHEMA_VERSION = "integrations.unknown_schema_version"
+
+# Wallet / Stripe surfaces
+WALLET_NOT_FOUND = "wallet.not_found"
+WALLET_NOT_AUTHORIZED = "wallet.not_authorized"
+PAYMENT_AMOUNT_OUT_OF_RANGE = "payment.amount_out_of_range"
+PAYMENT_AMOUNT_BELOW_MINIMUM = "payment.amount_below_minimum"
+PAYMENT_AMOUNT_ABOVE_MAXIMUM = "payment.amount_above_maximum"
+PAYMENT_METHOD_NOT_FOUND = "payment.method_not_found"
+PAYMENT_NO_SAVED_METHODS = "payment.no_saved_methods"
+STRIPE_WEBHOOK_SIGNATURE_INVALID = "stripe.webhook_signature_invalid"
+STRIPE_CONNECT_BANK_NOT_LINKED = "stripe.connect.bank_not_linked"
+STRIPE_CONNECT_NOT_ONBOARDED = "stripe.connect.not_onboarded"
+STRIPE_TRANSFER_NO_ID = "stripe.transfer.no_id"
+STRIPE_CUSTOMER_NO_ID = "stripe.customer.no_id"
+
+# Pipeline + recipe lifecycle
+PIPELINE_NOT_FOUND = "pipeline.not_found"
+PIPELINE_RUN_NOT_FOUND = "pipeline.run_not_found"
+PIPELINE_RUN_FORBIDDEN = "pipeline.run.forbidden"
+RECIPE_NOT_FOUND = "recipe.not_found"
+
+# Registry / agent management (continued)
+REGISTRY_AGENT_DUPLICATE = "registry.agent_duplicate"
+REGISTRY_AGENT_KEY_CANNOT_REGISTER = "registry.agent_key_cannot_register"
+
+# Job lifecycle (continued)
+JOB_FORBIDDEN = "job.forbidden"
+JOB_CANCEL_INVALID_STATE = "job.cancel_invalid_state"
+
+# Agent identity / public key
+AGENT_IDENTITY_NOT_PUBLISHED = "agent.identity_not_published"
+AGENT_IDENTITY_RENDER_FAILED = "agent.identity_render_failed"
+
+# Server-side serving errors
+SERVER_FRONTEND_MISSING = "server.frontend_missing"
+ROUTE_NOT_FOUND = "route.not_found"
+
 # Workspace lifecycle errors
 WORKSPACE_NOT_FOUND = "workspace.not_found"
 WORKSPACE_FORBIDDEN = "workspace.forbidden"

@@ -165,11 +165,22 @@ def test_pending_infra_set_is_exhaustive(constants):
     )
 
 
-def test_reference_agents_in_curated_public(constants):
-    """D16 + C11 are the v0 reference agents that work today."""
-    curated = constants.CURATED_PUBLIC_BUILTIN_AGENT_IDS
-    assert constants.CODEBASE_REVIEWER_AGENT_ID in curated
-    assert constants.COMPLIANCE_ATTESTOR_AGENT_ID in curated
+def test_reference_agents_endpoints_still_wired(constants):
+    """D16 + C11 remain hireable by direct slug after the 2026-05-26 cull.
+
+    Both were originally added to ``CURATED_PUBLIC_BUILTIN_AGENT_IDS`` on
+    2026-05-22 as v0 reference agents. The 2026-05-26 platform-pivot
+    cull moved them to ``SUNSET_DEPRECATED_AGENT_IDS`` (LLM-reasoning
+    agents don't demonstrate a platform primitive), but their internal
+    endpoints stay wired so old job IDs and signed receipts resolve and
+    direct-slug callers still hit them.
+    """
+    sunset = constants.SUNSET_DEPRECATED_AGENT_IDS
+    endpoints = constants.BUILTIN_INTERNAL_ENDPOINTS
+    assert constants.CODEBASE_REVIEWER_AGENT_ID in sunset
+    assert constants.COMPLIANCE_ATTESTOR_AGENT_ID in sunset
+    assert constants.CODEBASE_REVIEWER_AGENT_ID in endpoints
+    assert constants.COMPLIANCE_ATTESTOR_AGENT_ID in endpoints
 
 
 def test_all_specs_present_in_catalog_loader():

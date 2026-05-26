@@ -177,7 +177,11 @@ def registry_register(
     _require_scope(caller, "worker")
     if caller["type"] == "agent_key":
         raise HTTPException(
-            status_code=403, detail="Agent-scoped keys cannot register new agents."
+            status_code=403,
+            detail=error_codes.make_error(
+                error_codes.REGISTRY_AGENT_KEY_CANNOT_REGISTER,
+                "Agent-scoped keys cannot register new agents.",
+            ),
         )
     _MAX_AGENTS_PER_OWNER = 20
     if caller["type"] != "master":
@@ -311,9 +315,21 @@ def registry_register(
             include_unapproved=True,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.VALIDATION_ERROR,
+                str(e) or "Invalid registry payload.",
+            ),
+        )
     except _db.IntegrityError:
-        raise HTTPException(status_code=409, detail="Agent ID or name already exists.")
+        raise HTTPException(
+            status_code=409,
+            detail=error_codes.make_error(
+                error_codes.REGISTRY_AGENT_DUPLICATE,
+                "Agent ID or name already exists.",
+            ),
+        )
     message = "Agent registered successfully."
     if safe_verifier_url:
         if agent and agent.get("verified"):
@@ -680,9 +696,23 @@ def a2a_platform_agent_card(request: Request) -> JSONResponse:
 def a2a_agent_card(agent_id: str, request: Request) -> JSONResponse:
     agent = registry.get_agent_with_reputation(agent_id)
     if agent is None or agent.get("status") == "banned":
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.AGENT_NOT_FOUND,
+                "Agent not found.",
+                details={"agent_id": agent_id},
+            ),
+        )
     if agent.get("internal_only"):
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.AGENT_NOT_FOUND,
+                "Agent not found.",
+                details={"agent_id": agent_id},
+            ),
+        )
     return JSONResponse(
         content=_a2a_agent_card(agent),
         headers={"Content-Type": "application/json"},
@@ -778,13 +808,24 @@ def agent_did_document(agent_id: str, request: Request) -> JSONResponse:
     the agent's public key and verify signed outputs."""
     agent = registry.get_agent(agent_id, include_unapproved=True)
     if agent is None or agent.get("status") == "banned":
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.AGENT_NOT_FOUND,
+                "Agent not found.",
+                details={"agent_id": agent_id},
+            ),
+        )
     public_pem = agent.get("signing_public_key")
     did = agent.get("did")
     if not public_pem or not did:
         raise HTTPException(
             status_code=404,
-            detail=f"Agent '{agent_id}' has no published cryptographic identity yet.",
+            detail=error_codes.make_error(
+                error_codes.AGENT_IDENTITY_NOT_PUBLISHED,
+                "Agent has no published cryptographic identity yet.",
+                details={"agent_id": agent_id},
+            ),
         )
     # Probation agents (vibe-generated, community-published) only publish
     # their DID document once they have a successful call on record. This
@@ -797,9 +838,13 @@ def agent_did_document(agent_id: str, request: Request) -> JSONResponse:
         if successful <= 0:
             raise HTTPException(
                 status_code=404,
-                detail=(
-                    f"Agent '{agent_id}' is on probation; its DID document "
-                    "is published after the first successful paid call."
+                detail=error_codes.make_error(
+                    error_codes.AGENT_IDENTITY_NOT_PUBLISHED,
+                    (
+                        "Agent is on probation; its DID document is published "
+                        "after the first successful paid call."
+                    ),
+                    details={"agent_id": agent_id, "review_status": "probation"},
                 ),
             )
     try:
@@ -809,7 +854,11 @@ def agent_did_document(agent_id: str, request: Request) -> JSONResponse:
     except Exception:
         raise HTTPException(
             status_code=500,
-            detail="Failed to render the agent's public key.",
+            detail=error_codes.make_error(
+                error_codes.AGENT_IDENTITY_RENDER_FAILED,
+                "Failed to render the agent's public key.",
+                details={"agent_id": agent_id},
+            ),
         )
     key_id = f"{did}#key-1"
     # `service[]` carries an Aztea-specific pointer to the human-readable
@@ -901,15 +950,30 @@ def a2a_tasks_send(
         or agent.get("status") in {"banned"}
     ):
         raise HTTPException(
-            status_code=404, detail=f"Skill (agent) '{body.skill_id}' not found."
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.AGENT_NOT_FOUND,
+                "Skill (agent) not found.",
+                details={"skill_id": body.skill_id},
+            ),
         )
     if agent.get("status") == "suspended":
         raise HTTPException(
-            status_code=503, detail=f"Skill (agent) '{body.skill_id}' is suspended."
+            status_code=503,
+            detail=error_codes.make_error(
+                error_codes.AGENT_SUSPENDED,
+                "Skill (agent) is suspended.",
+                details={"skill_id": body.skill_id},
+            ),
         )
     if agent.get("internal_only"):
         raise HTTPException(
-            status_code=404, detail=f"Skill (agent) '{body.skill_id}' not found."
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.AGENT_NOT_FOUND,
+                "Skill (agent) not found.",
+                details={"skill_id": body.skill_id},
+            ),
         )
 
     price_cents = _usd_to_cents(agent["price_per_call_usd"])
@@ -1016,7 +1080,14 @@ def a2a_tasks_get(
     job = jobs.get_job(task_id)
     # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
     if job is None or not _caller_can_view_job(caller, job):
-        raise HTTPException(status_code=403, detail="Task not found or not authorized.")
+        raise HTTPException(
+            status_code=403,
+            detail=error_codes.make_error(
+                error_codes.JOB_FORBIDDEN,
+                "Task not found or not authorized.",
+                details={"task_id": task_id},
+            ),
+        )
     a2a_status_map = {
         "pending": "submitted",
         "claimed": "working",
@@ -1053,11 +1124,22 @@ def a2a_tasks_cancel(
     job = jobs.get_job(task_id)
     # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
     if job is None or not _caller_can_view_job(caller, job):
-        raise HTTPException(status_code=403, detail="Task not found or not authorized.")
+        raise HTTPException(
+            status_code=403,
+            detail=error_codes.make_error(
+                error_codes.JOB_FORBIDDEN,
+                "Task not found or not authorized.",
+                details={"task_id": task_id},
+            ),
+        )
     if job.get("status") not in {"pending"}:
         raise HTTPException(
             status_code=409,
-            detail=f"Cannot cancel task in status '{job.get('status')}'.",
+            detail=error_codes.make_error(
+                error_codes.JOB_CANCEL_INVALID_STATE,
+                "Cannot cancel task in this status.",
+                details={"task_id": task_id, "status": job.get("status")},
+            ),
         )
     cancelled = jobs.update_job_status(
         task_id, "failed", error_message="Cancelled by caller.", completed=True
@@ -1102,7 +1184,12 @@ def jobs_cancel(
     # is harder when both branches return identical responses.
     if job is None or not _caller_can_view_job(caller, job):
         raise HTTPException(
-            status_code=403, detail="Job not found or not authorized."
+            status_code=403,
+            detail=error_codes.make_error(
+                error_codes.JOB_FORBIDDEN,
+                "Job not found or not authorized.",
+                details={"job_id": job_id},
+            ),
         )
     current_status = str(job.get("status") or "").strip().lower()
     if current_status not in _CANCELLABLE_JOB_STATUSES:
@@ -1370,7 +1457,12 @@ def mcp_invoke(
     agent = lookup.get(body.tool_name)
     if agent is None:
         raise HTTPException(
-            status_code=404, detail=f"Tool '{body.tool_name}' not found."
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.AGENT_NOT_FOUND,
+                "Tool not found.",
+                details={"tool_name": body.tool_name},
+            ),
         )
 
     # Build caller context from the agent key.
@@ -1859,7 +1951,12 @@ def registry_update_agent(
         )
     if updated is None:
         raise HTTPException(
-            status_code=404, detail="Agent not found or you don't own it."
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.AGENT_NOT_FOUND,
+                "Agent not found or you don't own it.",
+                details={"agent_id": agent_id},
+            ),
         )
     bulk_stats = _compute_bulk_agent_stats([agent_id])
     return JSONResponse(
@@ -1884,6 +1981,11 @@ def registry_delist_agent(
     ok = registry.delist_agent(agent_id, caller["owner_id"])
     if not ok:
         raise HTTPException(
-            status_code=404, detail="Agent not found or you don't own it."
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.AGENT_NOT_FOUND,
+                "Agent not found or you don't own it.",
+                details={"agent_id": agent_id},
+            ),
         )
     return JSONResponse(content={"delisted": True, "agent_id": agent_id})

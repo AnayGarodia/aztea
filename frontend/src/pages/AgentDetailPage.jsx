@@ -22,6 +22,8 @@ import ModelBadge from '../components/ModelBadge'
 import { BarChart, Bar, ResponsiveContainer, Tooltip as RechartTooltip } from 'recharts'
 import './AgentDetailPage.css'
 import { fmtMs, relativeTime } from '../utils/format.js'
+import { usePageMeta } from '../seo/usePageMeta'
+import { agentDetailMeta } from '../seo/copy'
 
 function PricingInfo({ agent }) {
   const vp = agent?.variable_pricing
@@ -148,6 +150,9 @@ export default function AgentDetailPage() {
       return slugifyAgentName(a.name) === wanted
     })
   }, [agents, id])
+
+  const meta = useMemo(() => agentDetailMeta(publicAgent), [publicAgent])
+  usePageMeta(meta)
   const [ownerAgent, setOwnerAgent] = useState(null)
   const [ownerLookupDone, setOwnerLookupDone] = useState(false)
 

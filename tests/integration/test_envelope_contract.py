@@ -154,13 +154,22 @@ def _assert_no_sensitive_substring(text: str, path: str, status: int) -> None:
     for token in _FORBIDDEN_SUBSTRINGS:
         if token not in text:
             continue
-        # Allowlist: ``callback_secret`` as a redaction MARKER (i.e., the
-        # block list helper itself produces the literal ``"callback_secret":
-        # "<redacted>"``). That's exactly the protected state — only fail
-        # if the field appears WITHOUT the <redacted> sentinel nearby.
+        # Allowlist:
+        #  1. ``<redacted>`` window — the block list helper produces the
+        #     literal ``"callback_secret": "<redacted>"`` and that's exactly
+        #     the protected state.
+        #  2. JSON Schema property declarations — the public tool-manifest
+        #     endpoints (/integrations/*-tools.json, /openai/tools, …) expose
+        #     input schemas that declare a ``callback_secret`` *field name*
+        #     because callers can supply one. Recognise the schema-property
+        #     pattern (``"callback_secret":{"type"``) so the test doesn't
+        #     mistake an input-field declaration for a leaked value.
         idx = text.find(token)
         window = text[max(0, idx - 32): idx + 64]
         if "<redacted>" in window:
+            continue
+        schema_marker = f'"{token}":{{"type"'
+        if schema_marker in text[max(0, idx - 4): idx + len(schema_marker) + 4]:
             continue
         pytest.fail(
             f"{path} (status {status}) response contains forbidden substring "

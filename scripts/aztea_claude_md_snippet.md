@@ -90,8 +90,6 @@ Prefer search and describe over memorizing slugs.
 Current built-in recipes:
 
 - `audit-deps`
-- `secret-scan-and-audit`
-- `security-audit-sealed`
 - `domain-health`
 
 If you do not know the recipe ID, search for recipe or workflow first, or call `manage_workflow(action="list_recipes")`.
