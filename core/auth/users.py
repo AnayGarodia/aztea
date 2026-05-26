@@ -40,6 +40,8 @@ from .schema import (
     MAX_USERNAME_LEN,
     MIN_PASSWORD_LEN,
     MIN_USERNAME_LEN,
+    PBKDF2_ITERATIONS,
+    PBKDF2_LEGACY_ITERATIONS,
     _conn,
     _decode_scopes_json,
     _hash_password,
@@ -84,7 +86,7 @@ def _register_user_db(params: tuple) -> "Result[dict, str]":
     normalized_username, normalized_email, password, role = params
     user_id = str(uuid.uuid4())
     salt = secrets.token_hex(32)
-    pw_hash = _hash_password(password, salt)
+    pw_hash = _hash_password(password, salt, iterations=PBKDF2_ITERATIONS)
     raw_key, key_hash, key_prefix = _make_api_key()
     key_id = str(uuid.uuid4())
     session_scopes_json = json.dumps(list(DEFAULT_KEY_SCOPES))
@@ -94,9 +96,9 @@ def _register_user_db(params: tuple) -> "Result[dict, str]":
         try:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
-                "INSERT INTO users (user_id, username, email, password_hash, salt, created_at, role)"
-                " VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                (user_id, normalized_username, normalized_email, pw_hash, salt, now, role),
+                "INSERT INTO users (user_id, username, email, password_hash, salt, pbkdf2_iterations, created_at, role)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (user_id, normalized_username, normalized_email, pw_hash, salt, PBKDF2_ITERATIONS, now, role),
             )
             conn.execute(
                 "INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, scopes, created_at)"
@@ -187,9 +189,29 @@ def login_user(
     status = str(user.get("status") or "active").strip().lower()
     if status != "active":
         raise AccountSuspendedError(status)
-    expected = _hash_password(password, user["salt"])
+    # Verify at the user's stored cost so legacy hashes (100k) still compare
+    # correctly after the constant rises. Migration 0066 backfills the column
+    # to PBKDF2_LEGACY_ITERATIONS for pre-existing rows; fall back to the
+    # legacy floor here for test fixtures or partially-migrated databases
+    # where the column is missing/null/0.
+    stored_iterations = int(user.get("pbkdf2_iterations") or 0) or PBKDF2_LEGACY_ITERATIONS
+    expected = _hash_password(password, user["salt"], iterations=stored_iterations)
     if not secrets.compare_digest(user["password_hash"], expected):
         return None
+    # Opportunistic rehash: if the stored cost is below the current default,
+    # the password is correct so we know its plaintext; rehash at the new cost.
+    # No-op on the happy path where the user is already at the current default.
+    if stored_iterations < PBKDF2_ITERATIONS:
+        new_salt = secrets.token_hex(32)
+        new_hash = _hash_password(password, new_salt, iterations=PBKDF2_ITERATIONS)
+        with _conn() as conn:
+            conn.execute(
+                "UPDATE users SET password_hash = %s, salt = %s, pbkdf2_iterations = %s WHERE user_id = %s",
+                (new_hash, new_salt, PBKDF2_ITERATIONS, user["user_id"]),
+            )
+        user["password_hash"] = new_hash
+        user["salt"] = new_salt
+        user["pbkdf2_iterations"] = PBKDF2_ITERATIONS
 
     raw_key: str | None = None
     key_id: str | None = None
@@ -1122,12 +1144,12 @@ def consume_password_reset_token(email: str, otp: str, new_password: str) -> Non
         user_id = str(row["user_id"])
         token_id = str(row["token_id"])
         salt = secrets.token_hex(16)
-        new_hash = _hash_password(new_password, salt)
+        new_hash = _hash_password(new_password, salt, iterations=PBKDF2_ITERATIONS)
 
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
-            "UPDATE users SET password_hash = %s, salt = %s WHERE user_id = %s",
-            (new_hash, salt, user_id),
+            "UPDATE users SET password_hash = %s, salt = %s, pbkdf2_iterations = %s WHERE user_id = %s",
+            (new_hash, salt, PBKDF2_ITERATIONS, user_id),
         )
         conn.execute(
             "UPDATE password_reset_tokens SET used_at = %s WHERE token_id = %s",
@@ -1194,7 +1216,7 @@ def issue_signup_verification(
         raise ValueError("An account with that email already exists.")
 
     salt = secrets.token_hex(32)
-    pw_hash = _hash_password(password, salt)
+    pw_hash = _hash_password(password, salt, iterations=PBKDF2_ITERATIONS)
     otp = "".join(str(random.randint(0, 9)) for _ in range(_OTP_LENGTH))
     code_hash = _otp_hash(otp)
     token_id = str(uuid.uuid4())
@@ -1212,14 +1234,15 @@ def issue_signup_verification(
         )
         conn.execute(
             "INSERT INTO signup_verification_tokens "
-            "(token_id, email, username, password_hash, salt, role, code_hash, created_at, expires_at) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "(token_id, email, username, password_hash, salt, pbkdf2_iterations, role, code_hash, created_at, expires_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 token_id,
                 normalized_email,
                 normalized_username,
                 pw_hash,
                 salt,
+                PBKDF2_ITERATIONS,
                 role,
                 code_hash,
                 now,
@@ -1284,7 +1307,7 @@ def consume_signup_verification(email: str, otp: str) -> dict:
 
     with _conn() as conn:
         row = conn.execute(
-            "SELECT token_id, email, username, password_hash, salt, role, expires_at, consumed_at "
+            "SELECT token_id, email, username, password_hash, salt, pbkdf2_iterations, role, expires_at, consumed_at "
             "FROM signup_verification_tokens "
             "WHERE LOWER(email) = %s AND code_hash = %s "
             "ORDER BY created_at DESC LIMIT 1",
@@ -1317,17 +1340,24 @@ def consume_signup_verification(email: str, otp: str) -> dict:
         key_id = str(uuid.uuid4())
         session_scopes_json = json.dumps(list(DEFAULT_KEY_SCOPES))
 
+        # Tolerate legacy token rows written before migration 0066 (pre-bump
+        # column did not exist). Fall back to the legacy cost so the consumed
+        # row stays self-consistent — the hash on the token was produced at
+        # that cost.
+        token_iterations = int(row["pbkdf2_iterations"] or 0) or PBKDF2_LEGACY_ITERATIONS
+
         try:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
-                "INSERT INTO users (user_id, username, email, password_hash, salt, created_at, role)"
-                " VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                "INSERT INTO users (user_id, username, email, password_hash, salt, pbkdf2_iterations, created_at, role)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     user_id,
                     row["username"],
                     row["email"],
                     row["password_hash"],
                     row["salt"],
+                    token_iterations,
                     now_iso,
                     row["role"],
                 ),

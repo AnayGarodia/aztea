@@ -32,7 +32,16 @@ DB_PATH = _db.DB_PATH
 KEY_PREFIX = "az_"
 AGENT_KEY_PREFIX = "azk_"
 AGENT_CALLER_KEY_PREFIX = "azac_"
-PBKDF2_ITERATIONS = 100_000
+# OWASP Password Storage Cheat Sheet (2023+) recommends ≥ 600k PBKDF2-SHA256
+# iterations. 100k was the 2017 floor and is still load-bearing for legacy
+# rows — see the per-user `pbkdf2_iterations` column in migration 0066.
+# Verification uses the stored iteration count; new hashes use the constant
+# below. Bump cost here; the migration handles the column shape.
+PBKDF2_ITERATIONS = 600_000
+# Historical floor used to verify rows created before the bump. Do not raise
+# without backfilling existing hashes — that requires every user to log in or
+# reset their password.
+PBKDF2_LEGACY_ITERATIONS = 100_000
 VALID_KEY_SCOPES = {"caller", "worker", "admin"}
 DEFAULT_KEY_SCOPES = ("caller", "worker")
 _CANONICAL_TIMESTAMP = "1970-01-01T00:00:00+00:00"
@@ -114,6 +123,7 @@ def _create_users_table(conn: _db.DbConnection, table_name: str = "users") -> No
             email         TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
             salt          TEXT NOT NULL,
+            pbkdf2_iterations INTEGER NOT NULL DEFAULT {PBKDF2_LEGACY_ITERATIONS},
             created_at    TEXT NOT NULL,
             status        TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended','banned')),
             terms_version_accepted TEXT,
@@ -204,6 +214,13 @@ def _ensure_users_schema(conn: _db.DbConnection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN legal_accept_user_agent TEXT")
     if "role" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'both'")
+    if "pbkdf2_iterations" not in cols:
+        # Legacy rows verify at the historical iteration count; the next
+        # successful login rehashes at the current cost. New columns get
+        # backfilled to the legacy floor so existing hashes stay valid.
+        conn.execute(
+            f"ALTER TABLE users ADD COLUMN pbkdf2_iterations INTEGER NOT NULL DEFAULT {PBKDF2_LEGACY_ITERATIONS}"
+        )
 
     conn.execute(
         f"""
@@ -526,9 +543,19 @@ def init_auth_db() -> None:
         )
 
 
-def _hash_password(password: str, salt: str) -> str:
+def _hash_password(
+    password: str, salt: str, iterations: int | None = None
+) -> str:
+    """PBKDF2-SHA256 hash. ``iterations`` is the per-user stored cost; defaults to
+    the current ``PBKDF2_ITERATIONS`` constant for new hashes. Verification
+    callers MUST pass the stored value so legacy hashes (cost 100k) compare
+    correctly after the constant rises.
+    """
+    cost = iterations if iterations is not None else PBKDF2_ITERATIONS
+    if cost < 1:
+        raise ValueError(f"PBKDF2 iteration count must be positive, got {cost}.")
     dk = hashlib.pbkdf2_hmac(
-        "sha256", password.encode("utf-8"), bytes.fromhex(salt), PBKDF2_ITERATIONS
+        "sha256", password.encode("utf-8"), bytes.fromhex(salt), cost
     )
     return dk.hex()
 
