@@ -67,6 +67,8 @@ scripts/release_publish_local.sh
 
 # Tool caches (user-local; never committed)
 .qwen/
+# /cso security reports — narrate the attack surface in plain text; keep local.
+.gstack/
 # .agents/ is user-local, EXCEPT TODO.md — that file is the team-tracked source
 # of truth for launch blockers and is referenced from every agent-onboarding
 # doc (CLAUDE.md, AGENTS.md, CODEX.md, GEMINI.md). To make the negation work,

@@ -1,0 +1,14 @@
+# Dev-only dependencies layered on top of the prod pin set.
+# `-r requirements.in` pulls in the prod loose pins so pip-compile resolves the
+# full graph in one pass and emits requirements-dev.txt with consistent versions.
+-r requirements.in
+pytest
+httpx
+pytest-asyncio
+flake8
+hypothesis>=6.100
+pytest-xdist>=3.5
+pytest-randomly>=3.15
+pytest-timeout>=2.3
+jsonschema>=4.21
+pip-tools>=7.4  # vendored so `make lockfile` works in any fresh dev venv

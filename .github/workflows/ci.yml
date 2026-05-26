@@ -86,5 +86,12 @@ jobs:
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install and build
+      # `npm ci` (not `npm install`) is load-bearing for supply-chain hardening:
+      # it installs exact versions from package-lock.json and EXITS NON-ZERO if
+      # the lockfile drifted from package.json. Switching to `npm install` here
+      # silently re-resolves caret-pinned deps to whatever is latest on the
+      # registry — same shape as the ua-parser-js / node-ipc compromises. Keep
+      # this as `npm ci` everywhere a frontend build runs (CI + the deploy
+      # runbook at docs/runbooks/deploy.md:44).
+      - name: Install (reproducible) and build
         run: cd frontend && npm ci && npm run build

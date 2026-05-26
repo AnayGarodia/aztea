@@ -17,6 +17,8 @@ from .schema import (
     MAX_USERNAME_LEN,
     MIN_PASSWORD_LEN,
     MIN_USERNAME_LEN,
+    PBKDF2_ITERATIONS,
+    PBKDF2_LEGACY_ITERATIONS,
     _conn,
     _hash_password,
 )
@@ -131,23 +133,26 @@ def change_password(user_id: str, current_password: str, new_password: str) -> N
 
     with _conn() as conn:
         row = conn.execute(
-            "SELECT password_hash, salt FROM users WHERE user_id = %s",
+            "SELECT password_hash, salt, pbkdf2_iterations FROM users WHERE user_id = %s",
             (user_id,),
         ).fetchone()
     if row is None:
         raise ValueError("Account not found.")
     stored_hash = row["password_hash"]
     salt = row["salt"]
-    expected = _hash_password(current_password, salt)
+    # Verify at the user's stored cost; rehash on success at the current default
+    # (mirrors login_user behaviour for legacy 100k hashes).
+    stored_iterations = int(row["pbkdf2_iterations"] or 0) or PBKDF2_LEGACY_ITERATIONS
+    expected = _hash_password(current_password, salt, iterations=stored_iterations)
     if not secrets.compare_digest(stored_hash, expected):
         raise ValueError("Current password is incorrect.")
 
     new_salt = secrets.token_hex(32)
-    new_hash = _hash_password(new_password, new_salt)
+    new_hash = _hash_password(new_password, new_salt, iterations=PBKDF2_ITERATIONS)
     with _conn() as conn:
         conn.execute(
-            "UPDATE users SET password_hash = %s, salt = %s WHERE user_id = %s",
-            (new_hash, new_salt, user_id),
+            "UPDATE users SET password_hash = %s, salt = %s, pbkdf2_iterations = %s WHERE user_id = %s",
+            (new_hash, new_salt, PBKDF2_ITERATIONS, user_id),
         )
         # Invalidate every API key so the user has to log in again everywhere.
         conn.execute(

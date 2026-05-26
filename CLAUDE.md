@@ -312,7 +312,7 @@ Makefile                         Dev shortcuts: make dev / test / docker / migra
 
 ### Privacy / work-example recording
 
-- **Sensitive agents must never replay caller inputs.** `_record_public_work_example()` in `server/application_parts/part_003.py` drops on three independent gates: (a) hardcoded `_SENSITIVE_EXAMPLE_AGENT_IDS`, (b) the `examples_sensitive: True` flag on the spec, (c) the `Security` category. New scanner / credential / PII-handling agents must set both (b) and the Security category.
+- **Sensitive agents must never replay caller inputs.** `_record_public_work_example()` in `server/application_parts/part_003.py` drops on five independent gates: (a) hardcoded `_SENSITIVE_EXAMPLE_AGENT_IDS`, (b) the `examples_sensitive: True` flag on the spec, (c) the `Security` category, (d) the agent self-declared `pii_safe: True` (caller inputs likely contain PII), (e) the agent self-declared `outputs_not_stored: True` (publisher promised not to retain). Per-field redaction via `_redact_sensitive_for_example` also runs unconditionally before persistence as a defence-in-depth layer. New scanner / credential / PII-handling agents must set `examples_sensitive: True` and the Security category.
 
 ### Routing
 

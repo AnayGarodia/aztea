@@ -28,6 +28,22 @@ The full operational reference: production deploy, nginx, env vars, packaging, S
 
 ## Deploying a new version
 
+> **Dep pinning.** `requirements.txt` and `requirements-dev.txt` are generated
+> from `*.in` source files via `make lockfile`. Every dep is fully pinned
+> (incl. transitives). Deploy installs via `pip install --no-deps -r
+> requirements.txt` so pip cannot silently resolve an additional package at
+> install time. If you change `requirements.in`, you MUST commit the
+> regenerated lockfile in the same PR — `make lockfile-verify` enforces
+> this gate. Hash-verified installs (`--require-hashes`) are the next
+> hardening step and require regenerating the lockfile inside
+> `python:3.11-slim` (matches the prod image). The runbook command is:
+>
+> ```bash
+> docker run --rm -v "$PWD":/app -w /app python:3.11-slim bash -c \
+>   'pip install pip-tools && pip-compile --generate-hashes --strip-extras \
+>     -o requirements.txt requirements.in'
+> ```
+
 ```bash
 cd /home/aztea/app
 
@@ -40,7 +56,9 @@ sudo -u aztea git reset --hard origin/main
 #    can write to its own node_modules. Pre-fix the runbook ran npm as
 #    `ubuntu` and EACCES'd on every deploy because node_modules/.bin
 #    is owned by aztea. Wrap in `sudo -u aztea bash -c '...'` so PATH
-#    is set up correctly inside the sub-shell.
+#    is set up correctly inside the sub-shell. `npm ci` is load-bearing
+#    here — it pins to the committed package-lock.json and fails if the
+#    lockfile drifted from package.json. Never `npm install` in deploy.
 sudo -u aztea bash -c 'cd /home/aztea/app/frontend && npm ci && npm run build'
 
 # 3. Restart the API (migrations run automatically on startup).

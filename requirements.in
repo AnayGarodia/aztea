@@ -1,0 +1,79 @@
+groq
+openai>=1.50
+anthropic>=0.39
+requests
+httpx>=0.24
+ruff>=0.1.0
+mypy>=1.0
+python-dotenv
+fastapi
+uvicorn[standard]
+slowapi
+numpy<2
+psutil
+stripe
+sentry-sdk[fastapi]
+prometheus-client
+gunicorn  # WSGI worker manager wrapping uvicorn workers in prod (Dockerfile ENTRYPOINT)
+cryptography>=43.0.1  # floor avoids GHSA-9v9h-cgj8-h64p (<42) and GHSA-h4gh-qq45-vh27 (<43.0.1)
+pyyaml>=6.0
+Pillow>=10.0.0
+jsonschema>=4.0.0
+psycopg2-binary>=2.9.0
+# Used by regex_tester for \p{} unicode-property fall-back when stdlib `re` rejects.
+regex>=2024.0.0
+# browser_agent + visual_regression need Playwright + chromium. The browser
+# itself is downloaded by `playwright install chromium` at image build time
+# (see Dockerfile); pip pulls only the python bindings here.
+playwright>=1.40.0
+# Local embedding model for the agent-search ranker. Without this (and without
+# OPENAI_API_KEY) the semantic similarity term is always 0, so search is
+# effectively lexical-only. The 2026-05-07 power-user eval scored discovery
+# 5/10 specifically because production had no embedding backend installed.
+sentence-transformers>=3.0.0
+# pdf_document_parser uses pymupdf (fitz) for fast text + metadata extraction
+# and pdfplumber for best-effort tabular parsing.
+pymupdf>=1.24.0
+pdfplumber>=0.11.0
+# broken_link_crawler uses BeautifulSoup to extract <a>/<img>/<script>/<link>.
+beautifulsoup4>=4.12.0
+# email_deliverability_checker uses dnspython for SPF / DKIM / MX lookups.
+# Without this the agent fails every call with "dnspython not installed".
+dnspython>=2.6.0
+# sast_scanner shells out to semgrep or bandit. Without at least one in the
+# image, every sast call fails with "Neither semgrep nor bandit is installed".
+semgrep>=1.70.0
+bandit>=1.7.0
+# core/copilot_predicates.py uses jmespath for stop_when expression evaluation.
+# Without this every copilot stop_when call fails to import at module load.
+jmespath>=1.0.0
+# 2026-05-18 (A3/A4/A6): agent-runtime deps that were previously only baked
+# into the Dockerfile via a separate RUN block. Bare-metal prod (no Docker)
+# pip-installs from this file, so the Dockerfile-only path left A3/A4/A6
+# agents broken in production. Moving them here makes pip the single source
+# of truth: `pip install -r requirements.txt` covers every pip-installable
+# runtime dep, OSS and prod both.
+#   - coverage / pytest: coverage_runner shells out to `coverage run --branch
+#     -m pytest`; ci_failure_reproducer re-runs failing pytest commands.
+#   - checkov: hcl_terraform_analyzer invokes `checkov -d ... --output json`.
+# Note: hadolint (A5) is a Go binary, not pip-installable — handle in the
+# host-provision runbook. node + jest + go (also A6) are documented in
+# docs/runbooks/runtime-prerequisites.md.
+coverage>=7.0.0
+pytest>=8.0.0
+# pytest-asyncio: ci_failure_reproducer re-runs failing pytest invocations and
+# some user-submitted test suites import the @pytest.mark.asyncio decorator
+# at collection time.
+pytest-asyncio>=0.21
+checkov>=3.2.0
+# 2026-05-20: quant_patch_validator uses Hypothesis to generate adversarial
+# numeric inputs for differential fuzzing. Was previously dev-only, but the
+# agent ships in the curated public catalog so prod must have it too.
+hypothesis>=6.100
+# 2026-05-20: jwt_validator imports `jwt` (PyJWT) at the verify call site.
+# Was relying on transitive resolution; making the dep explicit so a future
+# dependency tree shuffle doesn't break the agent.
+PyJWT>=2.8
+# 2026-05-20: openapi_validator imports openapi_spec_validator to validate
+# OpenAPI 3.x specs. Same explicit-dep rationale as PyJWT above.
+openapi-spec-validator>=0.7
