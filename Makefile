@@ -1,4 +1,4 @@
-.PHONY: dev test test-venv docker migrate demo lint evals smoke alerts launch-check oss-check check-runtime-deps
+.PHONY: dev test test-venv docker migrate demo lint evals smoke alerts launch-check oss-check check-runtime-deps lockfile lockfile-verify
 
 dev:
 	uvicorn server:app --reload
@@ -53,6 +53,41 @@ alerts:
 
 launch-check: evals
 	@bash -c 'if [ -n "$$AZTEA_API_KEY" ]; then python scripts/launch_alerts.py; else echo "(skip alerts — set AZTEA_API_KEY to run them)"; fi'
+
+## Regenerate the pinned requirements.txt + requirements-dev.txt from the .in
+## sources. Run inside the python:3.11-slim build container to keep wheel
+## resolution aligned with the prod image:
+##   docker run --rm -v $(PWD):/app -w /app python:3.11-slim bash -c \
+##     'pip install pip-tools && make lockfile'
+## Local dev (Python 3.12) also works; wheels are mostly cross-compatible but
+## the Docker path is authoritative.
+lockfile:
+	@bash -c 'set -e; \
+		test -d .venv && . .venv/bin/activate; \
+		pip-compile --quiet --strip-extras --output-file=requirements.txt requirements.in; \
+		pip-compile --quiet --strip-extras --output-file=requirements-dev.txt requirements-dev.in; \
+		echo "  ✓ requirements.txt + requirements-dev.txt regenerated"'
+
+## Drift gate: regenerate lockfiles into a temp dir and diff against tracked
+## copies. Fails if requirements.in changed without rerunning `make lockfile`.
+## Use in CI to enforce the lockfile-PR invariant.
+lockfile-verify:
+	@bash -c 'set -e; \
+		test -d .venv && . .venv/bin/activate; \
+		tmp=$$(mktemp -d); \
+		pip-compile --quiet --strip-extras --output-file=$$tmp/req.txt requirements.in; \
+		pip-compile --quiet --strip-extras --output-file=$$tmp/req-dev.txt requirements-dev.in; \
+		if ! diff -q requirements.txt $$tmp/req.txt >/dev/null 2>&1; then \
+			echo "✗ requirements.txt is stale relative to requirements.in. Run \`make lockfile\` and commit the result."; \
+			diff requirements.txt $$tmp/req.txt | head -40; \
+			exit 1; \
+		fi; \
+		if ! diff -q requirements-dev.txt $$tmp/req-dev.txt >/dev/null 2>&1; then \
+			echo "✗ requirements-dev.txt is stale relative to requirements-dev.in. Run \`make lockfile\` and commit the result."; \
+			diff requirements-dev.txt $$tmp/req-dev.txt | head -40; \
+			exit 1; \
+		fi; \
+		echo "  ✓ lockfiles in sync with .in sources"'
 
 ## Run integration tests against PostgreSQL 16 (requires Docker)
 test-postgres:
