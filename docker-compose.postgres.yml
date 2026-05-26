@@ -15,7 +15,10 @@ services:
     environment:
       POSTGRES_DB: aztea_test
       POSTGRES_USER: aztea
-      POSTGRES_PASSWORD: aztea_test_pw
+      # Test-only credential. The literal default keeps `make test-postgres` working
+      # offline; override `POSTGRES_PASSWORD` in your environment if this compose
+      # ever runs somewhere shared. Never reuse the literal outside the test loop.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aztea_test_pw}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aztea -d aztea_test"]
       interval: 2s
@@ -28,7 +31,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://aztea:aztea_test_pw@postgres/aztea_test
+      DATABASE_URL: postgresql://aztea:${POSTGRES_PASSWORD:-aztea_test_pw}@postgres/aztea_test
       API_KEY: test_admin_key_for_pg_suite
       SERVER_BASE_URL: http://localhost:8000
       ALLOW_PRIVATE_OUTBOUND_URLS: "1"
