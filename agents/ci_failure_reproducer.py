@@ -6,17 +6,26 @@
 #            package installs — note this in output).
 # INVARIANTS:
 #   - Never run a command that matches _BLOCKED_COMMAND_RE.
+#   - Subprocesses run with shell=False; we shlex-split the captured CI command
+#     so injected shell metacharacters (`;`, `&&`, `|`) cannot chain commands.
 #   - Total execution time across all commands never exceeds _MAX_TOTAL_TIMEOUT.
 #   - Log input is rejected above _MAX_LOG_BYTES.
 #   - working_dir_files is capped at _MAX_FILES files and _MAX_TOTAL_FILE_BYTES total.
 # DECISIONS:
-#   - Shell=True is used so the exact CI command string runs as-is; the
-#     blocked-command regex is the safety layer rather than an allow-list.
+#   - shell=False + shlex.split is the safety layer; the blocked-command regex
+#     stays as defence-in-depth for accidentally destructive single-binary
+#     invocations (rm -rf /, mkfs, etc.).
+#   - Compound shell expressions (`a && b`, `a | b`, `cd x && y`) are NOT
+#     supported — they used to "work" only because shell=True was on. The
+#     agent now returns a structured "shell_compound_unsupported" error so
+#     callers either pass each command separately via the `commands` list
+#     field or use a single binary invocation.
 #   - LLM synthesis is optional — if unavailable, pattern-matched diagnosis
 #     is returned from _classify_failure so the agent is always useful.
 # KNOWN DEBT:
 #   - No network isolation in the subprocess; dependency installs work but a
-#     malicious payload could make outbound calls.
+#     malicious payload could still make outbound calls. Track in
+#     docs/runbooks/runtime-prerequisites.md for the sandbox hardening pass.
 
 from __future__ import annotations
 
@@ -24,6 +33,7 @@ import logging
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -421,16 +431,85 @@ def _write_working_files(tmpdir: str, files: list[dict]) -> str | None:
     return None
 
 
+# Shell-only tokens that have no meaning when we exec(argv) directly. Their
+# presence in the captured command implies the user wanted a compound shell
+# expression; we reject those rather than silently misinterpret the metachar
+# as a positional argument to the leading binary.
+_SHELL_COMPOUND_TOKENS = frozenset({"&&", "||", "|", ";", ">", ">>", "<", "&"})
+# Builtins that only exist inside a shell process. exec() will fail confusingly
+# (`No such file or directory: cd`); intercept and explain.
+_SHELL_BUILTINS = frozenset({"cd", "source", ".", "export", "alias", "eval", "set", "unset"})
+
+
+def _split_command(cmd: str) -> list[str] | dict[str, str]:
+    """Pure: tokenise ``cmd`` for argv exec; reject compound/shell-only forms.
+
+    We use ``shlex.shlex`` with ``punctuation_chars`` rather than ``shlex.split``
+    so shell metacharacters always emerge as standalone tokens even when glued
+    to the prior word (``pytest; whoami`` → ``["pytest", ";", "whoami"]``,
+    not ``["pytest;", "whoami"]``). This makes the metachar check exhaustive.
+
+    Returns a non-empty argv list on success, or an ``agent_error``-shaped dict
+    so callers can surface a structured error instead of dispatching a doomed
+    subprocess.
+    """
+    try:
+        lex = shlex.shlex(cmd, posix=True, punctuation_chars="&|;<>")
+        lex.whitespace_split = True
+        tokens = list(lex)
+    except ValueError as exc:
+        # Unbalanced quotes, stray backslash, etc.
+        return _err(
+            "ci_failure_reproducer.command_unparseable",
+            f"Could not parse command '{cmd[:80]}': {exc}.",
+        )
+    if not tokens:
+        return _err(
+            "ci_failure_reproducer.command_empty",
+            "Command parsed to an empty argv list.",
+        )
+    if any(token in _SHELL_COMPOUND_TOKENS for token in tokens):
+        return _err(
+            "ci_failure_reproducer.shell_compound_unsupported",
+            "Compound shell expressions (&&, ||, |, ;, redirections) are not "
+            "supported. Pass each command separately via the 'commands' field.",
+        )
+    leading = tokens[0]
+    if leading in _SHELL_BUILTINS:
+        return _err(
+            "ci_failure_reproducer.shell_builtin_unsupported",
+            f"'{leading}' is a shell builtin and cannot be run as a subprocess. "
+            "Pass each command separately via the 'commands' field instead.",
+        )
+    return tokens
+
+
 def _run_command(
     cmd: str, tmpdir: str, timeout: int
 ) -> dict[str, Any]:
-    """Run a single shell command and return timing + output."""
+    """Run a single command (argv-form, shell=False) and return timing + output."""
+    parsed = _split_command(cmd)
+    if isinstance(parsed, dict):
+        # Structured rejection; surface the agent_error envelope as a synthetic
+        # command result so the rest of the pipeline (classification, output
+        # shaping) keeps working without raising.
+        message = str(parsed.get("error", {}).get("message") or parsed)
+        return {
+            "stdout": "",
+            "stderr": message,
+            "exit_code": 2,
+            "timed_out": False,
+            "duration_ms": 0,
+            "rejected": True,
+            "rejection": parsed["error"],
+        }
+    argv: list[str] = parsed
     start = time.monotonic()
     timed_out = False
     try:
         result = subprocess.run(
-            cmd,
-            shell=True,
+            argv,
+            shell=False,
             cwd=tmpdir,
             capture_output=True,
             text=True,
@@ -440,6 +519,10 @@ def _run_command(
         stdout = result.stdout
         stderr = result.stderr
         exit_code = result.returncode
+    except FileNotFoundError as exc:
+        stdout = ""
+        stderr = f"Executable not found on PATH: {argv[0]!r} ({exc})."
+        exit_code = 127
     except subprocess.TimeoutExpired as exc:
         stdout = (exc.stdout or b"").decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
         stderr = (exc.stderr or b"").decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
