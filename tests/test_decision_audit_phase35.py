@@ -22,6 +22,12 @@ from core.registry import decision_audit
 def fresh_db(monkeypatch, tmp_path):
     db_path = tmp_path / f"audit-{_uuid.uuid4().hex}.db"
     monkeypatch.setattr(_db, "DB_PATH", str(db_path))
+    # Force the sync-write fallback in decision_audit.record_decision so
+    # each test can read its audit row back synchronously. The deferred
+    # queue's own behavior is exercised in tests/test_deferred_queue.py.
+    monkeypatch.setattr(
+        decision_audit._deferred, "enqueue", lambda *a, **kw: False
+    )
     if hasattr(_db._local, "conns"):
         for c in list(_db._local.conns.values()):
             try:
@@ -104,7 +110,16 @@ def test_record_decision_persists_shadow_agent_when_diverged(fresh_db):
 
 
 def test_record_decision_never_raises_on_internal_failure(fresh_db, monkeypatch):
-    """Fire-and-forget invariant: write failure logs but returns None, never raises."""
+    """Fire-and-forget invariant: write failure is logged silently, the
+    caller still gets the decision_id back, and no exception propagates.
+
+    Note: post-#91, record_decision returns the decision_id immediately
+    regardless of whether the deferred write later succeeds. The previous
+    "returns None on failure" contract was a sync-write-only behavior.
+    The remaining invariant — never raise — is what callers actually
+    depend on, since they treat record_decision as fire-and-forget
+    observability.
+    """
     # Force the connection to raise.
     def _broken_get_raw_connection(_path):
         raise RuntimeError("simulated db failure")
@@ -115,4 +130,4 @@ def test_record_decision_never_raises_on_internal_failure(fresh_db, monkeypatch)
         auto_invoked=False,
         reason="no_match",
     )
-    assert result is None
+    assert result is not None and len(result) == 32  # decision_id (uuid hex)

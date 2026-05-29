@@ -333,7 +333,19 @@ def registry_register(
     )
 
 
-def _mcp_active_agents() -> list[dict[str, Any]]:
+# Cached snapshot of the active-agent list. Keyed by the catalog_broadcast
+# version: any mutation in core/registry/agents_ops.py calls
+# catalog_broadcast.bump() which increments the version, the next read here
+# sees the mismatch and rebuilds. TTL is a safety net for the case where
+# bump() didn't reach this worker (network blip on the LISTEN connection).
+# See /autoplan 2026-05-28 Eng F1/F2 + D5 user resolution.
+_MCP_ACTIVE_AGENTS_CACHE_TTL_S = 30.0
+_mcp_active_agents_cache: tuple[int, float, list[dict[str, Any]]] | None = None
+_mcp_active_agents_cache_lock = threading.Lock()
+
+
+def _build_mcp_active_agents() -> list[dict[str, Any]]:
+    """Compute the active-agent list from the DB. No caching here."""
     agents = [
         reputation.enrich_agent_record(agent)
         for agent in registry.get_agents(include_internal=True, include_banned=True)
@@ -353,6 +365,39 @@ def _mcp_active_agents() -> list[dict[str, Any]]:
         )
         and not bool(agent.get("internal_only"))
     ]
+
+
+def _mcp_active_agents() -> list[dict[str, Any]]:
+    """Cached active-agent list with broadcast + TTL invalidation."""
+    global _mcp_active_agents_cache
+    now = time.monotonic()
+    version = catalog_broadcast.current_version()
+    cached = _mcp_active_agents_cache
+    if cached is not None:
+        cached_version, cached_at, cached_list = cached
+        if cached_version == version and (now - cached_at) < _MCP_ACTIVE_AGENTS_CACHE_TTL_S:
+            return cached_list
+    with _mcp_active_agents_cache_lock:
+        # Re-check under the lock so concurrent readers share one rebuild.
+        cached = _mcp_active_agents_cache
+        now = time.monotonic()
+        version = catalog_broadcast.current_version()
+        if cached is not None:
+            cached_version, cached_at, cached_list = cached
+            if cached_version == version and (now - cached_at) < _MCP_ACTIVE_AGENTS_CACHE_TTL_S:
+                return cached_list
+        fresh = _build_mcp_active_agents()
+        _mcp_active_agents_cache = (version, time.monotonic(), fresh)
+        return fresh
+
+
+def _invalidate_mcp_active_agents_cache(_new_version: int | None = None) -> None:
+    """Drop the cache. Called by catalog_broadcast on incoming NOTIFY."""
+    global _mcp_active_agents_cache
+    _mcp_active_agents_cache = None
+
+
+catalog_broadcast.register_invalidate(_invalidate_mcp_active_agents_cache)
 
 
 def _mcp_tools_and_lookup() -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:

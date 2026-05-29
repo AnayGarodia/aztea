@@ -761,10 +761,67 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             _LOG.warning("Embedding warmup failed: %s", exc)
 
+    # Catalog-broadcast listener (Postgres LISTEN/NOTIFY) for cross-worker
+    # cache invalidation. SQLite backend: no-op. Single-worker SQLite invariant
+    # also enforced below for correctness — multi-worker SQLite has no shared
+    # invalidation channel and would silently serve stale catalog reads.
+    if _db.IS_POSTGRES:
+        try:
+            catalog_broadcast.start_listener()
+        except Exception as exc:
+            _LOG.warning("catalog_broadcast: start_listener failed: %s", exc)
+    else:
+        # SQLite has no cross-worker invalidation channel. The guard reads
+        # ``WEB_CONCURRENCY`` (set by gunicorn) AND a project-specific
+        # ``AZTEA_MULTI_WORKER`` env, because ``uvicorn --workers N`` does
+        # NOT auto-populate WEB_CONCURRENCY. Operators running uvicorn with
+        # ``--workers > 1`` on SQLite must set AZTEA_MULTI_WORKER=1
+        # explicitly — that combination is unsupported and the boot fails
+        # fast so the misconfiguration is loud.
+        web_concurrency = int(os.environ.get("WEB_CONCURRENCY", "1") or "1")
+        multi_worker_declared = bool(
+            os.environ.get("AZTEA_MULTI_WORKER", "").strip()
+        )
+        if web_concurrency > 1 or multi_worker_declared:
+            raise RuntimeError(
+                "Multi-worker deploy detected on the SQLite backend "
+                "(WEB_CONCURRENCY={web} / AZTEA_MULTI_WORKER set). "
+                "Catalog invalidation has no cross-worker channel on SQLite, "
+                "so workers would silently serve stale catalog reads. "
+                "Use DATABASE_URL=postgresql://... for multi-worker deploys."
+                .format(web=web_concurrency)
+            )
+
+    # Deferred-write queue — observability-only writes (decision_audit,
+    # work_example, receipt_write) drain through this in a daemon thread.
+    # See core/deferred.py.
+    try:
+        from core import deferred as _deferred
+        _deferred.start()
+    except Exception as exc:
+        _LOG.warning("deferred: start failed: %s", exc)
+
     try:
         yield
     finally:
         _set_server_shutting_down(True)
+        # Drain the deferred-write queue before tearing other state down.
+        # 5-second budget — observability writes that don't make it within
+        # the window are bounded loss (per /autoplan 2026-05-28 Phase 2).
+        try:
+            from core import deferred as _deferred
+            _deferred.flush(timeout=5.0)
+        except Exception as exc:
+            _LOG.warning("deferred: flush failed: %s", exc)
+        try:
+            catalog_broadcast.stop_listener()
+        except Exception as exc:
+            _LOG.debug("catalog_broadcast: stop_listener failed: %s", exc)
+        try:
+            from core import outbound_session as _outbound_session_mod
+            _outbound_session_mod.close()
+        except Exception as exc:
+            _LOG.debug("outbound_session: close failed: %s", exc)
         drain_deadline = time.monotonic() + _SHUTDOWN_DRAIN_TIMEOUT_SECONDS
         while time.monotonic() < drain_deadline:
             if _inflight_requests_count() <= 0:

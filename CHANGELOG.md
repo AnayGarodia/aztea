@@ -5,12 +5,17 @@ All notable changes to Aztea are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and Aztea follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.2.0] - 2026-05-29
+## [1.2.1] - 2026-05-29
 
 Auto-hire ranker overhaul. 12 ranker improvements + reflex/eval foundation,
 all behind feature flags (defaults preserve current behavior). Multi-layered
 defense against LLM cost amplification, Sybil ranking sabotage, and prompt
-injection.
+injection. Merged on top of v1.2.0 (#91 buyer-agent call-path speedup);
+`auto_hire.decide_cached` now threads `caller_owner_id` through the cache
+key so per-caller affinity bias remains correct under caching, and
+`decision_audit._write_row` carries this PR's three forward-only columns
+(`feature_vector_json`, `shadow_chosen_agent_id`, `intent_class`) on
+PR #91's deferred-queue persistence path.
 
 ### Added
 

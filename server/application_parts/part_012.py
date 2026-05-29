@@ -499,6 +499,11 @@ class _AutoHireRequestBody(BaseModel):
     # the caller's local cwd. Forwarded into the agent payload; never
     # persisted. See core/workspace_bundle.py for the shape.
     workspace_context: dict[str, Any] | None = None
+    # 2026-05-28 (Phase 3): caller may bypass the decision cache. Pass
+    # ``"bypass"`` to force a fresh ranking; any other value (or omission)
+    # uses the cache. Mirrors the noun-first reserved-envelope-key pattern
+    # of ``_workspace_id``/``_artifact_ref`` (see DX C1).
+    cache: str | None = Field(default=None, alias="_cache")
 
 
 @lru_cache(maxsize=1)
@@ -589,16 +594,23 @@ def registry_auto_hire(
         if _caller_can_access_agent(caller, record)
     ]
 
-    # 2. Pure decision. Phase 1 (C3): caller_owner_id threaded through
-    # so per-caller affinity scoring has the data it needs.
-    decision = _auto_hire.decide(
-        intent=body.intent,
-        explicit_input=body.input,
-        max_cost_usd=float(body.max_cost_usd),
-        candidates=candidates,
-        aggressive=bool(body.aggressive),
-        caller_owner_id=caller.get("owner_id"),
-    )
+    # 2. Pure decision (cached by intent_hash + catalog_version + caller).
+    # Phase 1 (C3): caller_owner_id is threaded into decide() so per-caller
+    # affinity scoring has the data it needs, AND it's part of the cache
+    # key so per-caller bias remains correct under caching — two callers
+    # with the same intent can have different chosen agents and must not
+    # serve each other's cached winner.
+    bypass_cache = str(body.cache or "").strip().lower() == "bypass"
+    with _observability.time_segment("embed_search"):
+        decision, decision_meta = _auto_hire.decide_cached(
+            intent=body.intent,
+            explicit_input=body.input,
+            max_cost_usd=float(body.max_cost_usd),
+            candidates=candidates,
+            aggressive=bool(body.aggressive),
+            bypass_cache=bypass_cache,
+            caller_owner_id=caller.get("owner_id"),
+        )
 
     # 3. Gated path: short-circuit, no charge.
     if not decision.auto_invoked:
@@ -651,6 +663,7 @@ def registry_auto_hire(
                 "dry_run_cost_usd": estimated_cost_usd,
                 "estimated_cost_cents": estimated_cost_cents,
                 "next_step": decision.next_step,
+                "decision_meta": decision_meta,
             }
         )
 
@@ -714,6 +727,7 @@ def registry_auto_hire(
                     "shape; the router refuses for free when no agent matches, "
                     "so the two-step preview is rarely worth the round-trip."
                 ),
+                "decision_meta": decision_meta,
             }
         )
 
