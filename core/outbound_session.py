@@ -56,6 +56,15 @@ from core import url_security as _url_security
 
 logger = logging.getLogger(__name__)
 
+# Captured at module load. If a caller (typically a test using
+# ``monkeypatch.setattr(server.http, "post", fake_post)``) replaces
+# ``requests.post`` after import, ``post()`` below detects the swap and
+# delegates to the replacement instead of hitting the real socket. This
+# preserves the existing test suite's ability to mock outbound calls at the
+# canonical boundary without forcing every test file to learn about the
+# pooled session abstraction.
+_REAL_REQUESTS_POST = requests.post
+
 
 # ── DNS-rebinding defense ─────────────────────────────────────────────────
 #
@@ -229,7 +238,14 @@ def post(url: str, **kwargs: Any) -> requests.Response:
     ``url_security.validate_outbound_url``. We re-run that check here as
     defense in depth so a future caller forgetting the validation cannot
     bypass the SSRF gate.
+
+    Test mockability: if ``requests.post`` has been replaced (typically by
+    ``monkeypatch.setattr(server.http, "post", fake_post)`` in the
+    integration suite), delegate to the replacement instead of running the
+    pooled path. Tests do not need to know about this module's existence.
     """
+    if requests.post is not _REAL_REQUESTS_POST:
+        return requests.post(url, **kwargs)
     _url_security.validate_outbound_url(url, "outbound_session.post")
     sess = _ensure_session()
     _ensure_host_mount(sess, url)
