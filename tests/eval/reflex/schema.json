@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ReflexEvalFixture",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "intent", "expected_specialist_slug", "failure_bucket_if_wrong"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{1,80}$",
+      "description": "Stable identifier for this fixture. Used in reports."
+    },
+    "intent": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "description": "The user-facing prompt to feed into Claude Code."
+    },
+    "expected_specialist_slug": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Slug of the Aztea specialist that SHOULD be invoked. Use 'any' if multiple specialists are equally valid."
+    },
+    "failure_bucket_if_wrong": {
+      "type": "string",
+      "enum": [
+        "agent_used_native_tool",
+        "agent_synthesized_from_training",
+        "agent_called_wrong_specialist",
+        "aztea_refused"
+      ],
+      "description": "Primary failure mode if this prompt does not fire correctly."
+    },
+    "notes": {
+      "type": "string",
+      "description": "Human-readable context for the fixture author."
+    },
+    "min_runs": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 5,
+      "description": "Number of times to run this fixture to surface flake."
+    },
+    "tags": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Free-form tags (intent_class, agent category, etc.)."
+    }
+  }
+}
