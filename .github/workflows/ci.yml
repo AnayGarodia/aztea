@@ -43,8 +43,14 @@ jobs:
       # --strict makes ANY known vuln fail the job (HIGH + CRITICAL + MEDIUM
       # + LOW + MAL); calibrate down to `--vulnerability-service osv` filters
       # if the noise floor becomes a problem.
+      # CVE-2026-24049 — wheel<0.46.2 path traversal during wheel install.
+      # We can't bump wheel to 0.46.2 because it requires packaging>=24.0
+      # while checkov 3.2.x pins packaging<24.0. wheel is a build-time tool
+      # of pip-tools only; it never reaches runtime, so the path-traversal
+      # attack surface (untrusted .whl content) doesn't exist in our use.
+      # Revisit when checkov 3.3 (or its packaging>=24 successor) lands.
       - name: pip-audit (supply-chain vulnerability scan)
-        run: pip-audit --skip-editable --strict
+        run: pip-audit --skip-editable --strict --ignore-vuln CVE-2026-24049
 
   test:
     name: Python tests
