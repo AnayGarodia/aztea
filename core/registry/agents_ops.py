@@ -43,6 +43,7 @@ import numpy as np
 from core import embeddings
 from core import feature_flags as _feature_flags
 
+from . import catalog_broadcast
 from .call_history import append_call_ring_sample
 from .core_schema import (
     _CANONICAL_CREATED_AT,
@@ -614,6 +615,7 @@ def register_agent(
     if embed_listing:
         _invalidate_embeddings_cache()
     _eagerly_create_agent_wallet(aid, normalized_owner_id, name)
+    catalog_broadcast.bump()
     return aid
 
 
@@ -792,6 +794,7 @@ def set_agent_status(
                 "UPDATE agents SET status = %s WHERE agent_id = %s",
                 (normalized_status, agent_id),
             )
+    catalog_broadcast.bump()
     return get_agent(agent_id, include_unapproved=True)
 
 
@@ -856,6 +859,7 @@ def set_agent_review_decision(
         ).rowcount
     if updated == 0:
         return None
+    catalog_broadcast.bump()
     return get_agent(agent_id, include_unapproved=True)
 
 
@@ -891,6 +895,7 @@ def sunset_agent(
         ).rowcount
     if updated == 0:
         return None
+    catalog_broadcast.bump()
     return get_agent(agent_id, include_unapproved=True)
 
 
@@ -920,6 +925,7 @@ def reactivate_agent(
         ).rowcount
     if updated == 0:
         return None
+    catalog_broadcast.bump()
     return get_agent(agent_id, include_unapproved=True)
 
 
@@ -940,6 +946,8 @@ def delete_agent(agent_id: str) -> bool:
             "DELETE FROM agents WHERE agent_id = %s",
             (agent_id,),
         ).rowcount
+    if updated:
+        catalog_broadcast.bump()
     return bool(updated)
 
 

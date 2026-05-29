@@ -467,6 +467,191 @@ def decide(
     )
 
 
+# ── Decision cache ─────────────────────────────────────────────────────────
+# Per /autoplan 2026-05-28 Phase 3 + Eng F6/F15. Keyed by
+# (intent_hash, max_cost_usd_int_cents, aggressive, catalog_version)
+# so any catalog mutation invalidates every cached decision. We skip the
+# cache when confidence sits within the "borderline" band around the
+# gating threshold (F15) — a small env tweak would flip the answer there
+# and a 120 s TTL on a flip would be confusing.
+
+import hashlib as _hashlib
+import threading as _threading
+
+from . import catalog_broadcast as _catalog_broadcast
+
+_DECISION_CACHE_TTL_S = 120.0
+_DECISION_CACHE_MAX_ENTRIES = 1024
+_DECISION_CACHE_BORDERLINE_MARGIN = 0.05  # confidence within ±0.05 of threshold → skip cache
+
+_decision_cache: dict[tuple, tuple[float, float, Decision]] = {}
+# Eager init at module load — lazy init had a microsecond race window where
+# two threads importing concurrently could each create a distinct lock.
+_decision_cache_lock_obj: _threading.Lock = _threading.Lock()
+
+
+def _decision_cache_lock() -> _threading.Lock:
+    return _decision_cache_lock_obj
+
+
+def _confidence_threshold(aggressive: bool) -> float:
+    """Read the gating floor from env at call time so env changes propagate."""
+    if aggressive:
+        return _AGGRESSIVE_CONFIDENCE_FLOOR
+    raw = os.environ.get("AZTEA_AUTO_INVOKE_CONFIDENCE", "").strip()
+    if not raw:
+        return 0.30
+    try:
+        return float(raw)
+    except ValueError:
+        return 0.30
+
+
+def _is_borderline(decision: Decision, aggressive: bool) -> bool:
+    """True when the decision sits within the no-cache band around the gate."""
+    conf = decision.confidence
+    if conf is None:
+        return False
+    threshold = _confidence_threshold(aggressive)
+    return abs(conf - threshold) < _DECISION_CACHE_BORDERLINE_MARGIN
+
+
+def _hash_intent_for_cache(intent: str) -> str:
+    return _hashlib.sha256((intent or "").strip().encode("utf-8")).hexdigest()
+
+
+def _decision_cache_key(
+    intent: str, max_cost_usd: float, aggressive: bool, version: int
+) -> tuple:
+    return (
+        _hash_intent_for_cache(intent),
+        round(float(max_cost_usd) * 100.0),  # cents bucket
+        bool(aggressive),
+        int(version),
+    )
+
+
+def decide_cached(
+    *,
+    intent: str,
+    explicit_input: dict[str, Any] | None,
+    max_cost_usd: float,
+    candidates: list[CandidateAgent],
+    aggressive: bool = False,
+    bypass_cache: bool = False,
+) -> tuple[Decision, dict[str, Any]]:
+    """Cached wrapper for ``decide``. Returns (decision, meta).
+
+    meta has shape ``{"cached": bool, "cached_at": ISO8601 or None,
+    "catalog_version": int}`` and is intended for the auto-hire response so
+    buyer agents can reason about freshness without blindly setting
+    ``_cache: "bypass"``.
+
+    Cache key = (intent_hash, max_cost_usd_cents, aggressive, catalog_version).
+    The same intent against a mutated catalog (bumped version) misses the
+    cache, so any registry mutation invalidates all entries atomically.
+
+    Skips the cache for decisions whose confidence is within ±0.05 of the
+    gating threshold (a near-threshold cached answer would feel
+    inconsistent across consecutive calls if the env tweaks the floor).
+    """
+    try:
+        from core import observability as _observability
+    except Exception:  # pragma: no cover
+        _observability = None  # type: ignore
+
+    version_at_start = _catalog_broadcast.current_version()
+    cache_key = _decision_cache_key(intent, max_cost_usd, aggressive, version_at_start)
+
+    if not bypass_cache:
+        hit = _cache_lookup(cache_key)
+        if hit is not None:
+            cached_at_iso, decision = hit
+            if _observability is not None:
+                try:
+                    _observability.decision_cache_outcomes_total.labels(outcome="hit").inc()
+                except Exception:  # pragma: no cover
+                    pass
+            return decision, {
+                "cached": True,
+                "cached_at": cached_at_iso,
+                "catalog_version": version_at_start,
+            }
+
+    # Cache miss: compute.
+    decision = decide(
+        intent=intent,
+        explicit_input=explicit_input,
+        max_cost_usd=max_cost_usd,
+        candidates=candidates,
+        aggressive=aggressive,
+    )
+
+    # Recheck version: if the catalog mutated during decide(), don't cache —
+    # the result reflects the now-stale snapshot.
+    version_at_end = _catalog_broadcast.current_version()
+    cached = False
+    if (
+        not bypass_cache
+        and version_at_end == version_at_start
+        and not _is_borderline(decision, aggressive)
+    ):
+        _cache_store(cache_key, decision)
+        cached = True
+        outcome = "store"
+    else:
+        outcome = "skipped" if version_at_end == version_at_start else "version_drift"
+    if _observability is not None:
+        try:
+            _observability.decision_cache_outcomes_total.labels(outcome=outcome if outcome == "version_drift" else "miss").inc()
+        except Exception:  # pragma: no cover
+            pass
+    return decision, {
+        "cached": False,
+        "cached_at": None,
+        "catalog_version": version_at_start,
+        "cache_eligible": cached,
+    }
+
+
+def _cache_lookup(key: tuple) -> tuple[str, Decision] | None:
+    """Return (cached_at_iso, decision) when present and fresh; else None."""
+    now = time.monotonic()
+    with _decision_cache_lock():
+        entry = _decision_cache.get(key)
+        if entry is None:
+            return None
+        cached_at_mono, cached_at_iso_seconds, decision = entry
+        if (now - cached_at_mono) > _DECISION_CACHE_TTL_S:
+            _decision_cache.pop(key, None)
+            return None
+    from datetime import datetime, timezone
+    iso = datetime.fromtimestamp(cached_at_iso_seconds, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return iso, decision
+
+
+def _cache_store(key: tuple, decision: Decision) -> None:
+    """Write into the cache; FIFO-evict if over capacity."""
+    with _decision_cache_lock():
+        if len(_decision_cache) >= _DECISION_CACHE_MAX_ENTRIES:
+            # Pop the oldest entry — dict iteration order is insertion order.
+            try:
+                _decision_cache.pop(next(iter(_decision_cache)))
+            except StopIteration:  # pragma: no cover
+                pass
+        _decision_cache[key] = (time.monotonic(), time.time(), decision)
+
+
+def _invalidate_decision_cache(_new_version: int | None = None) -> None:
+    """Drop all cached decisions. Wired to catalog_broadcast at import time."""
+    with _decision_cache_lock():
+        _decision_cache.clear()
+
+
+# Subscribe to catalog broadcasts: any agent mutation drops the whole cache.
+_catalog_broadcast.register_invalidate(_invalidate_decision_cache)
+
+
 # ── Ranking ────────────────────────────────────────────────────────────────
 
 
