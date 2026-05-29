@@ -1765,7 +1765,7 @@ def _llm_extract_whole_payload(
         "fences, no explanation."
     )
     user = (
-        f"Fields:\n" + "\n".join(field_lines) +
+        "Fields:\n" + "\n".join(field_lines) +
         f"\n\nIntent:\n{intent.strip()[:1000]}"
     )
     try:
