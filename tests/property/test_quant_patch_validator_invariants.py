@@ -159,17 +159,18 @@ def test_triage_closure_on_lookahead_bug():
     cand = ref.replace("range(window, p.size)", "range(window-1, p.size)").replace(
         "p[i-window:i]", "p[i-window+1:i+1]"
     )
-    # 2026-05-23 (second bump, after CI run 77511627921): even 10s on
-    # slow CI runners still occasionally returned ``equivalent``. Drop
-    # the override so we use the full ``quick`` tier budget (30s). The
-    # local run finishes in seconds; CI gets the full budget when it
-    # needs it. Marked @pytest.mark.slow so deselectable via
+    # 2026-05-23 (second bump): even 10s on slow CI runners still
+    # occasionally returned ``equivalent``. Bumped to full ``quick`` (30s).
+    # 2026-05-30 (third bump, after CI run 26652264453 flaked twice in a
+    # row on ``quick``): promoted to ``standard`` (300s) — overkill locally
+    # but gives CI a 10x budget to find the lookahead-bug cluster
+    # deterministically. Marked @pytest.mark.slow so deselectable via
     # ``-m "not slow"`` when fast iteration matters.
     out = validator_run(
         {
             "reference_code": ref,
             "candidate_code": cand,
-            "fuzz_budget": "quick",
+            "fuzz_budget": "standard",
         }
     )
     assert out["verdict"] == "regressions_found", (
