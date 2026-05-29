@@ -6,7 +6,7 @@ httpx>=0.24
 ruff>=0.1.0
 mypy>=1.0
 python-dotenv
-fastapi
+fastapi!=0.136.3  # 0.136.3 is OSV MAL-2026-4750: malicious release that adds undocumented `fastar` dep to the [standard] extra
 uvicorn[standard]
 slowapi
 numpy<2

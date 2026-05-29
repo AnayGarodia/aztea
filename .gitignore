@@ -36,6 +36,7 @@ __pycache__/
 .Python
 *.egg-info/
 dist/
+dist-tests/
 build/
 .eggs/
 

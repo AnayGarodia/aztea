@@ -455,7 +455,12 @@ def test_agent_suspend_and_ban_enforcement(client):
         headers=_auth_headers(TEST_MASTER_KEY),
     )
     assert suspended.status_code == 200, suspended.text
-    assert suspended.json()["status"] == "suspended"
+    # 2026-05-26 wave 3: suspend now returns {agent, kill_switch_summary}
+    # so it matches the ban endpoint's envelope. Same incident-response
+    # semantics deserve the same response shape.
+    suspended_body = suspended.json()
+    assert suspended_body["agent"]["status"] == "suspended"
+    assert "kill_switch_summary" in suspended_body
 
     blocked = client.post(
         "/jobs",

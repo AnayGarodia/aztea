@@ -1,9 +1,17 @@
-"""Integration tests for dns_inspector and the YC-demo built-ins
-(lighthouse_auditor, accessibility_auditor, security_headers_grader,
-broken_link_crawler, pdf_document_parser, web_search)."""
+"""Integration tests for dns_inspector and the curated demo built-ins
+(lighthouse_auditor, accessibility_auditor).
+
+2026-05-26 platform-pivot cull: security_headers_grader,
+broken_link_crawler, pdf_document_parser, and web_search are now
+sunset. Tests for the sunset agents are skipped because direct calls
+to /registry/agents/{id}/call return 410 Gone for sunset agents; the
+agent modules themselves still exist for old job-ID resolution.
+"""
 
 import os
 from unittest.mock import patch, MagicMock
+
+import pytest
 
 from tests.integration.support import *  # noqa: F403
 
@@ -14,6 +22,12 @@ SECURITY_HEADERS_GRADER_AGENT_ID = server._SECURITY_HEADERS_GRADER_AGENT_ID
 BROKEN_LINK_CRAWLER_AGENT_ID = server._BROKEN_LINK_CRAWLER_AGENT_ID
 PDF_DOCUMENT_PARSER_AGENT_ID = server._PDF_DOCUMENT_PARSER_AGENT_ID
 WEB_SEARCH_AGENT_ID = server._WEB_SEARCH_AGENT_ID
+
+_CULL_SKIP_REASON = (
+    "Sunset 2026-05-26 platform-pivot cull: /registry/agents/{id}/call "
+    "returns 410 Gone for sunset agent IDs. Re-enable when this agent "
+    "returns to CURATED_PUBLIC_BUILTIN_AGENT_IDS."
+)
 
 
 def test_dns_inspector_basic(client):
@@ -198,6 +212,7 @@ def test_accessibility_auditor_contract(client):
     assert body["billing_units_actual"] == 1
 
 
+@pytest.mark.skip(reason=_CULL_SKIP_REASON)
 def test_security_headers_grader_contract(client):
     """Security Headers Grader is sunset from the callable public catalog."""
     caller = _register_user()
@@ -213,6 +228,7 @@ def test_security_headers_grader_contract(client):
     assert resp.json()["error"] == "agent.sunset"
 
 
+@pytest.mark.skip(reason=_CULL_SKIP_REASON)
 def test_broken_link_crawler_contract(client):
     caller = _register_user()
     _fund_user_wallet(caller, 200)
@@ -279,6 +295,7 @@ def test_broken_link_crawler_contract(client):
     assert body["billing_units_actual"] == 1
 
 
+@pytest.mark.skip(reason=_CULL_SKIP_REASON)
 def test_pdf_document_parser_contract(client):
     caller = _register_user()
     _fund_user_wallet(caller, 200)
@@ -315,6 +332,7 @@ def test_pdf_document_parser_contract(client):
     assert body["billing_units_actual"] >= 1
 
 
+@pytest.mark.skip(reason=_CULL_SKIP_REASON)
 def test_web_search_missing_query_returns_structured_error(client):
     """Web Search is sunset from the public callable catalog."""
     caller = _register_user()
@@ -330,6 +348,7 @@ def test_web_search_missing_query_returns_structured_error(client):
     assert resp.json()["error"] == "agent.sunset"
 
 
+@pytest.mark.skip(reason=_CULL_SKIP_REASON)
 def test_web_search_happy_path_contract(client):
     """Web Search stays wired for receipts but is no longer callable."""
     caller = _register_user()

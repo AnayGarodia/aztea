@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json as _json_mod
 import time
 import uuid
 
@@ -58,15 +59,22 @@ def test_pipeline_run_executes_nodes_in_order_and_returns_terminal_output(client
 
     calls: list[tuple[str, dict]] = []
 
-    def fake_post(url, json=None, headers=None, timeout=None, allow_redirects=None, stream=False):
+    def fake_post(url, data=None, json=None, headers=None, timeout=None, allow_redirects=None, stream=False):
         del headers, timeout, allow_redirects, stream
-        calls.append((url, dict(json or {})))
-        task = (json or {}).get("task")
+        # Plan B Phase 1: HMAC-signed dispatch sends bytes via `data=`; the
+        # legacy unsigned path still uses `json=`. Accept either so the
+        # mock works in both modes.
+        if data is not None:
+            payload = _json_mod.loads(data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else data)
+        else:
+            payload = dict(json or {})
+        calls.append((url, payload))
+        task = payload.get("task")
         if task == "source text":
             return _FakeResponse({"content": "normalized text"})
-        if (json or {}).get("code") == "normalized text":
+        if payload.get("code") == "normalized text":
             return _FakeResponse({"summary": "review complete"})
-        raise AssertionError(f"Unexpected pipeline call payload: {json!r}")
+        raise AssertionError(f"Unexpected pipeline call payload: {payload!r}")
 
     monkeypatch.setattr(pipeline_executor.requests, "post", fake_post)
 

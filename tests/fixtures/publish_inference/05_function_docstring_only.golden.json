@@ -1,0 +1,33 @@
+{
+  "category": "developer-tools",
+  "confidence": {
+    "category": "fallback",
+    "description": "function_docstring",
+    "input_schema": "single_dict_param",
+    "name": "filename",
+    "output_schema": "return_annotation",
+    "price_per_call_usd": "default",
+    "slug": "derived_from_name",
+    "tags": "derived_from_description"
+  },
+  "description": "Lint a Dockerfile against best-practices and security rules.",
+  "input_schema": {
+    "additionalProperties": true,
+    "type": "object"
+  },
+  "missing": [],
+  "name": "Dockerfile Linter",
+  "output_schema": {
+    "additionalProperties": true,
+    "type": "object"
+  },
+  "price_per_call_usd": 0.05,
+  "slug": "dockerfile-linter",
+  "tags": [
+    "dockerfile",
+    "against",
+    "best",
+    "lint",
+    "linter"
+  ]
+}

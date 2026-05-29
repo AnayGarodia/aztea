@@ -44,20 +44,24 @@ def test_skills_master_succeeds(client):
     assert resp.status_code == 201, resp.text
 
 
-def test_skills_default_user_key_rejected_with_403(client):
-    # 2026-05-17: public SKILL.md publishing was removed. The route used to
-    # accept worker-scoped non-master uploads (landing them on probation);
-    # now it returns 403 skills.public_publish_disabled to any non-master
-    # caller. Master uploads still auto-approve (test_skills_master_succeeds).
+def test_skills_default_user_key_accepted_on_probation(client):
+    # 2026-05-17: public SKILL.md publishing was removed.
+    # 2026-05-26 (Wave 3): publish path re-opened with stronger guardrails
+    # (LLM judge layered on top of the static scanner). Worker-scoped
+    # non-master uploads are accepted again and land on probation —
+    # auto-invoke rank-penalises + price-caps until track record graduates
+    # them. Master uploads still auto-approve.
     user = _register_user()
     resp = client.post(
         "/skills",
         headers=_auth_headers(user["raw_api_key"]),
         json={"skill_md": _CLEAN_SKILL_MD, "price_per_call_usd": 0.02},
     )
-    assert resp.status_code == 403, resp.text
-    envelope = resp.json().get("detail", resp.json())
-    assert envelope.get("error") == "skills.public_publish_disabled"
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    # Probation is the documented contract for non-master publishes.
+    # The /skills response carries review_status at the top level.
+    assert body.get("review_status") == "probation", body
 
 
 def test_skills_caller_only_key_rejected_with_403(client):

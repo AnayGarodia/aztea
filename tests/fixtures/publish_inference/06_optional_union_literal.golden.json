@@ -1,0 +1,65 @@
+{
+  "category": "security",
+  "confidence": {
+    "category": "keyword_match",
+    "description": "function_docstring",
+    "input_schema": "function_signature",
+    "name": "filename",
+    "output_schema": "return_annotation",
+    "price_per_call_usd": "default",
+    "slug": "derived_from_name",
+    "tags": "derived_from_description"
+  },
+  "description": "Run a CVE audit across the given ecosystem's lockfile.",
+  "input_schema": {
+    "properties": {
+      "ecosystem": {
+        "enum": [
+          "npm",
+          "pypi",
+          "rubygems"
+        ],
+        "type": "string"
+      },
+      "requirements": {
+        "type": "string"
+      },
+      "severity_floor": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "timeout_seconds": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "number"
+          }
+        ]
+      }
+    },
+    "required": [
+      "ecosystem",
+      "requirements"
+    ],
+    "type": "object"
+  },
+  "missing": [],
+  "name": "Dependency Auditor",
+  "output_schema": {
+    "additionalProperties": true,
+    "type": "object"
+  },
+  "price_per_call_usd": 0.05,
+  "slug": "dependency-auditor",
+  "tags": [
+    "across",
+    "audit",
+    "auditor",
+    "cve",
+    "dependency"
+  ]
+}

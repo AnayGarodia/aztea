@@ -120,9 +120,14 @@ def test_proxy_call_does_not_forward_master_auth_to_external_endpoints(client, m
 
     captured: dict = {}
 
-    def fake_post(url, json=None, headers=None, timeout=None, allow_redirects=None):
+    def fake_post(url, json=None, data=None, headers=None, timeout=None, allow_redirects=None):
+        # Plan B Phase 1 (2026-05-27): sync call path now serialises the body
+        # to bytes and sends via `data=` so the HMAC signature covers the
+        # exact on-wire payload. The legacy `json=` path stays accepted for
+        # agents missing a signing secret.
         captured["url"] = url
         captured["json"] = json
+        captured["data"] = data
         captured["headers"] = dict(headers or {})
         captured["timeout"] = timeout
         captured["allow_redirects"] = allow_redirects
@@ -225,7 +230,12 @@ def test_admin_ip_allowlist_blocks_forwarded_for_spoofing(client, monkeypatch):
         headers=_auth_headers(TEST_MASTER_KEY),
     )
     assert allowed.status_code == 200, allowed.text
-    assert allowed.json()["status"] == "suspended"
+    # Wave 3 suspend response shape: {"agent": {...}, "kill_switch_summary": {...}}.
+    # The agent dict carries the new status; kill_switch_summary carries the
+    # refund tallies.
+    body = allowed.json()
+    assert body["agent"]["status"] == "suspended"
+    assert "kill_switch_summary" in body
 
 
 def test_ops_disputes_judge_enforces_admin_ip_allowlist(client, monkeypatch):

@@ -1186,7 +1186,7 @@ _TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "recipe_id": {
                     "type": "string",
-                    "description": "Recipe identifier from GET /recipes, e.g. 'audit-deps', 'secret-scan-and-audit', 'security-audit-sealed', 'domain-health'. Same string accepted as recipe_name historically.",
+                    "description": "Recipe identifier from GET /recipes, e.g. 'audit-deps' or 'domain-health'. Same string accepted as recipe_name historically.",
                 },
                 "recipe_name": {
                     "type": "string",
@@ -4347,8 +4347,8 @@ def _workspace_list(
             result.setdefault(
                 "note",
                 "No workspaces yet. Workspaces are created automatically when "
-                "you run an auto_workspace recipe (e.g. security-audit-sealed) "
-                "or manually via POST /workspaces.",
+                "you run an auto_workspace recipe, or manually via "
+                "POST /workspaces.",
             )
     return ok, result
 

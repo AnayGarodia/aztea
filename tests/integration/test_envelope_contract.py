@@ -154,13 +154,22 @@ def _assert_no_sensitive_substring(text: str, path: str, status: int) -> None:
     for token in _FORBIDDEN_SUBSTRINGS:
         if token not in text:
             continue
-        # Allowlist: ``callback_secret`` as a redaction MARKER (i.e., the
-        # block list helper itself produces the literal ``"callback_secret":
-        # "<redacted>"``). That's exactly the protected state — only fail
-        # if the field appears WITHOUT the <redacted> sentinel nearby.
+        # Allowlist:
+        #  1. ``<redacted>`` window — the block list helper produces the
+        #     literal ``"callback_secret": "<redacted>"`` and that's exactly
+        #     the protected state.
+        #  2. JSON Schema property declarations — the public tool-manifest
+        #     endpoints (/integrations/*-tools.json, /openai/tools, …) expose
+        #     input schemas that declare a ``callback_secret`` *field name*
+        #     because callers can supply one. Recognise the schema-property
+        #     pattern (``"callback_secret":{"type"``) so the test doesn't
+        #     mistake an input-field declaration for a leaked value.
         idx = text.find(token)
         window = text[max(0, idx - 32): idx + 64]
         if "<redacted>" in window:
+            continue
+        schema_marker = f'"{token}":{{"type"'
+        if schema_marker in text[max(0, idx - 4): idx + len(schema_marker) + 4]:
             continue
         pytest.fail(
             f"{path} (status {status}) response contains forbidden substring "
@@ -190,6 +199,12 @@ def envelope_client():
 
     modules = (registry, payments, auth, jobs, reputation, disputes,
                result_cache, compare, pipelines, workspaces)
+    # Save originals so we can restore on teardown. Direct assignment isn't
+    # tracked by pytest's monkeypatch, so without restoring we'd leave
+    # module.DB_PATH pointing at this fixture's deleted temp file and any
+    # later test that touches the registry via that module would raise
+    # "no such table: agents".
+    _originals = {m: getattr(m, "DB_PATH", None) for m in modules}
     for module in modules:
         _close_module_conn(module)
         module.DB_PATH = str(db_path)
@@ -198,15 +213,18 @@ def envelope_client():
     apply_migrations(str(db_path))
     server._MASTER_KEY = "test-master-key"
 
-    with TestClient(server.app) as client:
-        yield client
-
-    for module in modules:
-        _close_module_conn(module)
-    for suffix in ("", "-shm", "-wal"):
-        f = Path(f"{db_path}{suffix}")
-        if f.exists():
-            f.unlink()
+    try:
+        with TestClient(server.app) as client:
+            yield client
+    finally:
+        for module in modules:
+            _close_module_conn(module)
+            if _originals[module] is not None:
+                module.DB_PATH = _originals[module]
+        for suffix in ("", "-shm", "-wal"):
+            f = Path(f"{db_path}{suffix}")
+            if f.exists():
+                f.unlink()
 
 
 def _all_routes() -> list[tuple[str, str]]:

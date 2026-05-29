@@ -1,0 +1,32 @@
+{
+  "category": "developer-tools",
+  "confidence": {
+    "category": "fallback",
+    "description": "fallback",
+    "input_schema": "single_dict_param",
+    "name": "filename",
+    "output_schema": "return_annotation",
+    "price_per_call_usd": "default",
+    "slug": "derived_from_name",
+    "tags": "derived_from_description"
+  },
+  "description": "",
+  "input_schema": {
+    "additionalProperties": true,
+    "type": "object"
+  },
+  "missing": [
+    "description"
+  ],
+  "name": "01 Minimal Untyped",
+  "output_schema": {
+    "additionalProperties": true,
+    "type": "object"
+  },
+  "price_per_call_usd": 0.05,
+  "slug": "01-minimal-untyped",
+  "tags": [
+    "minimal",
+    "untyped"
+  ]
+}

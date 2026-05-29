@@ -313,6 +313,21 @@ _REGISTER_AGENT_SIGNING_UPDATE_SQL = """
     WHERE agent_id = %s
 """
 
+# Plan B Phase 1 (2026-05-27): per-agent HMAC secret for outbound calls.
+# Persisted via separate UPDATE so an environment that hasn't applied
+# migration 0074 yet still succeeds on register (the UPDATE silently fails;
+# the backfill at next startup catches up).
+_REGISTER_AGENT_ENDPOINT_SECRET_UPDATE_SQL = """
+    UPDATE agents
+    SET endpoint_signing_secret = %s,
+        endpoint_signing_secret_rotated_at = %s
+    WHERE agent_id = %s
+"""
+
+# Endpoint schemes for which Aztea hosts the runtime — no outbound HTTP call
+# is ever made, so an HMAC secret would only be dead weight.
+_INTERNAL_ENDPOINT_PREFIXES = ("internal://", "skill://")
+
 
 def _normalize_register_scalars(
     *, price_per_call_usd: float, endpoint_health_status: str,
@@ -426,6 +441,97 @@ def _persist_signing_keypair(
         )
 
 
+def _generate_endpoint_signing_secret_for_url(
+    endpoint_url: str | None,
+) -> str | None:
+    """Pure: return a fresh HMAC secret for an outbound-callable endpoint, else None.
+
+    Why: ``internal://`` and ``skill://`` agents are dispatched entirely
+    inside the Aztea process, so an HMAC secret would never be used. Returning
+    ``None`` for those keeps the column NULL and the agent row identical to
+    its pre-migration shape for back-compat.
+    """
+    raw = str(endpoint_url or "").strip().lower()
+    if not raw or raw.startswith(_INTERNAL_ENDPOINT_PREFIXES):
+        return None
+    from core import crypto as _crypto
+    return _crypto.generate_endpoint_signing_secret()
+
+
+def _persist_endpoint_signing_secret(
+    conn: Any, *, aid: str, secret: str, rotated_at: str,
+) -> None:
+    """Side-effect: write the HMAC secret onto the agents row.
+
+    Why: tolerates schemas that pre-date migration 0074 — same shape as the
+    keypair persist helper above. A failure here is logged but does NOT block
+    registration; the agent will fall through to unsigned dispatch in the
+    call path until the column appears.
+    """
+    try:
+        conn.execute(
+            _REGISTER_AGENT_ENDPOINT_SECRET_UPDATE_SQL,
+            (secret, rotated_at, aid),
+        )
+    except _db.OperationalError as exc:
+        _logger.warning(
+            "Could not persist endpoint signing secret for agent %s "
+            "(schema not yet migrated?): %s",
+            aid, exc,
+        )
+
+
+def mark_agent_domain_verified(
+    agent_id: str, *, method: str,
+) -> None:
+    """Side-effect: persist that the agent has cleared domain-ownership verification.
+
+    Idempotent. Plan B Phase 3c (2026-05-27).
+    """
+    verified_at = datetime.now(timezone.utc).isoformat()
+    try:
+        with _conn() as conn:
+            conn.execute(
+                """
+                UPDATE agents
+                SET domain_verified = 1,
+                    domain_verified_at = %s,
+                    domain_verification_method = %s
+                WHERE agent_id = %s
+                """,
+                (verified_at, method, agent_id),
+            )
+    except _db.OperationalError as exc:
+        _logger.warning(
+            "Could not persist domain_verified for agent %s (schema not migrated?): %s",
+            agent_id, exc,
+        )
+
+
+def rotate_endpoint_signing_secret(agent_id: str) -> str | None:
+    """Side-effect: regenerate + persist the per-agent HMAC secret. Returns the new value.
+
+    Used by ``POST /registry/agents/{id}/rotate-secret``. Returns ``None``
+    when the agent is Aztea-hosted (internal:// or skill:// endpoint) — no
+    HMAC is ever used for those, so rotation is a no-op.
+
+    Owner-auth and existence checks live in the HTTP route, not here.
+    """
+    agent = get_agent(agent_id, include_unapproved=True)
+    if not agent:
+        raise ValueError(f"agent_id {agent_id!r} not found")
+    endpoint_url = str(agent.get("endpoint_url") or "")
+    new_secret = _generate_endpoint_signing_secret_for_url(endpoint_url)
+    if new_secret is None:
+        return None
+    rotated_at = datetime.now(timezone.utc).isoformat()
+    with _conn() as conn:
+        _persist_endpoint_signing_secret(
+            conn, aid=agent_id, secret=new_secret, rotated_at=rotated_at,
+        )
+    return new_secret
+
+
 def _eagerly_create_agent_wallet(
     aid: str, normalized_owner_id: str, name: str,
 ) -> None:
@@ -503,8 +609,9 @@ def _execute_register_agent_insert(
     source_text: str, embedding_vector: list[float] | None,
     agent_did: str | None, private_pem: str | None,
     public_pem: str | None, signing_keys_created_at: str | None,
+    endpoint_signing_secret: str | None, endpoint_signing_secret_rotated_at: str | None,
 ) -> None:
-    """Side-effect: INSERT the agent row + optional embedding + optional signing keypair."""
+    """Side-effect: INSERT the agent row + optional embedding + optional signing keypair + optional HMAC secret."""
     conn.execute(_REGISTER_AGENT_INSERT_SQL, params)
     if embed_listing and embedding_vector is not None:
         _upsert_agent_embedding_row(
@@ -516,6 +623,12 @@ def _execute_register_agent_insert(
             conn, aid=aid, agent_did=agent_did, public_pem=public_pem,
             private_pem=private_pem,
             signing_keys_created_at=signing_keys_created_at,
+        )
+    if endpoint_signing_secret is not None and endpoint_signing_secret_rotated_at is not None:
+        _persist_endpoint_signing_secret(
+            conn, aid=aid,
+            secret=endpoint_signing_secret,
+            rotated_at=endpoint_signing_secret_rotated_at,
         )
 
 
@@ -590,6 +703,8 @@ def register_agent(
     agent_did, private_pem, public_pem, signing_keys_created_at = (
         _generate_signing_keypair_safe(aid, created_at)
     )
+    endpoint_signing_secret = _generate_endpoint_signing_secret_for_url(endpoint_url)
+    endpoint_signing_secret_rotated_at = created_at if endpoint_signing_secret else None
     params = _build_register_agent_params(
         aid=aid, normalized_owner_id=normalized_owner_id, name=name,
         description=description, endpoint_url=endpoint_url, scalars=scalars,
@@ -611,6 +726,8 @@ def register_agent(
             source_text=source_text, embedding_vector=embedding_vector,
             agent_did=agent_did, private_pem=private_pem, public_pem=public_pem,
             signing_keys_created_at=signing_keys_created_at,
+            endpoint_signing_secret=endpoint_signing_secret,
+            endpoint_signing_secret_rotated_at=endpoint_signing_secret_rotated_at,
         )
     if embed_listing:
         _invalidate_embeddings_cache()

@@ -20,17 +20,25 @@ documented count.
 from __future__ import annotations
 
 
+# Wave 2 rename (2026-05-26): "specialist" framing was dropped for the
+# platform pivot. The four legacy names (search_specialists / describe_
+# specialist / call_specialist / do_specialist_task) still dispatch via
+# `_LAZY_TOOL_NAME_ALIASES`, but they are NOT in the published tools/list —
+# duplicate entries would dilute the model's selection signal. Back-compat
+# is exercised in `tests/test_mcp_renames_backcompat.py`.
 _EXPECTED_LAZY_TOOL_NAMES: frozenset[str] = frozenset({
-    "search_specialists",
-    "describe_specialist",
-    "call_specialist",
-    "do_specialist_task",
+    "search_agents",
+    "describe_agent",
+    "call_agent",
+    "auto_call_agent",
     "aztea_status",
     "aztea_inspect",
     "aztea_query",
     "manage_job",
     "manage_budget",
     "manage_workflow",
+    # Wave 2 (2026-05-26): publish_agent — consumer-to-supplier conversion.
+    "publish_agent",
 })
 
 
@@ -59,6 +67,7 @@ def _build_lazy_tool_list() -> list[dict]:
         _LAZY_STATUS_TOOL,
     )
 
+    from aztea.mcp import publish_tool
     return [
         _LAZY_SEARCH_TOOL,
         _LAZY_DESCRIBE_TOOL,
@@ -67,14 +76,15 @@ def _build_lazy_tool_list() -> list[dict]:
         _LAZY_STATUS_TOOL,
         _LAZY_INSPECT_TOOL,
         _LAZY_QUERY_TOOL,
+        publish_tool.PUBLISH_AGENT_TOOL,
         *meta_tools.always_visible_tools(),
     ]
 
 
-def test_lazy_tool_surface_is_exactly_ten_tools():
+def test_lazy_tool_surface_is_exactly_eleven_tools():
     tools = _build_lazy_tool_list()
-    assert len(tools) == 10, (
-        f"Lazy MCP tool surface drifted: expected 10 tools, found {len(tools)}.\n"
+    assert len(tools) == 11, (
+        f"Lazy MCP tool surface drifted: expected 11 tools, found {len(tools)}.\n"
         f"  Names: {[t['name'] for t in tools]}\n"
         "If this change is intentional, update CLAUDE.md, AGENTS.md, and "
         "this test's _EXPECTED_LAZY_TOOL_NAMES in the same PR."

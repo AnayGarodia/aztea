@@ -58,19 +58,16 @@ are set. See [OSS vs hosted](docs/oss-vs-hosted.md).
 
 ## What Is Built In
 
-The current curated public catalog has **25 built-in specialists**. Each one is
-kept because it does work a calling agent should not fake in chat: real runtime
-execution, live API/network access, deterministic validation, or specialist
-tooling.
+The current curated public catalog has **10 built-in specialists** after the
+2026-05-26 platform-pivot cull. Each one is kept because it demonstrates a
+platform primitive a third-party builder will want to compose on top of —
+subprocess isolation, live external data, or a specialist headless runtime.
 
 | Category | Examples |
 | --- | --- |
 | Execution | Python Executor, Multi-Language Executor, DB Sandbox, Live Sandbox |
-| Web | Browser Agent, Broken Link Crawler, Lighthouse Auditor, Accessibility Auditor |
-| Security | Dependency Auditor, CVE Lookup, DNS Inspector, Secret Scanner, SAST Scanner, JWT Validator |
-| DevOps | Dockerfile Analyzer, OpenAPI Validator, K8s Manifest Validator, Terraform Plan Analyzer, HCL Terraform Analyzer |
-| Data / QA | PDF Document Parser, Coverage Runner, Load Tester, Stripe Webhook Debugger, CI Failure Reproducer |
-| Quant | Quant Patch Validator |
+| Web | Browser Agent, Lighthouse Auditor, Accessibility Auditor |
+| Security | CVE Lookup, Dependency Auditor, DNS Inspector |
 
 Twelve sunsetted built-ins remain wired so old job IDs and signed receipts still
 resolve, but they are excluded from search, auto-hire, and public catalog

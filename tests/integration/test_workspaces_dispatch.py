@@ -46,14 +46,20 @@ def _make_echo_agent(client, monkeypatch, *, capture: dict | None = None):
     )
     cap = capture if capture is not None else {}
 
-    def fake_post(url, json=None, headers=None, timeout=None, allow_redirects=None):
+    def fake_post(url, data=None, json=None, headers=None, timeout=None, allow_redirects=None):
         del url, headers, timeout, allow_redirects
-        cap["payload"] = json
+        # Plan B Phase 1: HMAC-signed dispatch sends bytes via `data=`; the
+        # legacy unsigned path still uses `json=`. Accept either.
+        if data is not None:
+            payload = json_module.loads(data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else data)
+        else:
+            payload = json
+        cap["payload"] = payload
         resp = requests.Response()
         resp.status_code = 200
         resp.headers["Content-Type"] = "application/json"
         # Echo the input back under "echoed" so we can assert resolution.
-        resp._content = json_module.dumps({"echoed": json}).encode("utf-8")
+        resp._content = json_module.dumps({"echoed": payload}).encode("utf-8")
         return resp
 
     json_module = json

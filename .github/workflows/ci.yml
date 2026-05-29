@@ -27,10 +27,24 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
-        run: pip install -r requirements-dev.txt flake8
+        run: pip install -r requirements-dev.txt flake8 pip-audit
 
       - name: Run flake8
         run: flake8 .
+
+      # Catch supply-chain compromises BEFORE they ship. The 2026-05-26 audit
+      # found that the prior security-hardening PR pinned `fastapi==0.136.3`
+      # via pip-compile right around the time that version was published as
+      # OSV MAL-2026-4750 — a malicious release that snuck an undocumented
+      # `fastar` typosquat dep into the `[standard]` extra. CI must fail loudly
+      # on every future MAL- / GHSA- listing against pinned versions so the
+      # next compromise can't ride in on a routine dep refresh.
+      #
+      # --strict makes ANY known vuln fail the job (HIGH + CRITICAL + MEDIUM
+      # + LOW + MAL); calibrate down to `--vulnerability-service osv` filters
+      # if the noise floor becomes a problem.
+      - name: pip-audit (supply-chain vulnerability scan)
+        run: pip-audit --skip-editable --strict
 
   test:
     name: Python tests

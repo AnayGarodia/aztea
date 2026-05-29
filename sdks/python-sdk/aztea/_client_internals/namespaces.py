@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from typing import Iterable, cast
+from typing import TYPE_CHECKING, Any, Iterable, cast
 
 from ..types import JSONObject, JSONValue
 from ._helpers import _NamespaceBase
+
+if TYPE_CHECKING:
+    from ..models import Agent, JobResult, VerificationContract
 
 
 class AuthNamespace(_NamespaceBase):
@@ -136,3 +139,107 @@ class DisputesNamespace(_NamespaceBase):
 
     def settlement_trace(self, job_id: str) -> JSONObject:
         return self._client._request_json("GET", f"/ops/jobs/{job_id}/settlement-trace")
+
+
+class AgentsNamespace(_NamespaceBase):
+    """High-level agent operations mirroring the TypeScript SDK's `client.agents.*`.
+
+    This namespace is the Wave 2 (2026-05-26) preferred surface for hiring and
+    inspecting agents. The shape mirrors `@aztea/sdk` (TypeScript) so a polyglot
+    team can context-switch without re-learning the API:
+
+      client.agents.call(name_or_id, payload)  # hire and wait for result
+      client.agents.list(owner_id=...)         # browse the catalog
+      client.agents.describe(name_or_id)       # full agent record
+
+    The legacy `client.hire()` method delegates here and emits a
+    DeprecationWarning. Both are stable; only the framing changes.
+
+    Reference resolution: `name_or_id` accepts a UUID, a slug (snake_case or
+    kebab-case), or the human-readable display name — see
+    AzteaClient._resolve_agent_reference for the lookup order.
+    """
+
+    def call(
+        self,
+        name_or_id: str,
+        payload: JSONObject,
+        *,
+        verification_contract: "VerificationContract | dict[str, Any] | None" = None,
+        wait: bool = True,
+        timeout_seconds: int = 60,
+        max_attempts: int = 3,
+        budget_cents: int | None = None,
+        max_price_cents: int | None = None,
+        callback_url: str | None = None,
+        callback_secret: str | None = None,
+        parent_job_id: str | None = None,
+        parent_cascade_policy: str = "detach",
+        clarification_timeout_seconds: int | None = None,
+        clarification_timeout_policy: str = "fail",
+        output_verification_window_seconds: int | None = None,
+    ) -> "JobResult":
+        """Hire an agent and (by default) wait for its terminal result.
+
+        Identical contract to `client.hire()` — same kwargs, same return
+        type, same exceptions — but the method name aligns with the platform
+        identity (`agents.call`) rather than the legacy marketplace framing
+        (`hire`). See the AzteaClient class-level docstring for the full
+        exception hierarchy.
+        """
+        # Delegate to the private impl, NOT to client.hire() — calling hire()
+        # would re-trigger its DeprecationWarning on every legitimate
+        # agents.call() invocation.
+        return self._client._call_agent_impl(  # type: ignore[no-any-return]
+            name_or_id,
+            payload,
+            verification_contract=verification_contract,
+            wait=wait,
+            timeout_seconds=timeout_seconds,
+            max_attempts=max_attempts,
+            budget_cents=budget_cents,
+            max_price_cents=max_price_cents,
+            callback_url=callback_url,
+            callback_secret=callback_secret,
+            parent_job_id=parent_job_id,
+            parent_cascade_policy=parent_cascade_policy,
+            clarification_timeout_seconds=clarification_timeout_seconds,
+            clarification_timeout_policy=clarification_timeout_policy,
+            output_verification_window_seconds=output_verification_window_seconds,
+        )
+
+    def list(
+        self,
+        *,
+        owner_id: str | None = None,
+        tag: str | None = None,
+        rank_by: str = "trust",
+        include_reputation: bool = True,
+    ) -> list["Agent"]:
+        """List catalog agents, optionally filtered by owner / tag.
+
+        `owner_id` lets a caller browse all agents published by a single
+        builder — the buyer-facing version of "what has this builder shipped"
+        used by the Wave 2 builder profile pages. The backend filter on
+        `/registry/agents?owner_id=...` lands in the same Wave 2 batch.
+        """
+        from ..models import Agent  # local import — avoid circular at module load
+        from ._helpers import _coerce_model
+
+        params: dict[str, str] = {
+            "include_reputation": "true" if include_reputation else "false",
+        }
+        if tag:
+            params["tag"] = tag
+        if rank_by:
+            params["rank_by"] = rank_by
+        if owner_id:
+            params["owner_id"] = owner_id
+        data = self._client._request_json("GET", "/registry/agents", params=params)
+        raw_agents = data.get("agents") or []
+        return [_coerce_model(Agent, item) for item in raw_agents if isinstance(item, dict)]
+
+    def describe(self, name_or_id: str) -> "Agent":
+        """Resolve `name_or_id` to a UUID and fetch the full agent record."""
+        resolved = self._client._resolve_agent_reference(name_or_id)
+        return self._client.get_agent(resolved)

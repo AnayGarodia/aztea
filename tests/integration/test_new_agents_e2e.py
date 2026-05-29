@@ -5,6 +5,16 @@ slate (post-editorial cut).
 Uses the project's isolated_db + client fixtures from
 tests/integration/conftest.py. Mocks the LLM provider chain and the
 signing key so tests don't depend on real credentials.
+
+2026-05-26 platform-pivot cull: D16 (codebase_reviewer) and C11
+(compliance_attestor) moved to ``SUNSET_DEPRECATED_AGENT_IDS``. Their
+internal endpoints stay wired (sunset pattern), but direct calls to
+``/registry/agents/{id}/call`` now return 410 Gone. The end-to-end
+flows in this file that exercised those calls are skipped at module
+load until / unless the agents return to the curated catalog; the
+non-call coverage (pending-infra gating, manifest exclusion, work
+example recording skip) still runs because it doesn't depend on the
+call path being open.
 """
 
 from __future__ import annotations
@@ -16,6 +26,13 @@ import tempfile
 from pathlib import Path
 
 import pytest
+
+
+_CULL_SKIP_REASON = (
+    "Sunset 2026-05-26 platform-pivot cull: agent is no longer callable "
+    "via /registry/agents/{id}/call. Re-enable when D16/C11 graduate "
+    "back to CURATED_PUBLIC_BUILTIN_AGENT_IDS."
+)
 
 # Module-level env defaults must be set before importing server.application.
 os.environ.setdefault("API_KEY", "test-master-key")
@@ -73,6 +90,7 @@ _C11_FULL_CHECKS = [
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skip(reason=_CULL_SKIP_REASON)
 def test_d16_codebase_reviewer_call_to_call_with_fixture_repo(
     client, monkeypatch, tmp_path,
 ):
@@ -114,6 +132,7 @@ def test_d16_codebase_reviewer_call_to_call_with_fixture_repo(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skip(reason=_CULL_SKIP_REASON)
 def test_c11_compliance_attestor_call_with_all_checks_passing(
     client, monkeypatch, tmp_path,
 ):
@@ -148,6 +167,7 @@ def test_c11_compliance_attestor_call_with_all_checks_passing(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skip(reason=_CULL_SKIP_REASON)
 def test_c11_compliance_attestor_charge_then_refund_on_failure(
     client, monkeypatch, tmp_path,
 ):
@@ -242,15 +262,18 @@ def test_list_agents_excludes_pending_infra_by_default(client):
 # ---------------------------------------------------------------------------
 
 
-def test_list_agents_includes_codebase_reviewer_and_compliance_attestor(client):
+def test_list_agents_excludes_codebase_reviewer_and_compliance_attestor_after_cull(client):
+    """Post-2026-05-26 cull: both agents are sunset, so the public list
+    must NOT surface them. They remain hireable by direct slug, but the
+    catalog listing skips sunset entries."""
     user, api_key = _setup_caller()
     resp = client.get("/registry/agents", headers=_auth_headers(api_key))
     assert resp.status_code == 200, resp.text
     body = resp.json()
     listed_ids = {a["agent_id"] for a in body.get("agents", body)}
 
-    assert _agent_id_for("codebase_reviewer") in listed_ids
-    assert _agent_id_for("compliance_attestor") in listed_ids
+    assert _agent_id_for("codebase_reviewer") not in listed_ids
+    assert _agent_id_for("compliance_attestor") not in listed_ids
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +361,7 @@ def test_mcp_manifest_excludes_pending_infra(client):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skip(reason=_CULL_SKIP_REASON)
 def test_work_example_recorded_for_d16_public_task(client, monkeypatch, tmp_path):
     """D16 is in CURATED_PUBLIC and not in the sensitive category, so its
     work-examples should be recorded for the public ring buffer."""
@@ -370,6 +394,7 @@ def test_work_example_recorded_for_d16_public_task(client, monkeypatch, tmp_path
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skip(reason=_CULL_SKIP_REASON)
 def test_d16_with_private_task_flag_drops_recording(client, monkeypatch, tmp_path):
     """When private_task=true, the work-example ring should not record
     the call. We exercise the privacy gate without crashing."""
@@ -399,6 +424,7 @@ def test_d16_with_private_task_flag_drops_recording(client, monkeypatch, tmp_pat
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skip(reason=_CULL_SKIP_REASON)
 def test_c11_signed_attestation_verifies_with_real_verifier(
     client, monkeypatch, tmp_path,
 ):

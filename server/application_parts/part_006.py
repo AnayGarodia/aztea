@@ -418,6 +418,57 @@ def _maybe_run_stability_monitor() -> None:
         )
 
 
+# Hosted-execution-log retention: piggybacks on the same once-per-day
+# cadence as the auto_hire_decisions sweep. See observability.run_hosted_execution_log_retention.
+_hosted_execution_log_retention_last_run_at: float = 0.0
+
+
+def _maybe_run_hosted_execution_log_retention() -> None:
+    """Side-effect: prune anonymous playground rows older than the retention cutoff.
+
+    Why: ``/api/playground/test`` accepts anonymous probes. Without a sweep,
+    those hash rows accumulate forever. See ``run_hosted_execution_log_retention``.
+    """
+    global _hosted_execution_log_retention_last_run_at
+    now = time.monotonic()
+    if now - _hosted_execution_log_retention_last_run_at < _DECISION_RETENTION_INTERVAL_SECONDS:
+        return
+    _hosted_execution_log_retention_last_run_at = now
+    summary = _observability.run_hosted_execution_log_retention()
+    if summary.get("rows_deleted"):
+        logging_utils.log_event(
+            _LOG, logging.INFO, "hosted_execution_log_retention.swept", summary,
+        )
+
+
+# Plan B Phase 3b (2026-05-27): continuous endpoint health sweeper.
+# Probes registered http(s):// agents every hour. After N consecutive
+# failures (default 3, env-tunable), the agent is auto-suspended so
+# buyers stop paying for a dead endpoint.
+_ENDPOINT_HEALTH_SWEEP_INTERVAL_SECONDS: int = 60 * 60  # 1 hour
+_endpoint_health_sweep_last_run_at: float = 0.0
+
+
+def _maybe_run_endpoint_health_sweep() -> None:
+    """Side-effect: probe registered endpoints at most once per hour.
+
+    Why: hourly is the right cadence for catching DNS expiry, deploy-cycle
+    downtime, and rotated keys. More frequent would waste compute on
+    healthy endpoints; less frequent would let buyers pay for a dead
+    listing too long.
+    """
+    global _endpoint_health_sweep_last_run_at
+    now = time.monotonic()
+    if now - _endpoint_health_sweep_last_run_at < _ENDPOINT_HEALTH_SWEEP_INTERVAL_SECONDS:
+        return
+    _endpoint_health_sweep_last_run_at = now
+    summary = _observability.run_endpoint_health_sweep()
+    if summary.get("probed"):
+        logging_utils.log_event(
+            _LOG, logging.INFO, "endpoint_health_sweep.completed", summary,
+        )
+
+
 def _jobs_sweeper_loop(stop_event: threading.Event) -> None:
     _set_sweeper_state(running=True, started_at=_utc_now_iso())
     while not stop_event.wait(_SWEEPER_INTERVAL_SECONDS):
@@ -432,6 +483,8 @@ def _jobs_sweeper_loop(stop_event: threading.Event) -> None:
             _emit_pending_starvation_signal()
             _maybe_run_decision_retention()
             _maybe_run_stability_monitor()
+            _maybe_run_hosted_execution_log_retention()
+            _maybe_run_endpoint_health_sweep()
             _run_workspaces_sweeper_pass(summary)
             _run_sandbox_sweeper_pass(summary)
             _set_sweeper_state(
@@ -880,6 +933,7 @@ def onboarding_ingest(
             safe_endpoint_url,
             input_schema=payload.get("input_schema"),
             output_schema=payload.get("output_schema"),
+            output_examples=payload.get("output_examples"),
         )
         initial_review_status = (
             "probation" if caller["type"] != "master" else None
@@ -914,16 +968,26 @@ def onboarding_ingest(
         agent_id,
         include_unapproved=True,
     )
-    return JSONResponse(
-        content={
-            "agent_id": agent_id,
-            "source": source,
-            "registration_payload": payload,
-            "agent": _agent_response(agent, caller),
-            "message": "Manifest validated and agent registered.",
-        },
-        status_code=201,
-    )
+    # Plan B Phase 1 (2026-05-27): surface the HMAC signing secret EXACTLY
+    # ONCE for any agent that has an outbound endpoint. /onboarding/ingest
+    # is one of the two paths that produces a real http(s):// endpoint.
+    response_body: dict[str, Any] = {
+        "agent_id": agent_id,
+        "source": source,
+        "registration_payload": payload,
+        "agent": _agent_response(agent, caller),
+        "message": "Manifest validated and agent registered.",
+    }
+    endpoint_signing_secret = (agent or {}).get("endpoint_signing_secret")
+    if endpoint_signing_secret:
+        response_body["endpoint_signing_secret"] = endpoint_signing_secret
+        response_body["endpoint_signing_secret_note"] = (
+            "Save this secret now — it's shown only once. Your endpoint MUST "
+            "verify the X-Aztea-Signature header on every inbound call so a "
+            "leaked URL can't be called without paying. Rotate via "
+            "POST /registry/agents/{agent_id}/rotate-secret."
+        )
+    return JSONResponse(content=response_body, status_code=201)
 
 
 # ---------------------------------------------------------------------------

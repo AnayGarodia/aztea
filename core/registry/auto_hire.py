@@ -159,7 +159,7 @@ class CandidateAgent:
             pricing_config = self.raw.get("pricing_config")
             if isinstance(pricing_config, dict) and pricing_config:
                 # Compact summary safe to ship in a listing — full config
-                # available via describe_specialist.
+                # available via describe_agent.
                 summary: dict[str, Any] = {}
                 for key in ("unit", "input_field", "rate_cents_per_unit",
                             "min_cents", "max_cents", "tiers"):
@@ -228,7 +228,7 @@ def _check_disabled_or_empty(
         return Decision(
             auto_invoked=False,
             reason="disabled",
-            next_step="Use search_specialists + call_specialist directly.",
+            next_step="Use search_agents + call_agent directly.",
         )
     if not candidates:
         return Decision(
@@ -287,15 +287,15 @@ def _check_confidence_gate(
             confidence=round(confidence, 3),
             candidates=[r.candidate.public_dict() for r in ranked[:_TOP_CANDIDATES_PREVIEW]],
             next_step=(
-                "Multiple agents could fit. Call describe_specialist on a candidate, "
-                "then call_specialist to run it."
+                "Multiple agents could fit. Call describe_agent on a candidate, "
+                "then call_agent to run it."
             ),
         )
     return confidence, None
 
 
 def _check_stability_gate(top: Any, confidence: float) -> Decision | None:
-    """Pure: refuse beta + broken agents — direct call_specialist still works
+    """Pure: refuse beta + broken agents — direct call_agent still works
     for beta (caller opts in by name); broken agents fail loud regardless.
 
     H-5 (audit 2026-05-19): two agents (semantic_codebase_search,
@@ -316,7 +316,7 @@ def _check_stability_gate(top: Any, confidence: float) -> Decision | None:
             next_step=(
                 f"Top match {top.candidate.slug!r} is currently flagged "
                 "stability_tier='broken' — auto-hire is disabled. The "
-                "agent may still respond to direct call_specialist, but "
+                "agent may still respond to direct call_agent, but "
                 "expect endpoint errors until the operator clears the flag."
             ),
         )
@@ -328,7 +328,7 @@ def _check_stability_gate(top: Any, confidence: float) -> Decision | None:
         confidence=round(confidence, 3),
         candidates=[top.candidate.public_dict()],
         next_step=(
-            f"Top match {top.candidate.slug!r} is in beta. Call call_specialist "
+            f"Top match {top.candidate.slug!r} is in beta. Call call_agent "
             "explicitly if you want to use it."
         ),
     )
@@ -396,7 +396,7 @@ def _check_price_gate(top: Any, max_cost_usd: float, confidence: float) -> Decis
             candidates=[top.candidate.public_dict()],
             next_step=(
                 f"Top match {top.candidate.slug!r} costs ${price:.2f}. Raise "
-                f"max_cost_usd to at least ${price:.2f}, or call call_specialist "
+                f"max_cost_usd to at least ${price:.2f}, or call call_agent "
                 "explicitly."
             ),
         )
@@ -414,6 +414,72 @@ def _missing_fields_decision(top: Any, missing: list[str], confidence: float) ->
         next_step=(
             f"Top match {top.candidate.slug!r} needs structured input. "
             f"Re-call with input={{...}} including: {', '.join(missing)}."
+        ),
+    )
+
+
+def _validate_payload_against_schema(
+    payload: dict[str, Any], input_schema: dict[str, Any] | None,
+) -> tuple[bool, list[str]]:
+    """Pure: jsonschema-validate ``payload`` against the agent's ``input_schema``.
+
+    Returns ``(ok, error_messages)``. When ``input_schema`` is absent or
+    invalid, returns ``(True, [])`` (no schema means no contract to
+    enforce — the agent will validate at its endpoint). On a real
+    validation failure, the messages list is human-readable: each item is
+    one error path + reason.
+
+    Why: the LLM extractor occasionally emits values that don't match the
+    schema (e.g. ``{"domain": "example.com:9999"}`` for a hostname field).
+    Pre-Phase-2 we'd forward the bad payload to the seller, the seller's
+    schema validation would reject it, the buyer would get refunded, and
+    the auto-hire decision audit would show ``auto_invoked=true`` despite
+    no useful work happening. Validating here turns that into an explicit
+    ``schema_validation_failed`` audit row with the actual errors.
+    """
+    if not isinstance(input_schema, dict) or not input_schema:
+        return True, []
+    try:
+        import jsonschema
+        from jsonschema import exceptions as _jse
+    except Exception:  # noqa: BLE001 — lib missing → fall through unchanged
+        return True, []
+    try:
+        validator_cls = jsonschema.validators.validator_for(input_schema)
+        validator = validator_cls(input_schema)
+        errors = sorted(validator.iter_errors(payload), key=lambda e: list(e.absolute_path))
+    except _jse.SchemaError:
+        # The agent's declared schema is itself broken. Don't block the
+        # decision on it — the seller will fix the schema; the agent's
+        # own input validation still runs server-side.
+        return True, []
+    except Exception:  # noqa: BLE001
+        return True, []
+    if not errors:
+        return True, []
+    messages: list[str] = []
+    for err in errors[:5]:  # cap to 5 to keep audit + response bodies bounded
+        path = ".".join(str(p) for p in err.absolute_path) or "<root>"
+        messages.append(f"{path}: {err.message}")
+    return False, messages
+
+
+def _schema_validation_failed_decision(
+    top: Any, errors: list[str], confidence: float,
+) -> Decision:
+    """Pure: refusal Decision for 'payload didn't match agent's input_schema'."""
+    return Decision(
+        auto_invoked=False,
+        reason="schema_validation_failed",
+        confidence=round(confidence, 3),
+        candidates=[top.candidate.public_dict()],
+        missing_fields=errors,  # reuse missing_fields slot for the error list
+        next_step=(
+            f"Top match {top.candidate.slug!r} would have been called but the "
+            f"extracted payload failed its input schema. Errors: "
+            f"{'; '.join(errors[:3])}. Re-call with input={{...}} matching the "
+            f"agent's declared input_schema, or refine the intent so the "
+            f"extractor pulls valid values."
         ),
     )
 
@@ -492,6 +558,15 @@ def _attempt_auto_invoke(
     payload, missing = _resolve_payload(top.candidate, intent_text, explicit_input)
     if missing:
         return _missing_fields_decision(top, missing, confidence)
+    # Plan B Phase 2 (2026-05-27): schema-validate the extracted payload
+    # BEFORE invoking the agent. Without this, an LLM-extracted value that
+    # doesn't match the input_schema slips through, the agent rejects it,
+    # the buyer is refunded, and the audit log claims auto_invoked=true.
+    ok, errors = _validate_payload_against_schema(
+        payload, top.candidate.raw.get("input_schema"),
+    )
+    if not ok:
+        return _schema_validation_failed_decision(top, errors, confidence)
     return Decision(
         auto_invoked=True,
         chosen=top.candidate,
@@ -1264,6 +1339,21 @@ def _apply_probation_penalty(c: CandidateAgent) -> tuple[float, list[str]]:
     return -_PROBATION_RANK_PENALTY, ["probation: ranked last"]
 
 
+# Plan B Phase 3c (2026-05-27): small ranking bonus for sellers who proved
+# they own the domain hosting their endpoint. The bonus is small enough
+# that an unverified higher-quality agent still wins, but it's a
+# meaningful tiebreaker for close matches and a real signal to buyers
+# about counterparty legitimacy.
+_DOMAIN_VERIFIED_RANK_BONUS = 5.0
+
+
+def _apply_domain_verified_bonus(c: CandidateAgent) -> tuple[float, list[str]]:
+    """Pure: +5 score for agents whose owner verified domain control."""
+    if not c.raw.get("domain_verified"):
+        return 0.0, []
+    return _DOMAIN_VERIFIED_RANK_BONUS, ["domain verified: +5"]
+
+
 def _candidate_combined_text(c: CandidateAgent) -> str:
     """Pure: lowercased haystack across slug/name/description/tags for substring checks."""
     return " ".join([
@@ -1622,6 +1712,7 @@ def _score_candidate(
         (utility_delta, utility_why),
         (affinity_delta, affinity_why),
         _apply_probation_penalty(c),
+        _apply_domain_verified_bonus(c),
         _score_anti_catchall(c),
     ):
         score += delta
@@ -1700,7 +1791,7 @@ def _resolve_explicit_input(
     return explicit_input, []
 
 
-# LLM-extractor fallback. Default on so do_specialist_task can salvage
+# LLM-extractor fallback. Default on so auto_call_agent can salvage
 # intents whose values aren't matchable by a regex (e.g. "audit this
 # package: https://github.com/foo/bar" where a regex `_extract_url` returns
 # the right thing but "look up vulnerabilities in this thing I just found:
@@ -1712,6 +1803,36 @@ _AUTO_HIRE_LLM_EXTRACT_ENABLED = (
 _LLM_EXTRACT_MIN_INTENT_CHARS = 8
 _LLM_EXTRACT_MAX_TOKENS = 200
 _LLM_EXTRACT_TEMPERATURE = 0.1
+
+# Plan B Phase 2 (2026-05-27): pin the extraction LLM chain. Single-field
+# extraction is short structured output — Haiku 4.5 is reliable + ~3x
+# cheaper per decision than Sonnet 4.6. Multi-field extraction (composite
+# schemas) goes to Sonnet 4.6 because the schema serialisation + reasoning
+# load is larger. Both fall back to gpt-4o-mini then Groq llama on Anthropic
+# outage so the picker never hard-fails on a transient provider error.
+_AUTO_HIRE_EXTRACTION_MODEL_SINGLE = [
+    spec.strip()
+    for spec in os.environ.get(
+        "AZTEA_AUTO_HIRE_EXTRACTION_MODEL_SINGLE",
+        "anthropic:claude-haiku-4-5,openai:gpt-4o-mini,groq:llama-3.3-70b-versatile",
+    ).split(",")
+    if spec.strip()
+]
+_AUTO_HIRE_EXTRACTION_MODEL_MULTI = [
+    spec.strip()
+    for spec in os.environ.get(
+        "AZTEA_AUTO_HIRE_EXTRACTION_MODEL_MULTI",
+        "anthropic:claude-sonnet-4-6,openai:gpt-4o-mini,groq:llama-3.3-70b-versatile",
+    ).split(",")
+    if spec.strip()
+]
+
+# Multi-field extraction gate. The schema-aware extraction path is new and
+# higher-LLM-spend per decision; ship dark behind a feature flag so we can
+# A/B it before flipping on. Single-field extraction stays on by default.
+_AUTO_HIRE_MULTI_FIELD_ENABLED = (
+    os.environ.get("AZTEA_AUTO_HIRE_MULTI_FIELD", "0").lower() in {"1", "true", "yes"}
+)
 
 
 def _llm_extract_field(
@@ -1764,7 +1885,16 @@ def _llm_extract_field(
                 ],
                 temperature=_LLM_EXTRACT_TEMPERATURE,
                 max_tokens=_LLM_EXTRACT_MAX_TOKENS,
+                # Plan B Phase 2: structured-output mode where the provider
+                # supports it (Anthropic + OpenAI). Stops the model from
+                # wrapping JSON in fences or appending stray commentary that
+                # the strict parser below would reject.
+                json_mode=True,
             ),
+            # Plan B Phase 2: pin to Claude Haiku first. Single-field
+            # extraction is short structured output; Haiku is reliable +
+            # ~3x cheaper per decision than Sonnet.
+            model_chain=_AUTO_HIRE_EXTRACTION_MODEL_SINGLE,
         )
     except Exception:  # noqa: BLE001
         return None
@@ -1804,7 +1934,7 @@ def _resolve_intent_only_payload(
     consult a per-field extractor registry. If the extractor confidently
     pulls a value out of the natural-language intent, we use it; otherwise
     we refuse with ``missing_fields`` so the caller can resubmit with an
-    explicit ``input=``. This closes the 1.6.1 P1 where ``do_specialist_task
+    explicit ``input=``. This closes the 1.6.1 P1 where ``auto_call_agent
     ("whats the cron for every weekday at 9am")`` auto-hired
     ``cron_expression_parser`` with the entire 9-word sentence as the
     ``expression`` field — the agent rejected with "Expected 5 or 6 fields,

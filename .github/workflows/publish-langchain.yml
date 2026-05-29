@@ -1,0 +1,55 @@
+name: Publish aztea-langchain to PyPI
+
+# Manual + tag-triggered ONLY. We intentionally do NOT publish on every
+# main commit — PyPI versions are immutable, accidental tags can't be
+# undone, and a typo'd version bump strands users on a broken release.
+#
+# Trigger by:
+#   - Pushing a tag matching `aztea-langchain-v*` (e.g. aztea-langchain-v0.1.0)
+#   - OR clicking "Run workflow" in the Actions tab (workflow_dispatch)
+
+on:
+  push:
+    tags:
+      - "aztea-langchain-v*"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Build + publish to PyPI
+    runs-on: ubuntu-latest
+    environment: pypi  # GitHub environment with the PYPI_API_TOKEN secret
+    permissions:
+      id-token: write  # for trusted publishing if configured
+    steps:
+      # Pinned to commit SHAs (not floating tags) because this workflow holds a
+      # PyPI publish token. A compromised tag on a third-party action would
+      # otherwise grant arbitrary code execution on a runner that can push a
+      # backdoored aztea-langchain release. Bump via Dependabot.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: "3.11"
+
+      - name: Install build deps
+        run: pip install --upgrade build twine
+
+      - name: Build sdist + wheel
+        working-directory: sdks/langchain
+        run: python -m build
+
+      - name: Verify the dist
+        working-directory: sdks/langchain
+        run: twine check dist/*
+
+      - name: Publish to PyPI
+        # Use the trusted-publishing path when configured (no token in repo
+        # secrets needed); fall back to a token-auth path via secrets if
+        # not. Either way, this step is the ONLY place that touches PyPI.
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN_AZTEA_LANGCHAIN }}
+        working-directory: sdks/langchain
+        run: twine upload dist/*

@@ -26,11 +26,26 @@ utilities (e.g. wallet check, job status) that aren't backed by a registry entry
 Each returned dict also includes a ``tool_lookup`` mapping ``name → metadata``
 so callers can resolve a tool-call name back to ``agent_id`` and privacy flags
 without rescanning the tool list.
+
+Audience
+--------
+Each builder accepts ``audience`` — either ``"authenticated"`` (default; the
+existing private endpoints) or ``"public"`` (the IP-rate-limited anonymous
+``/api/integrations/*-tools.json`` endpoints). ``public`` mode strips fields
+that an unauthenticated integrator must not see:
+
+  * ``trust_score_by_client`` / ``by_client``  — per-client trust map; private.
+  * ``owner_id``  — the agent owner's user id; private.
+  * ``review_status``  — the listing's moderation status; operator-only.
+
+Public mode also adds a per-tool ``metadata.schema_version`` so integrators
+can pin to a known shape, and a top-level ``deprecated_tools`` list so any
+upcoming removal can be signalled without breaking the array.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from core import mcp_manifest
 # 1.6.3: meta_tools moved from scripts/ to sdks/python-sdk/aztea/mcp/
@@ -45,6 +60,14 @@ _SDK_DIR = str(_Path(__file__).resolve().parents[1] / "sdks" / "python-sdk")
 if _SDK_DIR not in _sys.path:
     _sys.path.insert(0, _SDK_DIR)
 from aztea.mcp import meta_tools  # noqa: E402 — sys.path mutation above
+
+
+Audience = Literal["public", "authenticated"]
+
+# WHY: bumped whenever a public-manifest field is renamed, removed, or
+# given different semantics. Integrators pin via ``?version=YYYY-MM-DD``;
+# anything older returns 400. Append-only fields don't require a bump.
+PUBLIC_MANIFEST_SCHEMA_VERSION = "2026-05-26"
 
 
 def _catalog_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -90,7 +113,29 @@ def _catalog_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [item for item in catalog if item.get("name")]
 
 
-def build_openai_chat_manifest(agents: list[dict[str, Any]]) -> dict[str, Any]:
+def _is_public(audience: Audience) -> bool:
+    return audience == "public"
+
+
+def _public_envelope_fields() -> dict[str, Any]:
+    """Pure: top-level fields injected into every public manifest.
+
+    Kept here so all three builders return an identical contract for the
+    fields integrators rely on for versioning + deprecation signalling.
+    """
+    return {
+        "metadata": {"schema_version": PUBLIC_MANIFEST_SCHEMA_VERSION},
+        # WHY: empty today, but the field is reserved so a future cull can
+        # warn integrators inline without a separate API call. Shape:
+        # ``[{name: str, sunset_date: "YYYY-MM-DD", successor: str | None}]``.
+        "deprecated_tools": [],
+    }
+
+
+def build_openai_chat_manifest(
+    agents: list[dict[str, Any]],
+    audience: Audience = "authenticated",
+) -> dict[str, Any]:
     """Build an OpenAI Chat Completions ``tools`` array from the agent registry.
 
     Each tool is a ``{type: "function", function: {name, description, parameters,
@@ -98,11 +143,16 @@ def build_openai_chat_manifest(agents: list[dict[str, Any]]) -> dict[str, Any]:
     (price, trust score, privacy flags) that OpenAI passes through opaquely.
 
     Returns ``{tools, count, tool_format, meta_tools_included, tool_lookup}``.
+    In ``audience="public"`` mode also includes ``metadata.schema_version``
+    and ``deprecated_tools``.
     """
+    public = _is_public(audience)
     tools: list[dict[str, Any]] = []
     tool_lookup: dict[str, dict[str, Any]] = {}
     for item in _catalog_entries(agents):
         metadata: dict[str, Any] = {"aztea_tool_kind": item["kind"]}
+        if public:
+            metadata["schema_version"] = PUBLIC_MANIFEST_SCHEMA_VERSION
         if item["agent_id"]:
             metadata["aztea_agent_id"] = item["agent_id"]
         agent = item.get("agent") or {}
@@ -114,7 +164,11 @@ def build_openai_chat_manifest(agents: list[dict[str, Any]]) -> dict[str, Any]:
             # consumers can de-emphasize cold-start agents whose success_rate
             # defaults to 1.0. The ranker (session D) reads this flag.
             metadata["has_call_history"] = bool(agent.get("has_call_history", False))
-            metadata["trust_score_by_client"] = agent.get("by_client") or {}
+            if not public:
+                # WHY: by_client is a per-caller trust map. Surfacing it to
+                # anonymous integrators would leak ranking signal that
+                # private callers have paid for. Public manifests omit it.
+                metadata["trust_score_by_client"] = agent.get("by_client") or {}
             metadata["privacy"] = {
                 "pii_safe": bool(agent.get("pii_safe")),
                 "outputs_not_stored": bool(agent.get("outputs_not_stored")),
@@ -132,7 +186,7 @@ def build_openai_chat_manifest(agents: list[dict[str, Any]]) -> dict[str, Any]:
                 },
             }
         )
-        tool_lookup[item["name"]] = {
+        lookup_entry: dict[str, Any] = {
             "kind": item["kind"],
             "agent_id": item["agent_id"],
             "privacy": {
@@ -144,22 +198,33 @@ def build_openai_chat_manifest(agents: list[dict[str, Any]]) -> dict[str, Any]:
                 "region_locked": agent.get("region_locked") if agent else None,
             },
         }
-    return {
+        tool_lookup[item["name"]] = lookup_entry
+    payload: dict[str, Any] = {
         "tools": tools,
         "count": len(tools),
         "tool_format": "openai_chat_completions",
         "meta_tools_included": True,
         "tool_lookup": tool_lookup,
     }
+    if public:
+        payload.update(_public_envelope_fields())
+    return payload
 
 
-def build_openai_responses_manifest(agents: list[dict[str, Any]]) -> dict[str, Any]:
+def build_openai_responses_manifest(
+    agents: list[dict[str, Any]],
+    audience: Audience = "authenticated",
+) -> dict[str, Any]:
     """Build an OpenAI Responses API ``tools`` array (flat function objects).
 
     Uses the ``{type: "function", name, description, parameters, strict: False}``
     shape required by the Responses API (different from Chat Completions).
     Returns ``{tools, count, tool_format, meta_tools_included, tool_lookup}``.
+    In ``audience="public"`` mode also includes ``metadata.schema_version``
+    and ``deprecated_tools`` at the top level; ``tool_lookup`` omits
+    ``trust_score_by_client``.
     """
+    public = _is_public(audience)
     tools: list[dict[str, Any]] = []
     tool_lookup: dict[str, dict[str, Any]] = {}
     for item in _catalog_entries(agents):
@@ -172,21 +237,31 @@ def build_openai_responses_manifest(agents: list[dict[str, Any]]) -> dict[str, A
                 "strict": False,
             }
         )
-        tool_lookup[item["name"]] = {
+        lookup_entry: dict[str, Any] = {
             "kind": item["kind"],
             "agent_id": item["agent_id"],
-            "trust_score_by_client": (item.get("agent") or {}).get("by_client") or {},
         }
-    return {
+        if not public:
+            lookup_entry["trust_score_by_client"] = (
+                (item.get("agent") or {}).get("by_client") or {}
+            )
+        tool_lookup[item["name"]] = lookup_entry
+    payload: dict[str, Any] = {
         "tools": tools,
         "count": len(tools),
         "tool_format": "openai_responses_function",
         "meta_tools_included": True,
         "tool_lookup": tool_lookup,
     }
+    if public:
+        payload.update(_public_envelope_fields())
+    return payload
 
 
-def build_gemini_manifest(agents: list[dict[str, Any]]) -> dict[str, Any]:
+def build_gemini_manifest(
+    agents: list[dict[str, Any]],
+    audience: Audience = "authenticated",
+) -> dict[str, Any]:
     """Build a Gemini ``functionDeclarations`` tool list.
 
     Returns the canonical Gemini shape:
@@ -194,7 +269,10 @@ def build_gemini_manifest(agents: list[dict[str, Any]]) -> dict[str, Any]:
     count, tool_format, meta_tools_included, tool_lookup}``.
     The top-level ``function_declarations`` key is a convenience copy for
     callers that need the flat list without unwrapping the outer envelope.
+    In ``audience="public"`` mode also includes ``metadata.schema_version``
+    and ``deprecated_tools``; ``tool_lookup`` omits ``trust_score_by_client``.
     """
+    public = _is_public(audience)
     declarations: list[dict[str, Any]] = []
     tool_lookup: dict[str, dict[str, Any]] = {}
     for item in _catalog_entries(agents):
@@ -205,12 +283,16 @@ def build_gemini_manifest(agents: list[dict[str, Any]]) -> dict[str, Any]:
                 "parameters": item["input_schema"],
             }
         )
-        tool_lookup[item["name"]] = {
+        lookup_entry: dict[str, Any] = {
             "kind": item["kind"],
             "agent_id": item["agent_id"],
-            "trust_score_by_client": (item.get("agent") or {}).get("by_client") or {},
         }
-    return {
+        if not public:
+            lookup_entry["trust_score_by_client"] = (
+                (item.get("agent") or {}).get("by_client") or {}
+            )
+        tool_lookup[item["name"]] = lookup_entry
+    payload: dict[str, Any] = {
         "tools": [{"functionDeclarations": declarations}],
         "function_declarations": declarations,
         "count": len(declarations),
@@ -218,3 +300,72 @@ def build_gemini_manifest(agents: list[dict[str, Any]]) -> dict[str, Any]:
         "meta_tools_included": True,
         "tool_lookup": tool_lookup,
     }
+    if public:
+        payload.update(_public_envelope_fields())
+    return payload
+
+
+def build_anthropic_manifest(agents: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build an Anthropic Messages-API ``tools`` list.
+
+    Anthropic's tool-use API expects ``[{"name", "description",
+    "input_schema"}]`` — a flat list, no nested envelope. Returns:
+
+        {tools, count, tool_format, meta_tools_included, tool_lookup}
+
+    The lookup table is structurally identical to the OpenAI / Gemini
+    builders so callers can reuse the same dispatch path. Wave 2
+    (2026-05-26) added this so the new ``aztea-anthropic`` package can
+    expose the marketplace catalog to Anthropic's Messages API and the
+    upcoming Anthropic Agents SDK without re-implementing manifest
+    construction on the SDK side.
+    """
+    tools: list[dict[str, Any]] = []
+    tool_lookup: dict[str, dict[str, Any]] = {}
+    for item in _catalog_entries(agents):
+        tools.append(
+            {
+                "name": item["name"],
+                "description": item["description"],
+                "input_schema": item["input_schema"],
+            }
+        )
+        tool_lookup[item["name"]] = {
+            "kind": item["kind"],
+            "agent_id": item["agent_id"],
+            "trust_score_by_client": (item.get("agent") or {}).get("by_client") or {},
+        }
+    return {
+        "tools": tools,
+        "count": len(tools),
+        "tool_format": "anthropic_tools",
+        "meta_tools_included": True,
+        "tool_lookup": tool_lookup,
+    }
+
+
+# Fields scrubbed from every agent record before it reaches a public
+# manifest builder. Used by the anonymous-endpoint route to ensure no
+# admin-poisoned cache leak nor reputation-by-client signal escapes.
+_PUBLIC_AGENT_SCRUB_FIELDS = (
+    "owner_id",
+    "review_status",
+    "by_client",
+)
+
+
+def scrub_agents_for_public(agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pure: copy each agent record dropping fields that must never reach anon callers.
+
+    Defense in depth: even if the manifest builder is called with the
+    default ``audience="authenticated"`` by mistake, the input itself
+    will not carry the leaked fields. New private fields added to the
+    enriched-agent shape must also land here.
+    """
+    scrubbed: list[dict[str, Any]] = []
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+        clean = {k: v for k, v in agent.items() if k not in _PUBLIC_AGENT_SCRUB_FIELDS}
+        scrubbed.append(clean)
+    return scrubbed

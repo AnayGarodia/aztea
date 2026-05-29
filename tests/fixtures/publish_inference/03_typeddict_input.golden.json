@@ -1,0 +1,33 @@
+{
+  "category": "developer-tools",
+  "confidence": {
+    "category": "fallback",
+    "description": "function_docstring",
+    "input_schema": "single_dict_param",
+    "name": "filename",
+    "output_schema": "return_annotation",
+    "price_per_call_usd": "default",
+    "slug": "derived_from_name",
+    "tags": "derived_from_description"
+  },
+  "description": "Fetch a URL and return its status + body.",
+  "input_schema": {
+    "type": "object",
+    "x-aztea-inferred-class": "Input"
+  },
+  "missing": [],
+  "name": "Url Fetcher",
+  "output_schema": {
+    "type": "object",
+    "x-aztea-inferred-class": "Output"
+  },
+  "price_per_call_usd": 0.05,
+  "slug": "url-fetcher",
+  "tags": [
+    "url",
+    "body",
+    "fetch",
+    "fetcher",
+    "status"
+  ]
+}

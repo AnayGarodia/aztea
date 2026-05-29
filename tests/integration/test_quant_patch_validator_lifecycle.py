@@ -23,6 +23,14 @@ from tests.integration.support import *  # noqa: F403,F401
 from server.builtin_agents.constants import QUANT_PATCH_VALIDATOR_AGENT_ID
 
 
+# 2026-05-26 platform-pivot cull: quant_patch_validator moved to sunset.
+# All endpoint-driven tests in this file now hit a 410 Gone via the registry.
+# Skip the whole module until the agent returns to CURATED_PUBLIC.
+pytestmark = pytest.mark.skip(
+    reason="Sunset 2026-05-26 platform-pivot cull: quant_patch_validator removed from CURATED_PUBLIC.",
+)
+
+
 # Trivial pair: identical functions; no divergences. Tier=quick keeps the
 # test fast (default budget would be 30s standard ~5 min — far too slow).
 _REF = "def f(x):\n    return x * 2\n"

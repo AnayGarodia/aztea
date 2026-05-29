@@ -71,8 +71,8 @@ def test_cache_hit_path_stays_reconciled(client, monkeypatch):
 
     call_counter = {"count": 0}
 
-    def fake_post(url, json=None, headers=None, timeout=None, allow_redirects=None):
-        del url, json, headers, timeout, allow_redirects
+    def fake_post(url, data=None, json=None, headers=None, timeout=None, allow_redirects=None):
+        del url, data, json, headers, timeout, allow_redirects
         call_counter["count"] += 1
         resp = requests.Response()
         resp.status_code = 200

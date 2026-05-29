@@ -401,6 +401,12 @@ def scan_skill_md(skill_md: str) -> list[VerificationFinding]:
 
     Why: the skill body is interpreted by an LLM at call time, so anything
     in here runs with the agent's privilege — we treat it as code.
+
+    Note: this function does NOT invoke the LLM judge. The judge
+    (``core/listing_safety_judge.judge_skill_md``) is layered in by the
+    publish path (``server/application_parts/part_012.py`` /skills POST)
+    so anonymous, cheap-to-call paths don't burn LLM credits. Real
+    publishes pay for the judge once at publish time.
     """
     if not isinstance(skill_md, str):
         raise TypeError("skill_md must be a str")
@@ -675,6 +681,13 @@ def scan_python_handler(source: str) -> list[VerificationFinding]:
     Why: handlers don't need shells, raw sockets, or eval; an author with a
     legitimate need can host their own HTTP endpoint and skip the in-line
     publish flow that auto-runs ``handler()`` under our worker.
+
+    Note: this function does NOT invoke the LLM judge. The judge
+    (``core/listing_safety_judge.judge_python_handler``) is layered in by
+    the publish path (``server/application_parts/part_012.py`` /skills POST)
+    so anonymous, cheap-to-call probes — like ``/api/playground/test`` —
+    don't burn LLM credits on transient experiments. Real publishes pay
+    for the judge once at publish time; transient tests never do.
     """
     if not isinstance(source, str):
         raise TypeError("source must be a str")
@@ -938,6 +951,7 @@ def scan_clone_against(
 # ---------------------------------------------------------------------------
 from core.listing_safety_probe import (  # noqa: E402  (re-export)
     adversarial_probes,
+    evaluate_output_example_replay,
     evaluate_probe_response,
     synthesize_input_from_schema,
 )
@@ -949,6 +963,7 @@ __all__ = [
     "LEVEL_WARN",
     "VerificationFinding",
     "adversarial_probes",
+    "evaluate_output_example_replay",
     "evaluate_probe_response",
     "has_block",
     "has_warn",

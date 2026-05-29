@@ -215,10 +215,10 @@ function WorkspaceDetail({ ws, apiKey, onDeleted }) {
               size="small"
               variant="ghost"
               icon={
-                verify === 'loading' ? RefreshCcw :
-                verify?.valid === true ? ShieldCheck :
-                verify?.valid === false ? ShieldX :
-                ShieldQuestion
+                verify === 'loading' ? <RefreshCcw size={14} /> :
+                verify?.valid === true ? <ShieldCheck size={14} /> :
+                verify?.valid === false ? <ShieldX size={14} /> :
+                <ShieldQuestion size={14} />
               }
               onClick={handleVerify}
               disabled={verify === 'loading'}
@@ -258,7 +258,7 @@ function WorkspaceDetail({ ws, apiKey, onDeleted }) {
         <Button
           size="small"
           variant="ghost"
-          icon={Trash2}
+          icon={<Trash2 size={14} />}
           onClick={handleDelete}
           disabled={deleting}
         >
@@ -333,7 +333,7 @@ export default function WorkspacesPage() {
                 </button>
               ))}
             </div>
-            <Button size="small" variant="ghost" icon={RefreshCcw} onClick={loadList}>
+            <Button size="small" variant="ghost" icon={<RefreshCcw size={14} />} onClick={loadList}>
               Refresh
             </Button>
           </div>

@@ -6,6 +6,24 @@
 # which now owns the co-pilot mode routes — they had to register before
 # the catch-all.)
 
+# Recipe name length cap — matches the buyer-facing UI validator copy.
+_RECIPE_NAME_MAX_LEN = 80
+
+# Stripe top-up amount bounds (integer cents — money path). The same
+# numbers are stated in the buyer-facing UI; if either side moves, both
+# must move in the same commit. ``$1.00`` and ``$500.00`` are the floor
+# and ceiling on per-call top-ups, distinct from ``MINIMUM_DEPOSIT_CENTS``
+# which is the floor on a *funded* wallet deposit.
+_TOPUP_AMOUNT_MIN_CENTS = 100
+_TOPUP_AMOUNT_MAX_CENTS = 50_000
+
+# Withdrawal bounds (integer cents) — paired with the on-screen copy in
+# WalletPage.jsx. ``$1.00`` floor blocks dust-attack withdrawal storms;
+# ``$10,000`` ceiling is a sanity guard against a key compromise draining
+# a builder's balance in one shot.
+_WITHDRAWAL_AMOUNT_MIN_CENTS = 100
+_WITHDRAWAL_AMOUNT_MAX_CENTS = 1_000_000
+
 
 def _stripe_unavailable_error() -> HTTPException:
     """501 Not Implemented for Stripe routes when the OSS instance has no
@@ -55,17 +73,36 @@ def create_topup_session(
     wallet = payments.get_wallet(body.wallet_id)
     if wallet is None:
         raise HTTPException(
-            status_code=404, detail=f"Wallet '{body.wallet_id}' not found."
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.WALLET_NOT_FOUND,
+                "Wallet not found.",
+                details={"wallet_id": body.wallet_id},
+            ),
         )
     if caller["type"] != "master" and wallet["owner_id"] != caller["owner_id"]:
         raise HTTPException(
-            status_code=403, detail="Not authorized to top up this wallet."
+            status_code=403,
+            detail=error_codes.make_error(
+                error_codes.WALLET_NOT_AUTHORIZED,
+                "Not authorized to top up this wallet.",
+                details={"wallet_id": body.wallet_id},
+            ),
         )
     if int(body.amount_cents) < MINIMUM_DEPOSIT_CENTS:
         raise _deposit_below_minimum_error(int(body.amount_cents))
-    if not (100 <= body.amount_cents <= 50000):
+    if not (_TOPUP_AMOUNT_MIN_CENTS <= body.amount_cents <= _TOPUP_AMOUNT_MAX_CENTS):
         raise HTTPException(
-            status_code=400, detail="Amount must be between $1.00 and $500.00."
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.PAYMENT_AMOUNT_OUT_OF_RANGE,
+                "Amount must be between $1.00 and $500.00.",
+                details={
+                    "supplied_cents": int(body.amount_cents),
+                    "min_cents": _TOPUP_AMOUNT_MIN_CENTS,
+                    "max_cents": _TOPUP_AMOUNT_MAX_CENTS,
+                },
+            ),
         )
     if _TOPUP_DAILY_LIMIT_CENTS > 0:
         used_last_24h = _wallet_stripe_topup_total_last_24h(body.wallet_id)
@@ -168,7 +205,13 @@ async def stripe_webhook(request: Request) -> JSONResponse:
             payload, sig_header, _STRIPE_WEBHOOK_SECRET
         )
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid Stripe webhook signature.")
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.STRIPE_WEBHOOK_SIGNATURE_INVALID,
+                "Invalid Stripe webhook signature.",
+            ),
+        )
 
     if event["type"] == "checkout.session.completed":
         # Stripe SDK v15 returns StripeObjects, not plain dicts — use attribute
@@ -321,7 +364,13 @@ def connect_onboard(
 
     wallet = payments.get_wallet_by_owner(caller["owner_id"])
     if wallet is None:
-        raise HTTPException(status_code=404, detail="Wallet not found.")
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.WALLET_NOT_FOUND,
+                "Wallet not found.",
+            ),
+        )
 
     _stripe_lib.api_key = _STRIPE_SECRET_KEY
 
@@ -379,7 +428,13 @@ def connect_status(
 
     wallet = payments.get_wallet_by_owner(caller["owner_id"])
     if wallet is None:
-        raise HTTPException(status_code=404, detail="Wallet not found.")
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.WALLET_NOT_FOUND,
+                "Wallet not found.",
+            ),
+        )
 
     account_id = wallet.get("stripe_connect_account_id")
     if not account_id:
@@ -429,28 +484,58 @@ def withdraw(
     _require_scope(caller, "caller")
 
     def _operation() -> tuple[dict[str, Any], int]:
-        if body.amount_cents < 100:
-            raise HTTPException(status_code=400, detail="Minimum withdrawal is $1.00.")
-        if body.amount_cents > 1_000_000:
+        if body.amount_cents < _WITHDRAWAL_AMOUNT_MIN_CENTS:
             raise HTTPException(
-                status_code=400, detail="Maximum withdrawal is $10,000.00."
+                status_code=400,
+                detail=error_codes.make_error(
+                    error_codes.PAYMENT_AMOUNT_BELOW_MINIMUM,
+                    "Minimum withdrawal is $1.00.",
+                    details={
+                        "supplied_cents": int(body.amount_cents),
+                        "min_cents": _WITHDRAWAL_AMOUNT_MIN_CENTS,
+                    },
+                ),
+            )
+        if body.amount_cents > _WITHDRAWAL_AMOUNT_MAX_CENTS:
+            raise HTTPException(
+                status_code=400,
+                detail=error_codes.make_error(
+                    error_codes.PAYMENT_AMOUNT_ABOVE_MAXIMUM,
+                    "Maximum withdrawal is $10,000.00.",
+                    details={
+                        "supplied_cents": int(body.amount_cents),
+                        "max_cents": _WITHDRAWAL_AMOUNT_MAX_CENTS,
+                    },
+                ),
             )
 
         wallet = payments.get_wallet_by_owner(caller["owner_id"])
         if wallet is None:
-            raise HTTPException(status_code=404, detail="Wallet not found.")
+            raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.WALLET_NOT_FOUND,
+                "Wallet not found.",
+            ),
+        )
 
         account_id = str(wallet.get("stripe_connect_account_id") or "").strip()
         if not account_id:
             raise HTTPException(
                 status_code=400,
-                detail="No bank account connected. Use POST /wallets/connect/onboard first.",
+                detail=error_codes.make_error(
+                    error_codes.STRIPE_CONNECT_BANK_NOT_LINKED,
+                    "No bank account connected. Use POST /wallets/connect/onboard first.",
+                ),
             )
 
         if not wallet.get("stripe_connect_enabled"):
             raise HTTPException(
                 status_code=400,
-                detail="Your Stripe Connect account is not yet active. Complete onboarding first.",
+                detail=error_codes.make_error(
+                    error_codes.STRIPE_CONNECT_NOT_ONBOARDED,
+                    "Your Stripe Connect account is not yet active. Complete onboarding first.",
+                ),
             )
 
         # available = balance - held. Held funds are reserved for the
@@ -542,7 +627,10 @@ def withdraw(
         if not transfer_id:
             raise HTTPException(
                 status_code=502,
-                detail="Stripe transfer response did not include an ID.",
+                detail=error_codes.make_error(
+                    error_codes.STRIPE_TRANSFER_NO_ID,
+                    "Stripe transfer response did not include an ID.",
+                ),
             )
 
         # Record the transfer for audit.
@@ -607,10 +695,22 @@ def wallet_withdrawals(
 ) -> core_models.WalletWithdrawalsResponse:
     _require_scope(caller, "caller")
     if limit <= 0:
-        raise HTTPException(status_code=422, detail="limit must be > 0.")
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                "limit must be > 0.",
+            ),
+        )
     wallet = payments.get_wallet_by_owner(caller["owner_id"])
     if wallet is None:
-        raise HTTPException(status_code=404, detail="Wallet not found.")
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.WALLET_NOT_FOUND,
+                "Wallet not found.",
+            ),
+        )
     withdrawals = payments.list_connect_withdrawals(wallet["wallet_id"], limit=limit)
     return JSONResponse(content={"withdrawals": withdrawals, "count": len(withdrawals)})
 
@@ -628,10 +728,22 @@ def wallet_get(
 ) -> core_models.WalletResponse:
     wallet = payments.get_wallet(wallet_id)
     if wallet is None:
-        raise HTTPException(status_code=404, detail=f"Wallet '{wallet_id}' not found.")
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.WALLET_NOT_FOUND,
+                "Wallet not found.",
+                details={"wallet_id": wallet_id},
+            ),
+        )
     if caller["type"] != "master" and wallet["owner_id"] != caller["owner_id"]:
         raise HTTPException(
-            status_code=403, detail="Not authorized to view this wallet."
+            status_code=403,
+            detail=error_codes.make_error(
+                error_codes.WALLET_NOT_AUTHORIZED,
+                "Not authorized to view this wallet.",
+                details={"wallet_id": wallet_id},
+            ),
         )
     txs = payments.get_wallet_transactions(wallet_id, limit=50)
     return JSONResponse(content={**wallet, "transactions": txs})
@@ -648,7 +760,11 @@ def wallet_get(
 def _require_user_caller(caller: core_models.CallerContext) -> dict:
     if caller["type"] != "user":
         raise HTTPException(
-            status_code=403, detail="Not available for master or agent-scoped keys."
+            status_code=403,
+            detail=error_codes.make_error(
+                error_codes.INSUFFICIENT_SCOPE,
+                "Not available for master or agent-scoped keys.",
+            ),
         )
     return caller["user"]
 
@@ -670,7 +786,11 @@ def _ensure_stripe_customer(user: dict) -> str:
     customer_id = _stripe_obj_id(customer)
     if not customer_id:
         raise HTTPException(
-            status_code=502, detail="Stripe did not return a customer id."
+            status_code=502,
+            detail=error_codes.make_error(
+                error_codes.STRIPE_CUSTOMER_NO_ID,
+                "Stripe did not return a customer id.",
+            ),
         )
     _auth.set_stripe_customer_id(user["user_id"], customer_id)
     return customer_id
@@ -816,7 +936,13 @@ def delete_billing_payment_method(
     _require_scope(caller, "caller")
     customer_id = _auth.get_stripe_customer_id(user["user_id"])
     if not customer_id:
-        raise HTTPException(status_code=404, detail="No saved payment methods.")
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.PAYMENT_NO_SAVED_METHODS,
+                "No saved payment methods.",
+            ),
+        )
     _stripe_lib.api_key = _STRIPE_SECRET_KEY
     try:
         pm = _stripe_lib.PaymentMethod.retrieve(payment_method_id)
@@ -827,7 +953,14 @@ def delete_billing_payment_method(
         raise HTTPException(status_code=status_code, detail=payload)
     pm_customer = _stripe_obj_get(pm, "customer", None)
     if pm_customer != customer_id:
-        raise HTTPException(status_code=404, detail="Payment method not found.")
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.PAYMENT_METHOD_NOT_FOUND,
+                "Payment method not found.",
+                details={"payment_method_id": payment_method_id},
+            ),
+        )
     try:
         _stripe_lib.PaymentMethod.detach(payment_method_id)
     except Exception as exc:
@@ -1038,7 +1171,13 @@ def pipelines_create(
     _require_scope(caller, "caller")
     name = str(body.get("name") or "").strip()
     if not name:
-        raise HTTPException(status_code=400, detail="name is required.")
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                "name is required.",
+            ),
+        )
     # Accept both canonical {"definition": {"nodes": [...]}} and the shorthand
     # form where nodes are at the body root: {"name": "...", "nodes": [...]}.
     definition = body.get("definition")
@@ -1117,11 +1256,21 @@ def pipelines_get(
     pipeline_row = pipelines.get_pipeline(pipeline_id)
     if pipeline_row is None:
         raise HTTPException(
-            status_code=404, detail=f"Pipeline '{pipeline_id}' not found."
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.PIPELINE_NOT_FOUND,
+                "Pipeline not found.",
+                details={"pipeline_id": pipeline_id},
+            ),
         )
     if not _pipeline_visible_to_caller(caller, pipeline_row):
         raise HTTPException(
-            status_code=404, detail=f"Pipeline '{pipeline_id}' not found."
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.PIPELINE_NOT_FOUND,
+                "Pipeline not found.",
+                details={"pipeline_id": pipeline_id},
+            ),
         )
     return JSONResponse(content=_pipeline_response(pipeline_row))
 
@@ -1144,15 +1293,31 @@ def pipelines_run(
     pipeline_row = pipelines.get_pipeline(pipeline_id)
     if pipeline_row is None:
         raise HTTPException(
-            status_code=404, detail=f"Pipeline '{pipeline_id}' not found."
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.PIPELINE_NOT_FOUND,
+                "Pipeline not found.",
+                details={"pipeline_id": pipeline_id},
+            ),
         )
     if not _pipeline_visible_to_caller(caller, pipeline_row):
         raise HTTPException(
-            status_code=404, detail=f"Pipeline '{pipeline_id}' not found."
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.PIPELINE_NOT_FOUND,
+                "Pipeline not found.",
+                details={"pipeline_id": pipeline_id},
+            ),
         )
     input_payload = body.get("input_payload") or {}
     if not isinstance(input_payload, dict):
-        raise HTTPException(status_code=422, detail="input_payload must be an object.")
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                "input_payload must be an object.",
+            ),
+        )
     caller_wallet = payments.get_or_create_wallet(caller["owner_id"])
     try:
         run_id = pipelines.run_pipeline(
@@ -1181,12 +1346,15 @@ def pipelines_run(
 def _workspace_seal_block_for_run(run: dict) -> dict | None:
     """Build a ``workspace_seal`` response block for a completed pipeline run.
 
-    Bug #7 (2026-05-18): the ``security-audit-sealed`` recipe advertised
-    "sealed under a signed Ed25519 manifest" yet the run response had no
+    Bug #7 (2026-05-18): an auto_workspace recipe advertised "sealed
+    under a signed Ed25519 manifest" yet the run response had no
     manifest field anywhere — callers had to know to chase the workspace_id
     with a separate GET. Return a single object that points at the signed
     manifest endpoint + carries the seal metadata so the "sealed manifest"
-    claim in the recipe description is honored on the response itself.
+    claim in any auto_workspace recipe is honored on the response itself.
+    (The original triggering recipe, ``security-audit-sealed``, was
+    removed in the 2026-05-26 platform-pivot cull; the block is kept
+    because any future auto_workspace recipe inherits this behavior.)
 
     Returns ``None`` when there is no sealed workspace to surface (the run
     doesn't have a workspace, the workspace exists but isn't sealed yet,
@@ -1231,17 +1399,38 @@ def pipelines_run_get_by_id(
     _require_scope(caller, "caller")
     run = pipelines.get_run(run_id)
     if run is None:
-        raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found.")
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.PIPELINE_RUN_NOT_FOUND,
+                "Pipeline run not found.",
+                details={"run_id": run_id},
+            ),
+        )
     pipeline_id = str(run.get("pipeline_id") or "")
     pipeline_row = pipelines.get_pipeline(pipeline_id) if pipeline_id else None
     if pipeline_row is not None and not _pipeline_visible_to_caller(caller, pipeline_row):
-        raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found.")
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.PIPELINE_RUN_NOT_FOUND,
+                "Pipeline run not found.",
+                details={"run_id": run_id},
+            ),
+        )
     if (
         caller.get("type") != "master"
         and caller["owner_id"] != run.get("caller_owner_id")
         and (pipeline_row is None or caller["owner_id"] != pipeline_row.get("owner_id"))
     ):
-        raise HTTPException(status_code=403, detail="Not authorized to view this pipeline run.")
+        raise HTTPException(
+            status_code=403,
+            detail=error_codes.make_error(
+                error_codes.PIPELINE_RUN_FORBIDDEN,
+                "Not authorized to view this pipeline run.",
+                details={"run_id": run_id},
+            ),
+        )
     total_charged_cents = int(run.get("total_charged_cents") or 0)
     return JSONResponse(
         content={
@@ -1289,16 +1478,31 @@ def pipelines_run_get(
     pipeline_row = pipelines.get_pipeline(pipeline_id)
     if pipeline_row is None:
         raise HTTPException(
-            status_code=404, detail=f"Pipeline '{pipeline_id}' not found."
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.PIPELINE_NOT_FOUND,
+                "Pipeline not found.",
+                details={"pipeline_id": pipeline_id},
+            ),
         )
     if not _pipeline_visible_to_caller(caller, pipeline_row):
         raise HTTPException(
-            status_code=404, detail=f"Pipeline '{pipeline_id}' not found."
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.PIPELINE_NOT_FOUND,
+                "Pipeline not found.",
+                details={"pipeline_id": pipeline_id},
+            ),
         )
     run = pipelines.get_run(run_id)
     if run is None or str(run.get("pipeline_id") or "") != pipeline_id:
         raise HTTPException(
-            status_code=404, detail=f"Pipeline run '{run_id}' not found."
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.PIPELINE_RUN_NOT_FOUND,
+                "Pipeline run not found.",
+                details={"run_id": run_id},
+            ),
         )
     if (
         caller.get("type") != "master"
@@ -1306,7 +1510,12 @@ def pipelines_run_get(
         and caller["owner_id"] != pipeline_row.get("owner_id")
     ):
         raise HTTPException(
-            status_code=403, detail="Not authorized to view this pipeline run."
+            status_code=403,
+            detail=error_codes.make_error(
+                error_codes.PIPELINE_RUN_FORBIDDEN,
+                "Not authorized to view this pipeline run.",
+                details={"run_id": run_id},
+            ),
         )
     total_charged_cents = int(run.get("total_charged_cents") or 0)
     return JSONResponse(
@@ -1395,16 +1604,30 @@ def recipes_create(
     _require_scope(caller, "caller")
     name = str((body or {}).get("name") or "").strip()
     if not name:
-        raise HTTPException(status_code=400, detail="'name' is required.")
-    if len(name) > 80:
         raise HTTPException(
-            status_code=400, detail="'name' must be at most 80 characters."
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                "'name' is required.",
+            ),
+        )
+    if len(name) > _RECIPE_NAME_MAX_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                "'name' must be at most 80 characters.",
+                details={"supplied_length": len(name), "max_length": _RECIPE_NAME_MAX_LEN},
+            ),
         )
     definition = (body or {}).get("definition")
     if not isinstance(definition, dict):
         raise HTTPException(
             status_code=422,
-            detail="'definition' must be an object with a 'nodes' array.",
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                "'definition' must be an object with a 'nodes' array.",
+            ),
         )
     description = str((body or {}).get("description") or "").strip()
     try:
@@ -1440,15 +1663,35 @@ def recipes_run(
     _require_scope(caller, "caller")
     pipeline_row = pipelines.get_pipeline(recipe_id)
     if pipeline_row is None:
-        raise HTTPException(status_code=404, detail=f"Recipe '{recipe_id}' not found.")
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.RECIPE_NOT_FOUND,
+                "Recipe not found.",
+                details={"recipe_id": recipe_id},
+            ),
+        )
     owner_id = str(pipeline_row.get("owner_id") or "")
     is_platform = owner_id == recipes.PLATFORM_RECIPES_OWNER_ID
     is_owner = owner_id == caller["owner_id"]
     if not (is_platform or is_owner):
-        raise HTTPException(status_code=404, detail=f"Recipe '{recipe_id}' not found.")
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.RECIPE_NOT_FOUND,
+                "Recipe not found.",
+                details={"recipe_id": recipe_id},
+            ),
+        )
     input_payload = body.get("input_payload") or {}
     if not isinstance(input_payload, dict):
-        raise HTTPException(status_code=422, detail="input_payload must be an object.")
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                "input_payload must be an object.",
+            ),
+        )
 
     # Bug #8+#10 (2026-05-18): accept caller-supplied `workspace_id` at the
     # top of input_payload. Pre-fix this was silently dropped — callers had
@@ -1460,7 +1703,10 @@ def recipes_run(
     if caller_workspace_id is not None and not isinstance(caller_workspace_id, str):
         raise HTTPException(
             status_code=422,
-            detail="input_payload.workspace_id must be a string when provided.",
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                "input_payload.workspace_id must be a string when provided.",
+            ),
         )
 
     # H-4 (audit 2026-05-19): validate caller_input against the recipe's
@@ -1602,7 +1848,14 @@ def spa_fallback(full_path: str, request: Request) -> _SpaFileResponse:
        URL on the client.
     """
     if _path_is_api(full_path):
-        raise HTTPException(status_code=404, detail=f"Not Found: /{full_path}")
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.ROUTE_NOT_FOUND,
+                "Route not found.",
+                details={"path": f"/{full_path}"},
+            ),
+        )
 
     head_segment = full_path.lstrip("/").split("/", 1)[0].lower()
     hint_target = _SPA_API_HINTS.get(head_segment)
@@ -1622,9 +1875,12 @@ def spa_fallback(full_path: str, request: Request) -> _SpaFileResponse:
     if not _FRONTEND_DIST_DIR.is_dir():
         raise HTTPException(
             status_code=404,
-            detail=(
-                "Frontend assets are not available on this server. "
-                "Build the React app (`cd frontend && npm ci && npm run build`) and restart."
+            detail=error_codes.make_error(
+                error_codes.SERVER_FRONTEND_MISSING,
+                (
+                    "Frontend assets are not available on this server. "
+                    "Build the React app (`cd frontend && npm ci && npm run build`) and restart."
+                ),
             ),
         )
 
@@ -1643,5 +1899,8 @@ def spa_fallback(full_path: str, request: Request) -> _SpaFileResponse:
 
     raise HTTPException(
         status_code=404,
-        detail="index.html missing from frontend/dist. Rebuild the frontend and restart.",
+        detail=error_codes.make_error(
+            error_codes.SERVER_FRONTEND_MISSING,
+            "index.html missing from frontend/dist. Rebuild the frontend and restart.",
+        ),
     )

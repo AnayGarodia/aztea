@@ -1637,6 +1637,50 @@ def public_docs_index() -> JSONResponse:
     return JSONResponse({"docs": docs, "count": len(docs)})
 
 
+# Per-replica daily ceiling for the unauthenticated public LLM endpoint
+# (`POST /public/docs/ask`). The existing 20/min/IP rate limit caps single-
+# attacker volume; this ceiling caps the TOTAL across all IPs so a botnet
+# can't burn through the upstream LLM provider's daily account budget. Cap
+# is enforced per process (per replica); the production fleet's effective
+# cap is `AZTEA_PUBLIC_DOCS_ASK_DAILY_CAP × num_replicas`. Reset is at UTC
+# midnight by the next request that observes the date roll over.
+#
+# Override per-deploy via env var AZTEA_PUBLIC_DOCS_ASK_DAILY_CAP=<int>.
+# CSO 2026-05-26 finding #4. Not strictly a vulnerability (rate limit was
+# in place) but the financial-DoS surface was uncapped.
+_PUBLIC_DOCS_ASK_DAILY_CAP_DEFAULT = 5000
+_PUBLIC_DOCS_ASK_COUNTER_LOCK = threading.Lock()
+_PUBLIC_DOCS_ASK_COUNTER_STATE: dict[str, Any] = {"date": None, "count": 0}
+
+
+def _public_docs_ask_daily_cap() -> int:
+    raw = os.environ.get("AZTEA_PUBLIC_DOCS_ASK_DAILY_CAP", "")
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return _PUBLIC_DOCS_ASK_DAILY_CAP_DEFAULT
+    return parsed if parsed > 0 else _PUBLIC_DOCS_ASK_DAILY_CAP_DEFAULT
+
+
+def _public_docs_ask_check_and_increment() -> tuple[bool, int, int]:
+    """Pure-effect: returns (allowed, post_increment_count, cap) for the current UTC date.
+
+    Thread-safe — multi-process replicas each have their own counter.
+    Resets at UTC midnight on the first request that crosses the boundary.
+    """
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    cap = _public_docs_ask_daily_cap()
+    with _PUBLIC_DOCS_ASK_COUNTER_LOCK:
+        if _PUBLIC_DOCS_ASK_COUNTER_STATE["date"] != today:
+            _PUBLIC_DOCS_ASK_COUNTER_STATE["date"] = today
+            _PUBLIC_DOCS_ASK_COUNTER_STATE["count"] = 0
+        current = int(_PUBLIC_DOCS_ASK_COUNTER_STATE["count"])
+        if current >= cap:
+            return False, current, cap
+        _PUBLIC_DOCS_ASK_COUNTER_STATE["count"] = current + 1
+        return True, current + 1, cap
+
+
 @app.post(
     "/public/docs/ask",
     tags=["docs"],
@@ -1650,6 +1694,21 @@ def public_docs_ask(request: Request, body: dict) -> JSONResponse:
     if len(question) > 1000:
         raise HTTPException(
             status_code=400, detail="question must be 1000 characters or fewer."
+        )
+
+    # Defense-in-depth financial DoS guard: the per-IP rate limit caps
+    # single-IP volume, this caps the daily total so a botnet can't drain
+    # the LLM provider account. See _public_docs_ask_check_and_increment.
+    _allowed, _spent, _cap = _public_docs_ask_check_and_increment()
+    if not _allowed:
+        raise HTTPException(
+            status_code=503,
+            detail=error_codes.make_error(
+                "public_docs_ask.daily_cap_reached",
+                f"Daily public Q&A cap of {_cap} reached on this server "
+                "replica. Try again after UTC midnight.",
+                {"cap": _cap, "spent": _spent},
+            ),
         )
 
     doc_slug = str(body.get("doc_slug") or "").strip()
@@ -2435,5 +2494,38 @@ app.include_router(
         require_api_key=_require_api_key,
         require_scope=_require_scope,
         require_admin_ip_allowlist=_require_admin_ip_allowlist,
+    )
+)
+
+
+# Mount the anonymous public-integrations surface (/api/integrations/*).
+# 2026-05-26 platform-pivot wave 1: gives OpenAI Agents SDK / Codex /
+# Gemini Tools integrators a way to discover Aztea agents without an
+# API key. The router lives in ``server/routes/public_integrations.py``.
+# Wired here (not in part_007 next to the private tool endpoints) so
+# part_007 stays under shard line budget and so the public surface has a
+# clean module identity — separate file, separate cache, separate tests.
+app.include_router(
+    _public_integrations_routes.create_router(
+        limiter=limiter,
+        # WHY thunk vs direct reference: _mcp_active_agents is defined in a
+        # sibling shard and resolved through the shared application namespace.
+        # Tests (and any future swap-in) monkeypatch the symbol on
+        # ``server.application``; binding the callable through a lambda forces
+        # the name lookup to happen at call time, so the patched version wins.
+        active_agents_fn=lambda: _mcp_active_agents(),
+    )
+)
+
+
+# Wave 3 browser-playground endpoints (/api/playground/test +
+# /api/playground/publish). Mounted here next to the other public
+# routers so the boot order is obvious. The router itself enforces
+# the AZTEA_PLAYGROUND_ENABLED kill-switch — until that's set the
+# routes 503 with a structured pointer instead of dispatching.
+app.include_router(
+    _playground_routes.create_router(
+        limiter=limiter,
+        optional_api_key=_optional_api_key,
     )
 )

@@ -448,20 +448,21 @@ def test_b11_restore_receipt_uses_chain_tail():
 
 
 # ---------------------------------------------------------------------------
-# D4 — describe_specialist tool description documents cache parameters
-# (ttl_seconds, partition, invalidation trigger).
+# D4 — describe_agent tool description documents cache parameters
+# (ttl_seconds, partition, invalidation trigger). Wave 2 rename: the tool
+# was `describe_specialist` before 2026-05-26.
 # ---------------------------------------------------------------------------
 
 
-def test_d4_describe_specialist_documents_cache_parameters():
-    """describe_specialist description must surface cache_ttl + partition."""
+def test_d4_describe_agent_documents_cache_parameters():
+    """describe_agent description must surface cache_ttl + partition."""
     src = Path("sdks/python-sdk/aztea/mcp/server.py").read_text()
-    idx = src.find('"name": "describe_specialist"')
+    idx = src.find('"name": "describe_agent"')
     assert idx >= 0
     block = src[idx : idx + 6000]
     for marker in ("cache_ttl_seconds", "version_token", "cache_replay"):
         assert marker in block, (
-            f"describe_specialist must document {marker!r} so callers "
+            f"describe_agent must document {marker!r} so callers "
             "know the cache lifetime / partitioning / invalidation rules"
         )
 

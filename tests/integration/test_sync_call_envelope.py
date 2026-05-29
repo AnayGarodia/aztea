@@ -40,10 +40,17 @@ def test_remote_sync_call_returns_job_envelope_and_replays_idempotently(client, 
 
     upstream_calls: list[dict] = []
 
-    def fake_post(url, json=None, headers=None, timeout=None, allow_redirects=None):
+    def fake_post(url, data=None, json=None, headers=None, timeout=None, allow_redirects=None):
         del url, headers, timeout, allow_redirects
-        upstream_calls.append(dict(json or {}))
-        return _FakeResponse({"answer": "ok", "echo": dict(json or {})})
+        # Plan B Phase 1: HMAC-signed dispatch sends bytes via `data=`; the
+        # legacy unsigned path still uses `json=`. Accept either.
+        if data is not None:
+            import json as _json
+            payload = _json.loads(data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else data)
+        else:
+            payload = dict(json or {})
+        upstream_calls.append(payload)
+        return _FakeResponse({"answer": "ok", "echo": payload})
 
     monkeypatch.setattr(server.http, "post", fake_post)
 

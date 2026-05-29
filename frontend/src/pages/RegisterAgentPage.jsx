@@ -7,9 +7,132 @@ import Input from '../ui/Input'
 import Reveal from '../ui/motion/Reveal'
 import { registerAgent } from '../api'
 import { useAuth } from '../context/AuthContext'
-import { CheckCircle, ChevronDown, ChevronUp } from 'lucide-react'
+import { CheckCircle, ChevronDown, ChevronUp, Copy, Check, ShieldCheck } from 'lucide-react'
 import { guardLimits, normalizeTags, validateAgentRegistrationForm } from '../utils/inputGuards'
 import './RegisterAgentPage.css'
+
+// Plan B Phase 1 (2026-05-27): one-time-display widget for the per-agent
+// HMAC signing secret. The server reveals it ONCE in the registration
+// response; this component shows the value, copy button, and an "I've
+// saved this" confirmation. Mirrors Stripe's API key reveal UX.
+function SigningSecretReveal({ secret, note }) {
+  const [copied, setCopied] = useState(false)
+  const [confirmed, setConfirmed] = useState(false)
+  const [hidden, setHidden] = useState(false)
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(secret)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (_err) {
+      // Clipboard API blocked — fall back to manual select instructions.
+      setCopied(false)
+    }
+  }
+
+  if (hidden) {
+    return (
+      <div style={{
+        marginTop: 'var(--sp-4)',
+        padding: 'var(--sp-3) var(--sp-4)',
+        background: 'var(--surface-2)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--r-md)',
+        fontSize: '0.8125rem',
+        color: 'var(--ink-soft)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 'var(--sp-2)',
+      }}>
+        <ShieldCheck size={16} />
+        Signing secret saved. You can rotate it from <Link to="/my-agents" style={{ color: 'var(--accent)' }}>My Agents</Link>.
+      </div>
+    )
+  }
+
+  return (
+    <div style={{
+      marginTop: 'var(--sp-4)',
+      padding: 'var(--sp-4)',
+      background: 'var(--surface-2)',
+      border: '1px solid var(--accent-dim, #e0a73d)',
+      borderLeft: '3px solid var(--accent, #f0b542)',
+      borderRadius: 'var(--r-md)',
+      textAlign: 'left',
+    }}>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 'var(--sp-2)',
+        marginBottom: 'var(--sp-2)',
+        fontSize: '0.875rem',
+        fontWeight: 600,
+        color: 'var(--ink)',
+      }}>
+        <ShieldCheck size={18} />
+        Save this signing secret — shown only once
+      </div>
+      <div style={{
+        fontFamily: 'var(--font-mono, monospace)',
+        fontSize: '0.8125rem',
+        background: 'var(--surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--r-sm)',
+        padding: 'var(--sp-2) var(--sp-3)',
+        wordBreak: 'break-all',
+        userSelect: 'all',
+        marginBottom: 'var(--sp-3)',
+      }}>
+        {secret}
+      </div>
+      {note && (
+        <p style={{
+          fontSize: '0.75rem',
+          color: 'var(--ink-soft)',
+          lineHeight: 1.5,
+          marginBottom: 'var(--sp-3)',
+        }}>
+          {note}
+        </p>
+      )}
+      <div style={{ display: 'flex', gap: 'var(--sp-2)', alignItems: 'center' }}>
+        <Button
+          variant="ghost"
+          size="small"
+          icon={copied ? <Check size={14} /> : <Copy size={14} />}
+          onClick={handleCopy}
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </Button>
+        <label style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--sp-2)',
+          fontSize: '0.8125rem',
+          color: 'var(--ink-soft)',
+          cursor: 'pointer',
+        }}>
+          <input
+            type="checkbox"
+            checked={confirmed}
+            onChange={(e) => setConfirmed(e.target.checked)}
+            style={{ cursor: 'pointer' }}
+          />
+          I've saved this secret
+        </label>
+        <Button
+          variant="primary"
+          size="small"
+          disabled={!confirmed}
+          onClick={() => setHidden(true)}
+        >
+          Hide
+        </Button>
+      </div>
+    </div>
+  )
+}
 
 const REQUIRED_FIELDS = {
   name: '',
@@ -145,6 +268,12 @@ export default function RegisterAgentPage() {
                     Register another
                   </Button>
                 </div>
+                {registered?.endpoint_signing_secret && (
+                  <SigningSecretReveal
+                    secret={registered.endpoint_signing_secret}
+                    note={registered.endpoint_signing_secret_note}
+                  />
+                )}
               </div>
             </Reveal>
           </div>

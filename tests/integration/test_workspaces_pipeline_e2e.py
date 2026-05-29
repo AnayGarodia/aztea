@@ -81,15 +81,22 @@ def test_auto_workspace_recipe_creates_seals_records_outputs(client, monkeypatch
         price=0.10, tags=["ws-recipe"],
     )
 
-    def fake_post(url, json=None, headers=None, timeout=None,
+    def fake_post(url, data=None, json=None, headers=None, timeout=None,
                   allow_redirects=None, stream=False):
         del url, headers, timeout, allow_redirects, stream
-        task = (json or {}).get("task")
+        # Plan B Phase 1: HMAC-signed dispatch sends bytes via `data=`; the
+        # legacy unsigned path still uses `json=`. Accept either.
+        if data is not None:
+            import json as _json
+            payload = _json.loads(data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else data)
+        else:
+            payload = dict(json or {})
+        task = payload.get("task")
         if task is not None:
             return _FakeResponse({"step1_out": f"processed:{task}"})
-        if (json or {}).get("upstream") is not None:
+        if payload.get("upstream") is not None:
             return _FakeResponse({"final": "summary-built"})
-        raise AssertionError(f"unexpected pipeline payload: {json!r}")
+        raise AssertionError(f"unexpected pipeline payload: {payload!r}")
 
     monkeypatch.setattr(pipeline_executor.requests, "post", fake_post)
 

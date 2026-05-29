@@ -15,7 +15,6 @@ from server.builtin_agents.constants import (
     CURATED_PUBLIC_BUILTIN_AGENT_IDS,
     DEPENDENCY_AUDITOR_AGENT_ID,
     DNS_INSPECTOR_AGENT_ID,
-    SECRET_SCANNER_AGENT_ID,
 )
 
 _LOG = logging.getLogger(__name__)
@@ -94,80 +93,11 @@ BUILTIN_RECIPES: list[dict] = [
             ]
         },
     },
-    {
-        "recipe_id": "secret-scan-and-audit",
-        "name": "secret-scan-and-audit",
-        "description": "Scan source for leaked credentials, then audit the dependency manifest for known CVEs.",
-        "default_input_schema": {
-            "type": "object",
-            "properties": {
-                "content": {"type": "string"},
-                "manifest": {"type": "string"},
-            },
-            "required": ["content", "manifest"],
-        },
-        "pipeline_definition": {
-            "nodes": [
-                {
-                    "id": "scan",
-                    "agent_id": SECRET_SCANNER_AGENT_ID,
-                    "input_map": {"content": "$input.content"},
-                },
-                {
-                    "id": "audit",
-                    "agent_id": DEPENDENCY_AUDITOR_AGENT_ID,
-                    "depends_on": ["scan"],
-                    "input_map": {"manifest": "$input.manifest"},
-                },
-            ]
-        },
-    },
-    {
-        "recipe_id": "security-audit-sealed",
-        "name": "security-audit-sealed",
-        "description": (
-            "Secret scan + dependency audit, with every step's output captured "
-            "in a workspace and the whole run sealed under a signed Ed25519 "
-            "manifest. Use this when you need a verifiable audit trail (security "
-            "review, compliance, vendor due diligence)."
-        ),
-        "default_input_schema": {
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "string",
-                    "description": "Source content to scan for leaked credentials.",
-                },
-                "manifest": {
-                    "type": "string",
-                    "description": "Dependency manifest (package.json or requirements.txt) to audit.",
-                },
-            },
-            "required": ["content", "manifest"],
-        },
-        "pipeline_definition": {
-            # Workspaces v0: each step's output is auto-written to the run's
-            # workspace, and the workspace is sealed on completion. Callers get
-            # `workspace_id` in the run-status response; `GET /workspaces/{id}/
-            # manifest` returns the signed evidence and `POST /workspaces/{id}/
-            # verify` is publicly callable (no auth) so an auditor can validate
-            # the seal without a key.
-            "auto_workspace": True,
-            "nodes": [
-                {
-                    "id": "scan",
-                    "agent_id": SECRET_SCANNER_AGENT_ID,
-                    "input_map": {"content": "$input.content"},
-                },
-                {
-                    "id": "audit",
-                    "agent_id": DEPENDENCY_AUDITOR_AGENT_ID,
-                    "depends_on": ["scan"],
-                    "input_map": {"manifest": "$input.manifest"},
-                },
-            ],
-        },
-    },
+    # 2026-05-26: secret-scan-and-audit + security-audit-sealed removed
+    # in the platform-pivot cull. Both fanned out to SECRET_SCANNER (now
+    # sunset). `ensure_builtin_recipes()` below deletes stale recipes
+    # from previous deploys, so any callers still listing these will see
+    # them disappear cleanly. Re-introduce when a curated scanner returns.
     {
         "recipe_id": "domain-health",
         "name": "domain-health",

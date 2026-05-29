@@ -24,8 +24,11 @@ def skills_validate(
 ) -> dict:
     """Dry-run a SKILL.md against the safety scanner + parser.
 
-    Master-only as of 2026-05-17 to stay consistent with POST /skills (public
-    SKILL.md publishing was removed). Aztea-internal tooling still uses this.
+    Master-only. POST /skills was reopened to public callers on 2026-05-26
+    (Wave 3) — non-master publishes land in probation with the same static
+    scan + LLM judge run on the real publish path. /skills/validate stays
+    master-only because the public path already covers the scanner-equivalence
+    contract; the preview is internal tooling.
     """
     _require_scope(caller, "worker")
     if caller["type"] != "master":
@@ -118,29 +121,25 @@ def skills_create(
 ) -> dict:
     """Upload a SKILL.md, register an agent for it, and persist the skill row.
 
-    Restricted to master callers as of 2026-05-17. Public SKILL.md publishing
-    was removed because prompt-only "tools" fail the value test: callers can
-    replicate them with their own LLM. The route remains for Aztea-authored
-    compositions only. Third-party authors should use `aztea publish` with a
-    .py handler or agent.md manifest.
+    History note: this route was restricted to master callers on 2026-05-17
+    (prompt-only "tools" failed the original value test — callers could
+    replicate them with their own LLM). The 2026-05-26 Wave-3 platform pivot
+    reverses that policy. Hosted SKILL.md publishing is the cheapest path
+    from "I have an idea" to "I'm earning per call" for non-infra builders.
+    The security concern is now addressed by two new layers that did not
+    exist in 2026-05-17:
+
+      * ``core/listing_safety.scan_skill_md`` — static prompt-injection
+        / API-key / base64 / internal-path scans (already in place).
+      * ``core/listing_safety_judge.judge_skill_md`` — LLM-driven
+        semantic intent review on every new publish AND every
+        edit-republish (Wave 3 [1]).
+
+    Non-master callers still land in probation (rank-penalised + price-capped
+    until track record graduates them) so the auto-invoke surface stays
+    conservative.
     """
     _require_scope(caller, "worker")
-    if caller["type"] != "master":
-        raise HTTPException(
-            status_code=403,
-            detail=error_codes.make_error(
-                "skills.public_publish_disabled",
-                "SKILL.md hosted-skill publishing is no longer publicly available.",
-                {
-                    "hint": (
-                        "Publish a .py handler or an agent.md manifest with "
-                        "`aztea publish` instead — both pass our value test "
-                        "(real code / real integration). See "
-                        "https://aztea.ai/docs/publishing."
-                    ),
-                },
-            ),
-        )
     payload = body or {}
     raw_md = str(payload.get("skill_md") or "")
     if not raw_md.strip():
@@ -162,7 +161,25 @@ def skills_create(
     # Server-side safety scan. CLI runs the same scanner pre-flight, but the
     # /skills route is reachable directly so we re-enforce here. Any block
     # finding refuses the upload before we even parse the SKILL.md body.
+    #
+    # Two layers, in order:
+    #   1. Static scan (scan_skill_md) — pattern match for prompt-injection,
+    #      embedded API keys, base64 blobs, internal paths.
+    #   2. LLM judge (judge_skill_md) — semantic-intent review for things
+    #      the static scanner can't see (e.g. obvious instructions to leak
+    #      the caller's API key that don't match any pre-canned phrase).
+    #
+    # The judge runs ONLY when the static layer didn't already produce a
+    # BLOCK. This bounds LLM spend: payloads we've already refused don't
+    # pay for an LLM call. /api/playground/test deliberately runs ONLY the
+    # static scanner — the publish path is where the judge earns its keep.
     safety_findings = _listing_safety.scan_skill_md(raw_md)
+    if not _listing_safety.has_block(safety_findings):
+        try:
+            from core.listing_safety_judge import judge_skill_md as _judge_skill_md
+            safety_findings.extend(_judge_skill_md(raw_md))
+        except Exception:  # noqa: BLE001 — judge failure must never block publish
+            _LOG.warning("listing_safety_judge: judge_skill_md raised", exc_info=True)
     if _listing_safety.has_block(safety_findings):
         first_block = next(
             f for f in safety_findings if f.level == _listing_safety.LEVEL_BLOCK

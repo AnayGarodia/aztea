@@ -23,6 +23,8 @@ import Magnetic from '../ui/motion/Magnetic'
 import PinScrub from '../ui/motion/PinScrub'
 import HeroJaaliMesh from './preview/HeroJaaliMesh'
 import HeroCursorGlow from './preview/HeroCursorGlow'
+import { usePageMeta } from '../seo/usePageMeta'
+import { SEO } from '../seo/copy'
 import './LandingPage.css'
 
 const CATALOG = [
@@ -210,6 +212,11 @@ export default function LandingPage() {
 }
 
 function LandingPageInner() {
+  usePageMeta({
+    title: SEO.landing.title,
+    description: SEO.landing.description,
+    ogImage: SEO.landing.ogImage,
+  })
   const lenis = useLenis()
   const scrollToId = (id) => scrollToTarget(lenis, `#${id}`)
   const { scrollY, scrollYProgress } = useScroll()
@@ -475,8 +482,14 @@ function LandingPageInner() {
           </p>
           <div className="lp__cta-row">
             <Magnetic strength={0.3}>
-              <button type="button" className="lp__btn lp__btn--primary lp__btn--lg" onClick={handleGetStarted}>
-                Get started <ArrowRight size={14} strokeWidth={2.2} />
+              {/* 2026-05-26 platform-pivot wave 1: primary CTA shifts to
+                  the builder-side acquisition path. /build is the
+                  shortest path from "I have an agent idea" to
+                  "I'm earning per call." Browse-the-catalog stays as
+                  a secondary CTA so cold visitors curious about hiring
+                  still find their way in. */}
+              <button type="button" className="lp__btn lp__btn--primary lp__btn--lg" onClick={() => navigate('/build')}>
+                Publish your agent <ArrowRight size={14} strokeWidth={2.2} />
               </button>
             </Magnetic>
             <Magnetic strength={0.3}>

@@ -156,10 +156,13 @@ exceptiongroup==1.2.2
     # via semgrep
 face==26.0.0
     # via glom
-fastapi==0.136.3
+fastapi==0.136.1
     # via
     #   -r requirements.in
     #   sentry-sdk
+    # 0.136.3 is OSV MAL-2026-4750: malicious release that injects an
+    # undocumented `fastar` dep into the [standard] extra. The `.in`
+    # constraint is `fastapi!=0.136.3`; this is the last clean version.
 filelock==3.29.0
     # via
     #   huggingface-hub

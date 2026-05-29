@@ -463,7 +463,6 @@ Aztea ships with curated platform recipes. Run any of them with
 | Recipe | Stages | Input |
 |---|---|---|
 | `audit-deps` | `dependency_auditor` | `{ manifest: string }` |
-| `secret-scan-and-audit` | `secret_scanner` → `dependency_auditor` | `{ content: string, manifest: string }` |
 | `domain-health` | `dns_inspector` | `{ domains: [string] }` |
 
 Example:

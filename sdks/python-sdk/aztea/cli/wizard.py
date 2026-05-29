@@ -1,14 +1,21 @@
 """Interactive `aztea publish` wizard.
 
 Drops the user into a guided flow when `aztea publish` is invoked with no
-path argument. Handles the two publishing paths in plain English:
+path argument. Handles three publishing paths in plain English:
 
     1. External webhook (agent.md)      — manifest pointing at your URL
     2. Python handler (.py)             — scaffold + your endpoint URL
+    3. AI-inferred publish               — point at an existing .py handler;
+                                           the platform infers every field
+                                           via core.publish_inference and
+                                           publishes directly (Wave 2)
 
-Generates a starter file in the current working directory, then dispatches
-into the existing `publish` flow so the safety scanner and registration
-logic stay identical to the path-given case.
+Paths 1+2 generate a starter file in the current working directory, then
+dispatch into the existing `publish` flow so the safety scanner and
+registration logic stay identical to the path-given case. Path 3 owns
+its own end-to-end publish (it has all the data it needs after the
+prompt loop) and returns a sentinel that publish.py recognises as
+"already done".
 
 SKILL.md hosted-skill publishing was removed 2026-05-17. The brutal test:
 "can the caller's own LLM trivially replicate this from a prompt?"
@@ -95,8 +102,18 @@ def run_wizard(
         kind = _ask_kind()
         if kind == 1:
             path = _wizard_agent_md()
-        else:
+        elif kind == 2:
             path = _wizard_python_handler()
+        else:
+            # Wave 2 inferred-publish path: handles its own end-to-end POST.
+            # On success it raises typer.Exit(0), so control never returns
+            # here. On user-cancel it raises typer.Exit(130).
+            _wizard_inferred_publish(
+                resolved_base=resolved_base, api_key=saved_key,
+            )
+            raise RuntimeError(
+                "_wizard_inferred_publish must exit; reached unreachable code"
+            )
     except (KeyboardInterrupt, EOFError):
         # Ctrl-C / Ctrl-D mid-wizard: drop the user back to the shell cleanly
         # instead of dumping a traceback. Line-mode readline doesn't deliver
@@ -150,8 +167,13 @@ def _ask_kind() -> int:
                 "Python handler",
                 ".py file with def handler(payload); you host the endpoint",
             ),
+            (
+                "AI-inferred publish",
+                "point at an existing .py — inference fills the metadata, "
+                "then publishes directly",
+            ),
         ],
-        default=1,
+        default=3,
     )
 
 
@@ -361,6 +383,170 @@ def _parse_tags(raw: str) -> list[str]:
     if not raw:
         return []
     return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+# ---------------------------------------------------------------------------
+# Wave 2 — AI-inferred publish path
+# ---------------------------------------------------------------------------
+#
+# Different shape from the agent.md / python-handler scaffolders: those write
+# starter files and let the normal publish pipeline (detect → safety scan →
+# register) take over. The inferred path has all the data it needs after the
+# user accepts/overrides each inferred field, so it does the full publish
+# end-to-end here and raises typer.Exit() on completion. Returning a Path
+# would either (a) re-trigger detection on the user's source — wrong, source
+# is not a manifest — or (b) require synthesizing an agent.md from inference
+# — wasteful round-trip through pipe-and-redirect.
+#
+# Shares the same backend endpoint as the MCP /publish_agent tool
+# (POST /registry/register), so the CLI wizard and the MCP tool produce
+# byte-identical post bodies. The inference + safety code paths are also
+# shared (core.publish_inference, core.listing_safety).
+
+
+def _wizard_inferred_publish(
+    *, resolved_base: str, api_key: str | None,
+) -> None:
+    """End-to-end inferred publish — exits on completion via typer.Exit."""
+    from .output import error  # local import keeps top-of-file clean
+
+    if not api_key:
+        error(
+            "You're not signed in. Run `aztea login` first.",
+            code="wizard.no_api_key",
+        )
+        raise typer.Exit(code=2)
+
+    # Step 1: ask for the handler file.
+    raw_path = _p.ask(
+        "Path to your handler.py",
+        default="handler.py",
+        validator=_handler_path_validator,
+    )
+    handler_path = Path(raw_path).expanduser().resolve()
+    try:
+        handler_source = handler_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        error(
+            f"Could not read {handler_path}: {exc}",
+            code="wizard.unreadable_handler",
+        )
+        raise typer.Exit(code=1)
+
+    # Step 2: run inference. Lazy import so the SDK still imports without core.
+    try:
+        from core.publish_inference import infer
+    except ImportError:
+        error(
+            "core.publish_inference is not importable. Use scripted "
+            "`aztea publish <file> --price ... --endpoint ...` instead.",
+            code="wizard.inference_unavailable",
+        )
+        raise typer.Exit(code=2)
+    spec = infer(handler_source, filename=handler_path.name).to_jsonable()
+
+    # Step 3: prompt for each field — inferred value is the default.
+    console.print()
+    info(
+        "Inferred values below — press Enter to accept, or type to override."
+    )
+    console.print()
+
+    name = _p.ask("Agent name", default=str(spec["name"]))
+    slug = _p.ask("Slug (URL path)", default=str(spec["slug"]))
+    description = _p.ask("Description", default=str(spec["description"]))
+    category = _p.ask("Category", default=str(spec["category"]))
+    price_str = _p.ask(
+        "Price per call (USD)",
+        default=f"{spec['price_per_call_usd']:.2f}",
+        validator=_p.price_validator,
+    )
+    endpoint_url = _p.ask(
+        "Public HTTPS endpoint URL where you host this handler",
+        validator=_p.url_validator,
+    )
+    tags_raw = _p.ask(
+        "Tags (comma-separated)",
+        default=",".join(spec.get("tags") or []),
+        validator=_p.optional,
+    )
+
+    # Step 4: confirm + post.
+    payload = {
+        "name": name.strip(),
+        "slug": slug.strip(),
+        "description": description.strip(),
+        "category": category.strip() or "developer-tools",
+        "price_per_call_usd": float(price_str),
+        "endpoint_url": endpoint_url.strip(),
+        "tags": _parse_tags(tags_raw),
+        "input_schema": spec["input_schema"],
+        "output_schema": spec["output_schema"],
+    }
+
+    console.print()
+    if not _p.confirm("Ready to publish?", default=True):
+        console.print("  [muted]Cancelled; nothing was sent.[/muted]")
+        raise typer.Exit(code=130)
+
+    # Step 5: POST. Reuse the shared SDK Session via requests.
+    import requests as _requests
+    try:
+        resp = _requests.post(
+            f"{resolved_base.rstrip('/')}/registry/register",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=30.0,
+        )
+    except _requests.RequestException as exc:
+        error(
+            f"Could not reach {resolved_base}: {exc}",
+            code="wizard.backend_unreachable",
+        )
+        raise typer.Exit(code=1)
+
+    if 200 <= resp.status_code < 300:
+        try:
+            body = resp.json()
+        except ValueError:
+            body = {}
+        success(
+            f"Published {payload['slug']} — agent_id={body.get('agent_id', '?')}",
+            detail=(
+                f"Review status: {body.get('review_status', 'probation')} · "
+                f"Listed at {resolved_base}/agents/{payload['slug']}"
+            ),
+        )
+        raise typer.Exit(code=0)
+
+    # Failure path — show the backend's error body if present.
+    try:
+        body = resp.json()
+    except ValueError:
+        body = {"http_status": resp.status_code, "body": resp.text[:500]}
+    error(
+        f"Backend rejected the publish (HTTP {resp.status_code}).",
+        detail=json.dumps(body, indent=2)[:800],
+        code="wizard.backend_error",
+    )
+    raise typer.Exit(code=1)
+
+
+def _handler_path_validator(value: str) -> tuple[bool, str]:
+    raw = (value or "").strip()
+    if not raw:
+        return False, "Path is required."
+    path = Path(raw).expanduser()
+    if not path.exists():
+        return False, f"No file at {path}."
+    if path.is_dir():
+        return False, f"{path} is a directory; point at the .py file."
+    if not str(path).endswith(".py"):
+        return False, "Expected a .py file. Inference only handles Python handlers."
+    return True, raw
 
 
 __all__ = ["run_wizard", "remediation_for"]
