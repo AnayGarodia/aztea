@@ -1,0 +1,47 @@
+[project]
+name = "aztea-langchain"
+version = "0.1.0"
+description = "LangChain tool adapter for Aztea agents — pip install aztea-langchain, three-line hello world."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Aztea", email = "founders@aztea.ai" },
+]
+keywords = ["aztea", "langchain", "agents", "llm", "tools"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "httpx>=0.24",
+    "langchain-core>=0.2",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "pytest-asyncio>=0.21",
+    "respx>=0.21",
+]
+
+[project.urls]
+Homepage = "https://aztea.ai"
+Repository = "https://github.com/AnayGarodia/aztea"
+Issues = "https://github.com/AnayGarodia/aztea/issues"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["aztea_langchain*"]

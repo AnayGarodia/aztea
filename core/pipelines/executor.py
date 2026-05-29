@@ -251,21 +251,46 @@ _AGENT_REQUEST_TIMEOUT_S = 120
 _AGENT_STREAM_CHUNK_BYTES = 64 * 1024
 
 
-def _stream_remote_agent_response(safe_url: str, payload: dict) -> dict:
+def _stream_remote_agent_response(
+    safe_url: str,
+    payload: dict,
+    *,
+    signing_secret: str | None = None,
+) -> dict:
     """Side-effect: POST to ``safe_url`` and stream the JSON response under the size cap.
 
     Why: streaming + Content-Length check stops OOM if a downstream agent
     returns a multi-GB body; redirects are disabled because pipelines must
     not silently follow a hijacked Location header.
+
+    Plan B Phase 1 (2026-05-27): when ``signing_secret`` is supplied, the
+    body is serialised once, HMAC-signed, and sent via ``data=`` so the
+    seller can verify the exact bytes they receive. Without a secret the
+    legacy unsigned path runs (back-compat for agents registered before
+    migration 0074).
     """
-    with requests.post(
-        safe_url,
-        json=payload,
-        headers={"Content-Type": "application/json"},
-        timeout=_AGENT_REQUEST_TIMEOUT_S,
-        allow_redirects=False,
-        stream=True,
-    ) as response:
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    request_body: bytes | None = None
+    if signing_secret:
+        request_body = json.dumps(
+            payload, separators=(",", ":"), sort_keys=True,
+        ).encode("utf-8")
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        headers["X-Aztea-Signature"] = crypto.sign_endpoint_request(
+            request_body, signing_secret, timestamp,
+        )
+        headers["X-Aztea-Timestamp"] = timestamp
+    post_kwargs: dict[str, Any] = {
+        "headers": headers,
+        "timeout": _AGENT_REQUEST_TIMEOUT_S,
+        "allow_redirects": False,
+        "stream": True,
+    }
+    if request_body is not None:
+        post_kwargs["data"] = request_body
+    else:
+        post_kwargs["json"] = payload
+    with requests.post(safe_url, **post_kwargs) as response:
         if not response.ok:
             raise RuntimeError(f"Agent endpoint returned HTTP {response.status_code}.")
         declared = response.headers.get("Content-Length")
@@ -297,7 +322,11 @@ def _fetch_agent_output(
     else:
         endpoint_url = str(agent.get("endpoint_url") or "").strip()
         safe_url = url_security.validate_outbound_url(endpoint_url, "endpoint_url")
-        output = _stream_remote_agent_response(safe_url, payload)
+        signing_secret = agent.get("endpoint_signing_secret") if isinstance(agent, dict) else None
+        output = _stream_remote_agent_response(
+            safe_url, payload,
+            signing_secret=signing_secret if isinstance(signing_secret, str) and signing_secret else None,
+        )
     if not isinstance(output, dict):
         output = {"output": output}
     if _output_has_error(output):

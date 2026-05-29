@@ -28,7 +28,11 @@ Design notes:
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
+import secrets
+import time
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
@@ -38,6 +42,15 @@ _PEM = serialization.Encoding.PEM
 _PRIVATE_FMT = serialization.PrivateFormat.PKCS8
 _PUBLIC_FMT = serialization.PublicFormat.SubjectPublicKeyInfo
 _NO_ENC = serialization.NoEncryption()
+
+# Token length for endpoint-signing secrets. 32 bytes from secrets.token_urlsafe
+# yields a 43-character URL-safe base64 string with ~256 bits of entropy.
+_ENDPOINT_SIGNING_SECRET_BYTES = 32
+
+# Replay window for inbound signatures the seller verifies. Five minutes is
+# long enough to absorb clock skew and slow-network retries, short enough that
+# a captured signature can't be replayed indefinitely.
+ENDPOINT_SIGNATURE_MAX_AGE_SECONDS = 300
 
 
 def generate_signing_keypair() -> tuple[str, str]:
@@ -171,3 +184,123 @@ def public_key_to_jwk(public_pem: str) -> dict:
     )
     x_b64url = base64.urlsafe_b64encode(raw_bytes).rstrip(b"=").decode("ascii")
     return {"kty": "OKP", "crv": "Ed25519", "x": x_b64url}
+
+
+# ---------------------------------------------------------------------------
+# Endpoint-signing secrets (Aztea -> seller HMAC)
+# ---------------------------------------------------------------------------
+#
+# Why a separate primitive from the Ed25519 receipt keys above: the receipts
+# go OUTBOUND to buyers who must verify them with the agent's public key
+# (asymmetric). Endpoint requests go OUTBOUND to sellers who verify them with
+# a shared secret they were given at registration (symmetric, HMAC). Sellers
+# can't have private keys we control; shared secrets are the right shape for
+# the wrapper-side verifier in 20 lines of code.
+#
+# The header convention mirrors core/watchers/delivery.py (already shipped for
+# job callbacks): ``X-Aztea-Signature: sha256=<hex>`` over the request body,
+# bound to ``X-Aztea-Timestamp`` so the seller can reject replays past the
+# ``ENDPOINT_SIGNATURE_MAX_AGE_SECONDS`` window.
+
+
+def generate_endpoint_signing_secret() -> str:
+    """Pure: return a fresh URL-safe base64 secret with ~256 bits of entropy.
+
+    Used at agent registration and on rotate. The string is human-copyable,
+    URL-safe, and never contains padding characters.
+    """
+    return secrets.token_urlsafe(_ENDPOINT_SIGNING_SECRET_BYTES)
+
+
+def sign_endpoint_request(body: bytes, secret: str, timestamp: str) -> str:
+    """Pure: compute the ``X-Aztea-Signature`` value for an outbound call.
+
+    The signed string is ``f"{timestamp}.{body_bytes}"`` so a captured
+    signature can't be replayed against a different body OR against the same
+    body at a different time. Returns ``"sha256=<hex>"``.
+
+    Mirror the call-side check in ``verify_endpoint_request`` below.
+    """
+    if not isinstance(body, (bytes, bytearray)):
+        raise TypeError("body must be bytes")
+    if not isinstance(secret, str) or not secret:
+        raise ValueError("secret must be a non-empty string")
+    if not isinstance(timestamp, str) or not timestamp:
+        raise ValueError("timestamp must be a non-empty string")
+    signed_string = timestamp.encode("ascii") + b"." + bytes(body)
+    mac = hmac.new(secret.encode("utf-8"), signed_string, hashlib.sha256).hexdigest()
+    return f"sha256={mac}"
+
+
+def verify_endpoint_request(
+    body: bytes,
+    signature: str,
+    timestamp: str,
+    secret: str,
+    *,
+    max_age_seconds: int = ENDPOINT_SIGNATURE_MAX_AGE_SECONDS,
+    now_epoch: float | None = None,
+) -> None:
+    """Side-effect-free: raise on bad signature, stale timestamp, or wrong shape.
+
+    Symmetric counterpart to :func:`sign_endpoint_request`. Used by the SDK
+    wrapper helper (``sdks/python-sdk/aztea/verify.py``) and by Aztea's own
+    inbound verification on rotation-secret flows.
+
+    Raises ``InvalidSignature`` on any mismatch, including unparseable
+    timestamps. Constant-time compare prevents timing oracles on the HMAC.
+    """
+    if not isinstance(signature, str) or not signature.startswith("sha256="):
+        raise InvalidSignature("signature header missing or wrong format")
+    if not isinstance(timestamp, str) or not timestamp:
+        raise InvalidSignature("timestamp header missing")
+    # Reject stale timestamps before doing HMAC math.
+    try:
+        ts_epoch = _parse_iso_or_epoch(timestamp)
+    except ValueError as exc:
+        raise InvalidSignature(f"timestamp not parseable: {exc}") from exc
+    current = now_epoch if now_epoch is not None else time.time()
+    if abs(current - ts_epoch) > max_age_seconds:
+        raise InvalidSignature(
+            f"timestamp outside +/-{max_age_seconds}s window"
+        )
+    expected = sign_endpoint_request(body, secret, timestamp)
+    if not hmac.compare_digest(expected, signature):
+        raise InvalidSignature("HMAC mismatch")
+
+
+def _parse_iso_or_epoch(timestamp: str) -> float:
+    """Pure: convert an ISO-8601 string or epoch-seconds string to a float.
+
+    Accepts both ``"2026-05-27T20:15:30Z"`` and ``"1748382930"`` so wrappers
+    don't have to standardize on one form. The Aztea sender always emits the
+    ISO form; the dual-parse is defence-in-depth for buggy SDKs.
+    """
+    stripped = timestamp.strip()
+    if not stripped:
+        raise ValueError("empty timestamp")
+    # Epoch-seconds path (digits + optional fractional component).
+    # 2026-05-27 audit fix: reject NaN/Inf — float() accepts "nan"/"inf" and
+    # abs(now - nan) > window evaluates False, silently bypassing the
+    # staleness check. Real timestamps are always finite.
+    try:
+        candidate = float(stripped)
+    except ValueError:
+        pass
+    else:
+        import math
+        if not math.isfinite(candidate):
+            raise ValueError("non-finite timestamp")
+        return candidate
+    # ISO-8601 path. datetime.fromisoformat accepts Z suffix only on Python 3.11+;
+    # the project is on 3.12 (per CLAUDE.md) so this is safe.
+    from datetime import datetime, timezone
+    try:
+        # Replace trailing Z with +00:00 for older fromisoformat behaviour.
+        normalized = stripped[:-1] + "+00:00" if stripped.endswith("Z") else stripped
+        dt = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(str(exc))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()

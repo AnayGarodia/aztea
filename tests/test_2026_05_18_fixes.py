@@ -236,8 +236,13 @@ def test_b4_curated_set_includes_new_agents():
     Why: regex_tester, sbom_generator, pypi_metadata, github_releases were
     in the 2026-05-18 batch but failed the catalog-quality bar (thin
     wrappers / overlapping with existing agents) and were sunsetted on
-    2026-05-20. They remain registered as endpoints so old job IDs resolve,
-    but the curated public set excludes them.
+    2026-05-20.
+
+    2026-05-26 platform-pivot cull: jwt_validator and hcl_terraform_analyzer
+    were ALSO moved to sunset because their value-add (signature decoding,
+    HCL static-analysis) is not a distinctive platform primitive in the
+    revised catalog story. All six remain registered as endpoints so old
+    job IDs resolve; the curated public set excludes them.
     """
     from server.builtin_agents.constants import (
         CURATED_PUBLIC_BUILTIN_AGENT_IDS,
@@ -246,11 +251,11 @@ def test_b4_curated_set_includes_new_agents():
         PYPI_METADATA_AGENT_ID, GITHUB_RELEASES_AGENT_ID,
         HCL_TERRAFORM_ANALYZER_AGENT_ID,
     )
-    for agent_id in (JWT_VALIDATOR_AGENT_ID, HCL_TERRAFORM_ANALYZER_AGENT_ID):
-        assert agent_id in CURATED_PUBLIC_BUILTIN_AGENT_IDS
+    # All six are now sunset (the 2026-05-20 four + the 2026-05-26 two).
     for agent_id in (
-        REGEX_TESTER_AGENT_ID, SBOM_GENERATOR_AGENT_ID,
+        REGEX_TESTER_AGENT_ID, JWT_VALIDATOR_AGENT_ID, SBOM_GENERATOR_AGENT_ID,
         PYPI_METADATA_AGENT_ID, GITHUB_RELEASES_AGENT_ID,
+        HCL_TERRAFORM_ANALYZER_AGENT_ID,
     ):
         assert agent_id in SUNSET_DEPRECATED_AGENT_IDS
         assert agent_id not in CURATED_PUBLIC_BUILTIN_AGENT_IDS

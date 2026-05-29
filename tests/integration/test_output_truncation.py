@@ -41,8 +41,8 @@ def test_sync_call_summary_mode_truncates_and_full_route_returns_original(client
         "items": list(range(80)),
     }
 
-    def fake_post(url, json=None, headers=None, timeout=None, allow_redirects=None):
-        del url, json, headers, timeout, allow_redirects
+    def fake_post(url, data=None, json=None, headers=None, timeout=None, allow_redirects=None):
+        del url, data, json, headers, timeout, allow_redirects
         return _FakeResponse(original_payload)
 
     monkeypatch.setattr(server.http, "post", fake_post)

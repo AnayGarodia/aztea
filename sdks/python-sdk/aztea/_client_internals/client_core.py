@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import threading
 import re
+import threading
 import uuid
+import warnings
 from typing import Any, Iterable, cast
 
 import requests
@@ -20,11 +21,24 @@ from ._helpers import _coerce_model, _coerce_payload, _ensure_object
 from ._polling import poll_job_to_completion
 from ._verify import verify_job as _verify_job_impl
 from .namespaces import (
+    AgentsNamespace,
     AuthNamespace,
     DisputesNamespace,
     RegistryNamespace,
     WalletsNamespace,
 )
+
+# PEP 702 `typing.deprecated` lands in Python 3.13. On 3.9–3.12 we fall back
+# to a no-op decorator (the runtime DeprecationWarning emitted from within
+# the deprecated method still surfaces — this only affects static-analyzer
+# / IDE warnings). /review caught the missing decorator 2026-05-27.
+try:
+    from typing import deprecated as _deprecated_decorator  # type: ignore[attr-defined]
+except ImportError:
+    def _deprecated_decorator(message: str, /):  # type: ignore[misc]
+        def _wrap(fn):
+            return fn
+        return _wrap
 
 
 class AzteaClient:
@@ -89,6 +103,10 @@ class AzteaClient:
         self.registry = RegistryNamespace(self)
         self.jobs = JobsNamespace(self)
         self.disputes = DisputesNamespace(self)
+        # Wave 2 (2026-05-26): high-level surface mirroring the TypeScript SDK
+        # shape (`client.agents.*`). Legacy `client.hire()` delegates here and
+        # emits a DeprecationWarning. See AgentsNamespace.
+        self.agents = AgentsNamespace(self)
 
     def close(self) -> None:
         self._session.close()
@@ -326,6 +344,10 @@ class AzteaClient:
         job = _coerce_model(JobRecord, self.jobs.get_raw(job_id))
         return job.bind_client(self)
 
+    @_deprecated_decorator(
+        "AzteaClient.hire() is deprecated; use client.agents.call() instead. "
+        "Scheduled for removal in the 2.0 release."
+    )
     def hire(
         self,
         agent_id: str,
@@ -345,7 +367,69 @@ class AzteaClient:
         clarification_timeout_policy: str = "fail",
         output_verification_window_seconds: int | None = None,
     ) -> JobResult:
-        """Create a job and (by default) wait for it to reach a terminal state.
+        """Deprecated alias for :meth:`agents.call`.
+
+        Kept indefinitely for backward compatibility with existing code that
+        calls `client.hire(agent_id, payload)`. The Wave 2 (2026-05-26)
+        platform pivot renamed the preferred surface to
+        `client.agents.call(name_or_id, payload)` to align with the TypeScript
+        SDK and remove the "specialist marketplace" framing in favor of the
+        platform identity. Same kwargs, same return, same exception set —
+        only the name changed.
+
+        Emits a `DeprecationWarning` on every call so the call sites surface
+        in tooling; suppress with `warnings.filterwarnings(...)` if you
+        deliberately want to keep using `hire()`.
+        """
+        warnings.warn(
+            "AzteaClient.hire() is deprecated and will be removed in a future "
+            "major release. Use client.agents.call(name_or_id, payload) instead. "
+            "Same signature, same return, same exceptions — only the name changed.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self._call_agent_impl(
+            agent_id,
+            input_payload,
+            verification_contract=verification_contract,
+            wait=wait,
+            timeout_seconds=timeout_seconds,
+            max_attempts=max_attempts,
+            budget_cents=budget_cents,
+            max_price_cents=max_price_cents,
+            callback_url=callback_url,
+            callback_secret=callback_secret,
+            parent_job_id=parent_job_id,
+            parent_cascade_policy=parent_cascade_policy,
+            clarification_timeout_seconds=clarification_timeout_seconds,
+            clarification_timeout_policy=clarification_timeout_policy,
+            output_verification_window_seconds=output_verification_window_seconds,
+        )
+
+    def _call_agent_impl(
+        self,
+        agent_id: str,
+        input_payload: dict[str, Any],
+        *,
+        verification_contract: VerificationContract | dict[str, Any] | None = None,
+        wait: bool = True,
+        timeout_seconds: int = 60,
+        max_attempts: int = 3,
+        budget_cents: int | None = None,
+        max_price_cents: int | None = None,
+        callback_url: str | None = None,
+        callback_secret: str | None = None,
+        parent_job_id: str | None = None,
+        parent_cascade_policy: str = "detach",
+        clarification_timeout_seconds: int | None = None,
+        clarification_timeout_policy: str = "fail",
+        output_verification_window_seconds: int | None = None,
+    ) -> JobResult:
+        """Internal: create a job and (by default) wait for terminal state.
+
+        The real implementation. Public callers go through `agents.call()`
+        (preferred) or `hire()` (deprecated). The deprecation warning sits
+        in `hire()` so `agents.call()` does not retrigger it on every job.
 
         With ``wait=True`` (the default) this polls until the job completes,
         fails, times out, or is stopped — and resolves the corresponding

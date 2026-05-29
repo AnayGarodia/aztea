@@ -1,0 +1,62 @@
+{
+  "category": "security",
+  "confidence": {
+    "category": "keyword_match",
+    "description": "function_docstring",
+    "input_schema": "pydantic_model",
+    "name": "filename",
+    "output_schema": "pydantic_model",
+    "price_per_call_usd": "default",
+    "slug": "derived_from_name",
+    "tags": "derived_from_description"
+  },
+  "description": "Verify the HMAC signature on a Stripe webhook payload.",
+  "input_schema": {
+    "properties": {
+      "body": {
+        "type": "string"
+      },
+      "secret": {
+        "type": "string"
+      },
+      "signature": {
+        "type": "string"
+      },
+      "tolerance_seconds": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "body",
+      "secret",
+      "signature"
+    ],
+    "type": "object"
+  },
+  "missing": [],
+  "name": "Stripe Webhook Validator",
+  "output_schema": {
+    "properties": {
+      "detail": {
+        "type": "string"
+      },
+      "valid": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "detail",
+      "valid"
+    ],
+    "type": "object"
+  },
+  "price_per_call_usd": 0.05,
+  "slug": "stripe-webhook-validator",
+  "tags": [
+    "stripe",
+    "webhook",
+    "hmac",
+    "payload",
+    "signature"
+  ]
+}

@@ -31,6 +31,45 @@ class ErrorResponse(BaseModel):
     details: JSONValue | None = None
 
 
+class BuilderProfileAgentEntry(BaseModel):
+    """One row in the agent list on /registry/builders/{username}.
+
+    Subset of the registry agent shape — only the fields the profile page
+    renders. Aggregator is core.builder_profiles._agent_row_to_dict.
+    """
+    model_config = ConfigDict(extra="allow")
+
+    agent_id: str | None = None
+    slug: str | None = None
+    name: str | None = None
+    description: str | None = None
+    price_per_call_usd: float | None = None
+    category: str | None = None
+    total_calls: int | None = None
+    success_rate: float | None = None
+
+
+class BuilderProfileResponse(BaseModel):
+    """Public builder profile — /registry/builders/{username}.
+
+    The `total_earnings_usd` field is OMITTED (not zeroed) when the
+    builder hasn't opted in via users.profile_visible_earnings; the
+    frontend reads "key missing" as "hide the section". Pydantic
+    `exclude_none=True` semantics align with that contract.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    username: str
+    user_id: str
+    agent_count: int
+    total_calls_served: int
+    average_rating: float | None = None
+    trust_score: float | None = None
+    earnings_visible: bool
+    total_earnings_usd: float | None = None
+    agents: list[BuilderProfileAgentEntry] = []
+
+
 class RateLimitErrorResponse(BaseModel):
     error: Literal["rate_limit_exceeded"]
     retry_after_seconds: int
@@ -63,6 +102,14 @@ class HealthResponse(BaseModel):
     # cache-disabled prod (N15 in the eval) is visible externally rather
     # than a silent wallet-burning regression. None = enabled (default).
     result_cache_disabled_reason: str | None = None
+    # The lightweight /health route (part_001.py) wins FastAPI resolution
+    # and returns a flat {status, db, llm_providers, version} shape. The
+    # heavier system.py route owns the OpenAPI schema (this model) because
+    # the lightweight one is include_in_schema=False. Declare the flat
+    # fields here as optional so SDK consumers typing the lightweight
+    # response against HealthResponse compile cleanly.
+    db: str | None = None
+    llm_providers: list[str] | None = None
 
 
 class ManifestSectionResponse(BaseModel):

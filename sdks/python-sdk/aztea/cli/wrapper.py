@@ -1,0 +1,314 @@
+"""``aztea wrapper init`` — generate a deploy-ready endpoint wrapper.
+
+Plan B Phase 4 (2026-05-27). Turn "I have a LangGraph / CrewAI / MCP /
+custom-Python agent" into a 10-minute deploy by generating a one-file
+FastAPI server that verifies Aztea's HMAC signature, plus a Dockerfile
+and deploy config for Fly.io or Render.
+
+The wrapper is intentionally minimal: 40 lines of Python, one
+``handler(payload)`` function the seller fills in with their agent
+logic. The signature verification + JSON contract + Aztea SDK are
+already wired so the seller can focus on their agent code.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Literal
+
+import typer
+
+app = typer.Typer(help="Scaffold a deploy-ready Aztea endpoint wrapper.")
+
+
+# ---------------------------------------------------------------------------
+# Templates (inline strings — small enough not to need separate files)
+# ---------------------------------------------------------------------------
+
+_PYTHON_SERVER = '''"""Aztea endpoint wrapper — verifies HMAC, dispatches to your handler.
+
+Set AZTEA_ENDPOINT_SIGNING_SECRET in your environment. The value was
+shown to you exactly once when you registered the agent on Aztea (or
+when you rotated the secret); copy it into your deploy platform's
+secret store.
+
+The handler() function below is where you put your agent logic.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Any
+
+from fastapi import FastAPI, HTTPException, Request
+from aztea.verify import InvalidSignature, verify_request
+
+SECRET = os.environ.get("AZTEA_ENDPOINT_SIGNING_SECRET", "")
+if not SECRET:
+    raise RuntimeError(
+        "AZTEA_ENDPOINT_SIGNING_SECRET is required. Copy it from the Aztea "
+        "registration response or rotate via POST /registry/agents/{id}/rotate-secret."
+    )
+
+app = FastAPI(title="My Aztea agent")
+
+
+def handler(payload: dict[str, Any]) -> dict[str, Any]:
+    """Replace this with your agent's logic.
+
+    Arguments:
+        payload: the buyer's input. Shape matches your input_schema.
+
+    Returns:
+        A dict matching your output_schema. Or {"error": {"code": ..., "message": ...}}
+        on a recoverable failure (Aztea will refund the buyer automatically).
+    """
+    # TODO: your agent logic goes here.
+    return {"output": f"Echo: {payload}"}
+
+
+@app.post("/run")
+async def run(request: Request) -> dict[str, Any]:
+    body = await request.body()
+    try:
+        verify_request(
+            body=body,
+            signature=request.headers.get("x-aztea-signature", ""),
+            timestamp=request.headers.get("x-aztea-timestamp", ""),
+            secret=SECRET,
+        )
+    except InvalidSignature as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
+    import json
+    try:
+        envelope = json.loads(body)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="body is not valid JSON")
+    # Short-circuit Aztea's hourly health probe — do NOT invoke handler().
+    # Without this, the sweeper hits your real agent every hour, billing
+    # your LLM/compute cost forever while Aztea pays nothing. The probe
+    # body is exactly ``{"_aztea_health": true}`` (see core/observability.py).
+    if isinstance(envelope, dict) and envelope.get("_aztea_health") is True:
+        return {"status": "ok", "aztea_health_ack": True}
+    # Aztea wraps the buyer payload under "input_payload" in the request.
+    # Adapt if your handler expects a different shape.
+    input_payload = envelope.get("input_payload") if isinstance(envelope, dict) else envelope
+    if not isinstance(input_payload, dict):
+        input_payload = {"raw": envelope}
+    result = handler(input_payload)
+    if not isinstance(result, dict):
+        result = {"output": result}
+    return result
+
+
+@app.get("/healthz")
+def healthz() -> dict[str, str]:
+    return {"status": "ok"}
+'''
+
+_REQUIREMENTS_TXT = """fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+aztea>=1.0.0
+"""
+
+_DOCKERFILE = """FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY server.py .
+EXPOSE 8080
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]
+"""
+
+_FLY_TOML = """app = "my-aztea-agent"
+primary_region = "iad"
+
+[build]
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+
+# Secrets are set via:
+#   fly secrets set AZTEA_ENDPOINT_SIGNING_SECRET=<your-secret>
+"""
+
+_RENDER_YAML = """services:
+  - type: web
+    name: my-aztea-agent
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /healthz
+    envVars:
+      - key: AZTEA_ENDPOINT_SIGNING_SECRET
+        sync: false  # set in Render dashboard
+"""
+
+_README = """# Aztea agent wrapper
+
+Generated by `aztea wrapper init`. This is a deploy-ready FastAPI server
+that verifies Aztea's HMAC signature on every inbound call and
+dispatches the buyer's payload to your `handler()` function.
+
+## Quick start
+
+1. **Fill in `handler()`** in `server.py` with your agent logic.
+2. **Get your signing secret** from the Aztea registration response (or
+   `POST /registry/agents/{id}/rotate-secret`). It's a 43-char URL-safe
+   base64 string starting with random characters.
+3. **Set the env var**: copy the secret into your deploy platform's
+   secret store. Variable name: `AZTEA_ENDPOINT_SIGNING_SECRET`.
+4. **Deploy** — see below for Fly.io / Render / Docker.
+5. **Register the URL** with Aztea via `aztea publish agent.md`.
+
+## Deploy: Fly.io
+
+```bash
+fly launch --no-deploy
+fly secrets set AZTEA_ENDPOINT_SIGNING_SECRET=<paste-here>
+fly deploy
+# Your URL is https://my-aztea-agent.fly.dev/run
+```
+
+## Deploy: Render
+
+1. Push this directory to a GitHub repo.
+2. In Render → New → Web Service → connect the repo.
+3. Set `AZTEA_ENDPOINT_SIGNING_SECRET` in the Environment tab.
+4. Deploy. Your URL is `https://my-aztea-agent.onrender.com/run`.
+
+## Deploy: Docker (any host)
+
+```bash
+docker build -t my-aztea-agent .
+docker run -p 8080:8080 -e AZTEA_ENDPOINT_SIGNING_SECRET=<paste-here> my-aztea-agent
+```
+
+## Register with Aztea
+
+Write a tiny `agent.md`:
+
+```markdown
+---
+name: my-agent
+description: One-line description.
+endpoint_url: https://my-aztea-agent.fly.dev/run
+price_per_call_usd: 0.05
+---
+
+Detailed description, input/output schema, examples.
+```
+
+Then publish:
+
+```bash
+aztea publish agent.md
+```
+
+Aztea will probe your endpoint, run safety scans, and register the listing.
+"""
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+_Lang = Literal["python"]
+_Target = Literal["fly", "render", "docker"]
+
+
+@app.command(name="init", help="Generate a deploy-ready Aztea endpoint wrapper.")
+def init(
+    out_dir: str = typer.Option(
+        ".",
+        "--out-dir",
+        "-o",
+        help="Directory to write the wrapper into. Created if missing.",
+    ),
+    lang: str = typer.Option(
+        "python",
+        "--lang",
+        help="Wrapper language. Only 'python' is supported in this release; "
+             "Node and Go templates are tracked as a follow-on.",
+    ),
+    target: str = typer.Option(
+        "fly",
+        "--target",
+        help="Deploy target. 'fly' generates fly.toml; 'render' generates "
+             "render.yaml; 'docker' generates only Dockerfile.",
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f",
+        help="Overwrite existing files in --out-dir.",
+    ),
+) -> None:
+    """Scaffold a one-file FastAPI wrapper + deploy config for an Aztea agent.
+
+    The generated wrapper verifies Aztea's HMAC signature on every inbound
+    call and dispatches the buyer's payload to a handler() function the
+    seller fills in. Aztea owns auth, billing, retries, reputation; the
+    seller owns the agent logic.
+    """
+    if lang != "python":
+        typer.secho(
+            f"Only 'python' is supported in this release. Got: {lang!r}",
+            fg=typer.colors.RED, err=True,
+        )
+        raise typer.Exit(code=2)
+    if target not in {"fly", "render", "docker"}:
+        typer.secho(
+            f"Unknown target {target!r}. Choose: fly, render, docker.",
+            fg=typer.colors.RED, err=True,
+        )
+        raise typer.Exit(code=2)
+
+    out = Path(out_dir).resolve()
+    out.mkdir(parents=True, exist_ok=True)
+
+    files_to_write: dict[str, str] = {
+        "server.py": _PYTHON_SERVER,
+        "requirements.txt": _REQUIREMENTS_TXT,
+        "Dockerfile": _DOCKERFILE,
+        "README.md": _README,
+    }
+    if target == "fly":
+        files_to_write["fly.toml"] = _FLY_TOML
+    elif target == "render":
+        files_to_write["render.yaml"] = _RENDER_YAML
+
+    written: list[str] = []
+    skipped: list[str] = []
+    for filename, content in files_to_write.items():
+        target_path = out / filename
+        if target_path.exists() and not force:
+            skipped.append(filename)
+            continue
+        target_path.write_text(content)
+        written.append(filename)
+
+    typer.secho("Aztea wrapper scaffolded.", fg=typer.colors.GREEN, bold=True)
+    typer.echo(f"  Out dir: {out}")
+    for f in written:
+        typer.echo(f"    + {f}")
+    for f in skipped:
+        typer.secho(
+            f"    ~ {f} (already exists; pass --force to overwrite)",
+            fg=typer.colors.YELLOW,
+        )
+    typer.echo("")
+    typer.echo("Next steps:")
+    typer.echo("  1. Fill in handler() in server.py with your agent logic.")
+    typer.echo("  2. Deploy (see README.md).")
+    typer.echo("  3. Register with `aztea publish agent.md`.")
+
+
+__all__ = ["app", "init"]

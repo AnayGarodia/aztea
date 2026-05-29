@@ -14,11 +14,11 @@ import pytest
 
 from tests.integration.support import *  # noqa: F403
 
-# Built-in recipes live in ``core/recipes.py``. The brief's reference said
-# "4 recipes" — the actual catalog is 3 (review-and-test was never shipped).
-# Pin the source of truth here so this test fails loudly the day someone
-# adds or removes a built-in.
-_EXPECTED_BUILTIN_SLUGS = {"audit-deps", "secret-scan-and-audit", "domain-health"}
+# Built-in recipes live in ``core/recipes.py``. The 2026-05-26 platform-pivot
+# cull dropped secret-scan-and-audit + security-audit-sealed (both fanned
+# out to the now-sunset secret_scanner agent). Pin the source of truth
+# here so this test fails loudly the day someone adds or removes a built-in.
+_EXPECTED_BUILTIN_SLUGS = {"audit-deps", "domain-health"}
 
 
 def _fetch_recipes(client, raw_api_key: str):

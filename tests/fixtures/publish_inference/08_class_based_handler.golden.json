@@ -1,0 +1,36 @@
+{
+  "category": "developer-tools",
+  "confidence": {
+    "category": "fallback",
+    "description": "module_docstring",
+    "handler_function": "no_function_found",
+    "input_schema": "fallback",
+    "name": "filename",
+    "output_schema": "fallback",
+    "price_per_call_usd": "default",
+    "slug": "derived_from_name",
+    "tags": "derived_from_description"
+  },
+  "description": "Class-based handler \u2014 not currently supported by the inference engine.",
+  "input_schema": {
+    "properties": {},
+    "type": "object"
+  },
+  "missing": [
+    "input_schema",
+    "output_schema"
+  ],
+  "name": "08 Class Based Handler",
+  "output_schema": {
+    "type": "object"
+  },
+  "price_per_call_usd": 0.05,
+  "slug": "08-class-based-handler",
+  "tags": [
+    "based",
+    "class",
+    "handler",
+    "currently",
+    "engine"
+  ]
+}

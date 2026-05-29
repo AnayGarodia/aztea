@@ -170,8 +170,7 @@ manage_workflow({"action": "list_recipes"})
 manage_workflow({"action": "run_recipe", "recipe_slug": "audit-deps", "input_payload": {"manifest": "..."}})
 ```
 
-Current built-in recipes include `audit-deps`, `secret-scan-and-audit`,
-`security-audit-sealed`, and `domain-health`.
+Current built-in recipes: `audit-deps` and `domain-health`.
 
 ## Permission Pre-Authorization
 

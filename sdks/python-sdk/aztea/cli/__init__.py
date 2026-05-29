@@ -167,6 +167,12 @@ app.add_typer(_mcp.app,       name="mcp")
 app.add_typer(_admin.app,     name="admin")
 app.add_typer(_watchers.app,  name="watchers")
 
+# Plan B Phase 4 (2026-05-27): wrapper-template generator for sellers
+# who built their agent in LangGraph/CrewAI/MCP/any-framework and need a
+# minimal FastAPI wrapper to expose it via HTTP for Aztea registration.
+from . import wrapper as _wrapper  # noqa: E402
+app.add_typer(_wrapper.app, name="wrapper")
+
 
 __all__ = ["app"]
 

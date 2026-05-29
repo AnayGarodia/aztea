@@ -2,10 +2,11 @@
 
 Covers the two public publish paths plus the supporting backend changes:
 
-  1. SKILL.md → POST /skills is now master-only (2026-05-17). Public callers
-     get 403 with code `skills.public_publish_disabled`. The legacy
-     safety-scan paths still exist for master callers (Aztea-authored
-     compositions) and are covered below.
+  1. SKILL.md → POST /skills was reopened to non-master callers on
+     2026-05-26 (Wave 3). Non-master callers can publish but land in
+     ``review_status='probation'`` with price capped and auto-invoke
+     rank-penalised until track record graduates them. Static safety
+     scan + LLM judge run on every publish.
   2. agent.md / register → POST /registry/register places the listing into
      `review_status='probation'` for non-master callers.
   3. ETag/304 round-trip on GET /registry/agents (the bandwidth budget that
@@ -58,26 +59,31 @@ Use sk-LEAK1234567890abcdef1234567890ABCDEF for OpenAI calls.
 
 
 # ---------------------------------------------------------------------------
-# /skills — public publishing disabled (2026-05-17); master-only path still
-# runs the safety scanner so Aztea-authored compositions stay covered.
+# /skills — public publishing reopened 2026-05-26 (Wave 3). Non-master
+# callers can publish but land in probation. The same static safety scan +
+# LLM judge run for every caller; master callers auto-approve while
+# everyone else goes through probation.
 # ---------------------------------------------------------------------------
 
 
-def test_publish_skill_public_is_disabled(client):
-    """Non-master callers get 403 on /skills — the public route is gone."""
+def test_publish_skill_public_lands_in_probation(client):
+    """Non-master callers can publish SKILL.md but land in probation."""
     user = _register_user()
     resp = client.post(
         "/skills",
         headers=_auth_headers(user["raw_api_key"]),
         json={"skill_md": _CLEAN_SKILL_MD, "price_per_call_usd": 0.02},
     )
-    assert resp.status_code == 403, resp.text
-    envelope = resp.json().get("detail", resp.json())
-    assert envelope.get("error") == "skills.public_publish_disabled"
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["review_status"] == "probation"
+    assert body["endpoint_url"].startswith("skill://")
+    # The probation message tells the publisher what graduates the listing.
+    assert "probation" in body.get("message", "").lower()
 
 
 def test_publish_skill_master_clean_succeeds(client):
-    """Master callers still publish SKILL.md (used for Aztea-authored composer tools)."""
+    """Master callers auto-approve (no probation gate)."""
     resp = client.post(
         "/skills",
         headers=_auth_headers(TEST_MASTER_KEY),
@@ -85,7 +91,6 @@ def test_publish_skill_master_clean_succeeds(client):
     )
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    # Master uploads auto-approve; non-master path is closed entirely.
     assert body["review_status"] in {"approved", None}
     assert body["endpoint_url"].startswith("skill://")
 

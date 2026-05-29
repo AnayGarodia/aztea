@@ -70,6 +70,14 @@ _PUBLIC_PATH_PREFIXES = (
     # /sitemap.xml is the SEO sitemap — public by definition, mirrors
     # /robots.txt above. Served by part_013.sitemap_xml.
     "/sitemap.xml",
+    # /api/integrations/*-tools.json are the public, anonymous, IP-rate-
+    # limited tool manifests served at /integrations/* (the /api/* prefix
+    # middleware strips the prefix before routing — see the matching
+    # comment in server/routes/public_integrations.py). They MUST stay
+    # callable without an API key so OpenAI Agents SDK / Gemini Tools
+    # integrators can discover Aztea agents.
+    "/integrations/openai-tools.json",
+    "/integrations/gemini-tools.json",
     "/config/public",
     "/public/docs",
     "/docs/oauth2-redirect",
@@ -93,6 +101,12 @@ _PUBLIC_PATH_PREFIXES = (
 _MASTER_KEY_REJECTED_PATH_PREFIXES = (
     "/auth/keys",
     "/ops/platform-stats",
+    # 2026-05-26 wave-1 error envelope audit: /billing/* routes call
+    # _require_user_caller and now return the structured
+    # auth.insufficient_scope envelope (previously bare 403 string).
+    # The master is a server identity, never the buyer-of-record, so
+    # this is the right semantics — explicitly whitelisted here.
+    "/billing/",
 )
 
 # Routes whose path the test rewriter can't safely reach (e.g., requires a

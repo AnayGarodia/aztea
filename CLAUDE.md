@@ -66,7 +66,7 @@ Known gaps that aren't bugs but are worth knowing before you touch the surroundi
 - **Postgres charge race-guard** in `core/payments/base.py` uses `FOR UPDATE` under READ COMMITTED — the comment in `base.py:18` notes phantom-read risk. SQLite path uses `BEGIN IMMEDIATE` and is solid. Stress-test before high-concurrency Postgres prod.
 - **Worker disappearance has no fallback-worker reassign.** If the only worker for an agent dies mid-job, the lease times out and the caller is refunded rather than re-served.
 - **Reconciliation is detect-only.** `POST /ops/payments/reconcile` reports drift; `repair_wallet_balance_cache()` is a separate manual call. No auto-repair.
-- **MCP tool count is CI-checked** (`tests/test_mcp_lazy_tool_surface.py`). Lazy mode currently advertises **10 tools** — the seven product tools (`search_specialists`, `describe_specialist`, `call_specialist`, `do_specialist_task`, `manage_job`, `manage_budget`, `manage_workflow`) plus three observability tools (`aztea_status`, `aztea_inspect`, `aztea_query`) wired in via the admin-only `/admin/usage/*` endpoints. `aztea_call_streaming` and `aztea_steer` were dropped 2026-05-17 for the broken streaming pipeline; their dispatcher now returns `tool_not_supported`.
+- **MCP tool count is CI-checked** (`tests/test_mcp_lazy_tool_surface.py`). Lazy mode currently advertises **11 tools** — the seven product tools (`search_agents`, `describe_agent`, `call_agent`, `auto_call_agent`, `manage_job`, `manage_budget`, `manage_workflow`), three observability tools (`aztea_status`, `aztea_inspect`, `aztea_query`) wired in via the admin-only `/admin/usage/*` endpoints, plus Wave 2's `publish_agent` (consumer-to-supplier conversion path — lives in `sdks/python-sdk/aztea/mcp/publish_tool.py` and composes the `core.publish_inference` engine + `core.listing_safety` scanner + backend `/registry/register` into one call). The four product-tool names were renamed away from the "specialist" framing in Wave 2 (2026-05-26); the legacy names (`search_specialists`, `describe_specialist`, `call_specialist`, `do_specialist_task`) plus the pre-Wave-2 verb-style aliases (`aztea_search`, `aztea_describe`, `aztea_call`, `aztea_do`) all dispatch via `_LAZY_TOOL_NAME_ALIASES` for full back-compat, but only the new names appear in `tools/list`. `aztea_call_streaming` and `aztea_steer` were dropped 2026-05-17 for the broken streaming pipeline; their dispatcher now returns `tool_not_supported`.
 - **SDK contract suite can segfault on Python 3.14 macOS** — run `tests/test_sdk_contract.py` in a separate `pytest` invocation. CI Linux runs it cleanly.
 
 ---
@@ -342,7 +342,7 @@ See `docs/oss-vs-hosted.md` for the full local-vs-hosted matrix.
 ### Built-in agents
 
 - Agent IDs are **deterministic UUID v5** from namespace `6ba7b810-9dad-11d1-80b4-00c04fd430c8` + `aztea.builtin.{slug}`. Constants live in `server/builtin_agents/constants.py` (single source of truth).
-- **Only agents with real tool use go in `CURATED_PUBLIC_BUILTIN_AGENT_IDS`.** LLM wrappers that add no value over a direct chat session must not be in the curated set. Current count: **25 curated public agents** (the 2026-05-20 catalog-quality cull dropped 11 thin-wrapper / overlapping / known-buggy agents; `quant_patch_validator` was then added — see `SUNSET_DEPRECATED_AGENT_IDS` for the dropped list and per-agent reasoning). `SUNSET_DEPRECATED_AGENT_IDS` holds **12 entries** — the 11 culled agents plus `docs_grounder` (sunsetted 2026-05-17). Do not add LLM-only agents.
+- **Only agents that demonstrate a platform primitive go in `CURATED_PUBLIC_BUILTIN_AGENT_IDS`.** The bar is stricter than "real tool" — each curated agent must show off subprocess isolation, live external data, or a specialist headless runtime that third-party builders will want to build on top of. Current count: **10 curated public agents** (the 2026-05-26 platform-pivot cull dropped 17 more agents on top of the 2026-05-20 catalog-quality cull's 11 — see `SUNSET_DEPRECATED_AGENT_IDS` for the full list and per-agent reasoning). `SUNSET_DEPRECATED_AGENT_IDS` now holds **29 entries**. Internal endpoints stay wired so old job IDs and signed receipts continue to resolve; sunset agents remain hireable by direct slug / agent_id. Do not add LLM-only agents.
 - Each new built-in agent needs: module in `agents/`, entry in `BUILTIN_INTERNAL_ENDPOINTS`, spec in `specs_part1.py` or `specs_part2.py`, case in `_execute_builtin_agent()`, and a structured error envelope.
 - **Work examples** are stored via `_record_public_work_example()`. Pass `private_task=True` to skip recording. Ring buffer capped at `_AGENT_WORK_EXAMPLES_MAX`.
 
@@ -352,9 +352,9 @@ See `docs/oss-vs-hosted.md` for the full local-vs-hosted matrix.
 - All manifest keys use `snake_case` (`input_schema`, `output_schema`, `price_per_call_usd`).
 - `/mcp/invoke` authenticates via `auth.verify_agent_api_key` or a caller-scoped user key.
 - The stdio MCP server (`sdks/python-sdk/aztea/mcp/server.py`, also reachable via the `scripts/aztea_mcp_server.py` compat shim) refreshes tools every 60s via the HTTP registry.
-- **Lazy tool surface is ten tools** (verb-first; legacy `aztea_*` names work via dispatch-time aliases): `search_specialists`, `describe_specialist`, `call_specialist`, **`do_specialist_task`** (auto-invoke fast path), three grouped resource dispatchers `manage_job`, `manage_budget`, `manage_workflow`, and three observability tools — `aztea_status` (digest), `aztea_inspect` (entity drill-down), `aztea_query` (pre-canned views). The observability tools require admin scope on the configured key. `aztea_call_streaming` and `aztea_steer` were dropped 2026-05-17 — the 2026-05-17 extensive test report showed RECEIPT_NOT_BUILT (HTTP 425), 12 duplicated "started" partials, and `stop_when` never evaluating real partials. Refunds were honest but UX was misleading. Dispatch still recognises the names and returns `tool_not_supported`; the implementation in `sdks/python-sdk/aztea/mcp/copilot_tools.py` is retained for a future rewrite. The backend mechanics (`/jobs` with `stop_when_predicates`, `/jobs/{id}/messages` with `msg_type="steer"`) still work and are reachable through `manage_job` action verbs. `do_specialist_task` picks the best agent for an intent and runs it under hard cost/confidence/quality gates. All gates live in the backend at `POST /registry/agents/auto-hire` (`server/application_parts/part_012.py`); both MCP server frontends are thin proxies. Decision logic lives in `core/registry/auto_hire.py`; thresholds are env-tunable via `AZTEA_AUTO_INVOKE_*` flags. Alias map: `sdks/python-sdk/aztea/mcp/server.py:_LAZY_TOOL_NAME_ALIASES`.
-- **Output formats**: Both `call_specialist` and `do_specialist_task` accept `output_format` (`json | markdown | github_pr_comment | slack_blocks | text`). Renderer at `core/output_formats.py` dispatches by sniffing well-known output shapes (CodeReview, Linter, TypeChecker, DepAuditor, GitDiffAnalyzer, pipeline) — NOT by `agent_id` — so external agents inherit pretty rendering for free. Renderers must never raise; unknown shapes fall back to a generic JSON code-fence. The canonical `output` dict is left intact; the rendered string lands under `rendered_output` + `rendered_output_format`. Hooked in via `_decorate_with_rendered_output` in `part_008.py`.
-- **Built-in recipes** (`core/recipes.py`): current curated recipes are `audit-deps`, `secret-scan-and-audit`, `security-audit-sealed` (the workspaces-v0 demo: same nodes as `secret-scan-and-audit` but with `auto_workspace: true` so callers get a signed manifest), and `domain-health`. Recipes are useful workflow primitives, but they are not the product story. Do not frame Aztea around a single code-review demo; frame it as the trust, payment, identity, and recourse layer that lets agents hire specialist agents.
+- **Lazy tool surface is ten tools** (Wave 2 verb-first names; both pre-Wave-2 `aztea_*` and Wave-2-legacy `*_specialist*` names dispatch via aliases): `search_agents`, `describe_agent`, `call_agent`, **`auto_call_agent`** (auto-invoke fast path), three grouped resource dispatchers `manage_job`, `manage_budget`, `manage_workflow`, and three observability tools — `aztea_status` (digest), `aztea_inspect` (entity drill-down), `aztea_query` (pre-canned views). The observability tools require admin scope on the configured key. `aztea_call_streaming` and `aztea_steer` were dropped 2026-05-17 — the 2026-05-17 extensive test report showed RECEIPT_NOT_BUILT (HTTP 425), 12 duplicated "started" partials, and `stop_when` never evaluating real partials. Refunds were honest but UX was misleading. Dispatch still recognises the names and returns `tool_not_supported`; the implementation in `sdks/python-sdk/aztea/mcp/copilot_tools.py` is retained for a future rewrite. The backend mechanics (`/jobs` with `stop_when_predicates`, `/jobs/{id}/messages` with `msg_type="steer"`) still work and are reachable through `manage_job` action verbs. `auto_call_agent` picks the best agent for an intent and runs it under hard cost/confidence/quality gates. All gates live in the backend at `POST /registry/agents/auto-hire` (`server/application_parts/part_012.py`); both MCP server frontends are thin proxies. Decision logic lives in `core/registry/auto_hire.py`; thresholds are env-tunable via `AZTEA_AUTO_INVOKE_*` flags. Alias map: `sdks/python-sdk/aztea/mcp/server.py:_LAZY_TOOL_NAME_ALIASES`.
+- **Output formats**: Both `call_agent` and `auto_call_agent` accept `output_format` (`json | markdown | github_pr_comment | slack_blocks | text`). Renderer at `core/output_formats.py` dispatches by sniffing well-known output shapes (CodeReview, Linter, TypeChecker, DepAuditor, GitDiffAnalyzer, pipeline) — NOT by `agent_id` — so external agents inherit pretty rendering for free. Renderers must never raise; unknown shapes fall back to a generic JSON code-fence. The canonical `output` dict is left intact; the rendered string lands under `rendered_output` + `rendered_output_format`. Hooked in via `_decorate_with_rendered_output` in `part_008.py`.
+- **Built-in recipes** (`core/recipes.py`): current curated recipes are `audit-deps` and `domain-health`. The 2026-05-26 platform-pivot cull removed `secret-scan-and-audit` and `security-audit-sealed` (both fanned out to the now-sunset `secret_scanner` agent); `ensure_builtin_recipes` tombstones stale rows so old API listings stop showing them. Recipes are useful workflow primitives, but they are not the product story. Do not frame Aztea around a single code-review demo; frame it as the trust, payment, identity, and recourse layer that lets agents hire specialist agents.
 
 ### Observability surface
 
@@ -620,16 +620,16 @@ Production env vars and Stripe webhook config: see `docs/runbooks/deploy.md`.
 
 ## Public agent IDs
 
-Source of truth: `server/builtin_agents/constants.py`. Curated public set (agents that do real external work) is in `CURATED_PUBLIC_BUILTIN_AGENT_IDS` — currently **25 agents** (the 2026-05-20 catalog-quality cull dropped 11 builtins, then `quant_patch_validator` was added; see `SUNSET_DEPRECATED_AGENT_IDS` for the dropped list and per-agent reasoning). Internal/hidden agents are in the same file. Always read constants directly; do not duplicate IDs anywhere else.
+Source of truth: `server/builtin_agents/constants.py`. Curated public set (agents that demonstrate a unique platform primitive — subprocess isolation, live external data, headless runtimes) is in `CURATED_PUBLIC_BUILTIN_AGENT_IDS` — currently **10 agents** after the 2026-05-26 platform-pivot cull (cve_lookup, dependency_auditor, dns_inspector, python_executor, multi_language_executor, live_sandbox, db_sandbox, browser_agent, lighthouse_auditor, accessibility_auditor). See `SUNSET_DEPRECATED_AGENT_IDS` for the 29 sunset entries and per-agent reasoning. Internal/hidden agents are in the same file. Always read constants directly; do not duplicate IDs anywhere else.
 
 ## Aztea
 
 Aztea is your specialist team for live data, sandboxed execution, and
-audit/validation work. Call `do_specialist_task` instead of guessing.
+audit/validation work. Call `auto_call_agent` instead of guessing.
 Bounded wrong-call cost (up to $0.10, auto-refunded on failure);
 unbounded hallucination cost if you guess from training-cutoff knowledge.
 
-Call `do_specialist_task(intent="…")` when the task involves any of:
+Call `auto_call_agent(intent="…")` when the task involves any of:
 - Live data lookup — CVE / NIST, DNS / SSL, package versions, registry metadata
 - Sandboxed code execution — Python, Node, Deno, Bun, Go, Rust
 - Dependency or security audit — requirements.txt / package.json scans,
@@ -648,7 +648,7 @@ natural-language reasoning the model can answer directly.
 The catalog changes weekly; don't hardcode which agents exist. Single
 call is the canonical shape — the router refuses for free if nothing
 matches. `dry_run=true` is available but rarely worth the round-trip.
-Use `search_specialists` only when the user explicitly asks to compare
+Use `search_agents` only when the user explicitly asks to compare
 options.
 
 # gstack
@@ -704,10 +704,10 @@ escalation:
 
 - For any task beyond reading and editing local files (verifying live data,
   running sandboxed code, scanning, auditing, parallel fanout across many
-  items), default to `do_specialist_task(intent="...")` or
+  items), default to `auto_call_agent(intent="...")` or
   `manage_workflow(action="hire_batch", jobs=[...])`. The catalog changes
   weekly; don't hardcode which agents exist.
 - The default cost cap is $0.10/call. Failures refund automatically.
   Authorization is implicit (the user installed it). Don't ask per call.
-- Use `search_specialists` ONLY when the user asks to compare options.
+- Use `search_agents` ONLY when the user asks to compare options.
   It's free, but it's a round-trip.

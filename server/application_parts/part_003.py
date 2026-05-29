@@ -1143,6 +1143,7 @@ def _run_listing_safety_probe(
     *,
     input_schema: dict | None,
     output_schema: dict | None,
+    output_examples: list | None = None,
 ) -> None:
     """Stage-3 behavioural probe for an external agent endpoint.
 
@@ -1245,6 +1246,58 @@ def _run_listing_safety_probe(
                 response_headers=response_headers,
             )
         )
+
+    # Plan B Phase 3a (2026-05-27): output-example replay. Sellers declare
+    # output_examples (input -> output pairs) at registration to communicate
+    # the contract. Before this pass, Aztea persisted those examples but
+    # never verified them — a seller could publish a CodeReview agent
+    # whose endpoint returns weather forecasts and still get approved.
+    # Replay each declared example: POST the input, compare the actual
+    # response shape to the declared output. WARN on mismatch (publish
+    # still proceeds; the reviewer sees the gap explicitly).
+    if isinstance(output_examples, list) and output_examples:
+        # Cap to first 3 examples — keeps probe latency bounded even when
+        # the seller declared many examples; the first three are the most
+        # buyer-facing on the agent detail page anyway.
+        for example in output_examples[:3]:
+            if not isinstance(example, dict):
+                continue
+            example_input = example.get("input")
+            declared_output = example.get("output")
+            if not isinstance(example_input, dict) or not isinstance(declared_output, dict):
+                continue
+            envelope = {"job_id": f"probe-example-{probe_nonce}", "input_payload": dict(example_input)}
+            try:
+                resp = http.post(
+                    url,
+                    json=envelope,
+                    timeout=_LISTING_SAFETY_PROBE_TIMEOUT,
+                    allow_redirects=False,
+                    headers=headers,
+                    stream=True,
+                )
+            except Exception:  # noqa: BLE001
+                _LOG.debug("output-example replay POST failed (non-fatal)", exc_info=True)
+                continue
+            status = getattr(resp, "status_code", 0)
+            if 500 <= status < 600:
+                continue
+            # 2026-05-27 audit fix: the probe is intentionally unsigned (no
+            # endpoint_signing_secret exists yet — register_agent hasn't
+            # run). A seller using the official wrapper template will
+            # correctly reject this with 401/403. That's NOT a contract
+            # failure — it's evidence the seller is verifying signatures
+            # properly. Skip the shape check in that case.
+            if status in (401, 403):
+                continue
+            actual_body = _read_probe_body(resp)
+            findings.extend(
+                _listing_safety.evaluate_output_example_replay(
+                    example_input=example_input,
+                    declared_output=declared_output,
+                    actual_output=actual_body,
+                )
+            )
 
     block = next(
         (f for f in findings if f.level == _listing_safety.LEVEL_BLOCK),

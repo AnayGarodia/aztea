@@ -1,0 +1,41 @@
+{
+  "category": "developer-tools",
+  "confidence": {
+    "category": "fallback",
+    "description": "module_docstring",
+    "handler_function": "ambiguous_multiple_public_functions",
+    "input_schema": "function_signature",
+    "name": "filename",
+    "output_schema": "return_annotation",
+    "price_per_call_usd": "default",
+    "slug": "derived_from_name",
+    "tags": "derived_from_description"
+  },
+  "description": "Two public functions, no clear `handler`. Expect ambiguity in the spec.",
+  "input_schema": {
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "type": "object"
+  },
+  "missing": [],
+  "name": "Code Inspector",
+  "output_schema": {
+    "additionalProperties": true,
+    "type": "object"
+  },
+  "price_per_call_usd": 0.05,
+  "slug": "code-inspector",
+  "tags": [
+    "ambiguity",
+    "clear",
+    "code",
+    "expect",
+    "functions"
+  ]
+}

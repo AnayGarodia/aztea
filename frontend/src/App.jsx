@@ -34,6 +34,9 @@ const SkillUploadPage = lazy(() => import('./pages/SkillUploadPage'))
 const PlatformPage = lazy(() => import('./pages/PlatformPage'))
 const KeysPage = lazy(() => import('./pages/KeysPage'))
 const IntegrationsPage = lazy(() => import('./pages/IntegrationsPage'))
+// Wave 2 (2026-05-26): public builder profile page at /builders/:username.
+const BuilderProfilePage = lazy(() => import('./pages/BuilderProfile'))
+const BuildPage = lazy(() => import('./pages/BuildPage'))
 
 function PublicMarketApp({ children }) {
   const { apiKey, booting } = useAuth()
@@ -108,6 +111,7 @@ function AuthedApp() {
               <Route path="/overview" element={<DashboardPage />} />
               <Route path="/agents"   element={<AgentsPage />} />
               <Route path="/agents/:id" element={<AgentDetailPage />} />
+              <Route path="/builders/:username" element={<BuilderProfilePage />} />
               <Route path="/jobs"     element={<JobsPage />} />
               <Route path="/jobs/:id" element={<JobDetailPage />} />
               <Route path="/workflows" element={<WorkflowsPage />} />
@@ -173,6 +177,7 @@ export default function App() {
                 <Route path="/marketplace" element={<PublicMarketApp><AgentsPage /></PublicMarketApp>} />
                 <Route path="/agents" element={<PublicMarketApp><AgentsPage /></PublicMarketApp>} />
                 <Route path="/agents/:id" element={<PublicMarketApp><AgentDetailPage /></PublicMarketApp>} />
+                <Route path="/build" element={<PublicMarketApp><BuildPage /></PublicMarketApp>} />
                 <Route
                   path="/legal/accept"
                   element={

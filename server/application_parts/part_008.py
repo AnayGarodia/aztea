@@ -1868,8 +1868,13 @@ def ops_identity_backfill(
 
 @app.post(
     "/admin/agents/{agent_id}/suspend",
-    response_model=core_models.AgentResponse,
+    response_model=core_models.DynamicObjectResponse,
     responses=_error_responses(400, 401, 403, 404, 429, 500),
+    tags=["Admin"],
+    summary=(
+        "Kill switch — immediately suspend an agent, fail and refund every "
+        "in-flight call against it, and emit a structured admin audit log entry."
+    ),
 )
 @limiter.limit("20/minute")
 def admin_agent_suspend(
@@ -1877,13 +1882,62 @@ def admin_agent_suspend(
     agent_id: str,
     body: AgentSuspendRequest = AgentSuspendRequest(),
     caller: core_models.CallerContext = Depends(_require_api_key),
-) -> core_models.AgentResponse:
+) -> core_models.DynamicObjectResponse:
+    """Suspend (kill-switch) the agent.
+
+    Wave 3 platform pivot: the suspend endpoint is now the operator's
+    incident-response button for hosted code execution. It MUST
+    (a) immediately stop new dispatch (set status='suspended'),
+    (b) fail and refund every open job currently routed to the agent
+        — same machinery as the ban endpoint, see `_fail_open_jobs_for_agent`,
+    (c) emit a structured audit-log line so the action is recoverable
+        from prod logs without DB introspection.
+    Unlike `ban`, suspend is reversible: the agent can be returned to
+    'active' by the operator after investigation.
+    """
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
     _require_admin_ip_allowlist(request)
     agent = registry.set_agent_status(agent_id, "suspended", reason=body.reason)
     if agent is None:
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
-    return JSONResponse(content=_agent_response(agent, caller))
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.AGENT_NOT_FOUND,
+                "Agent not found.",
+                details={"agent_id": agent_id},
+            ),
+        )
+    # Refund all open jobs the same way `ban` does. Different status
+    # (suspended vs banned) but identical incident-response semantics:
+    # the operator decided this agent is unsafe right now, so no caller
+    # should be charged for output they will never receive.
+    reason_line = (
+        body.reason
+        if body.reason
+        else "Agent was suspended by an administrator (kill switch)."
+    )
+    summary = _fail_open_jobs_for_agent(
+        agent_id,
+        actor_owner_id=caller["owner_id"],
+        reason=reason_line,
+    )
+    # Structured audit log. Plain Python logger so the line is grep-able
+    # in prod without a new DB table — pattern matches every other
+    # admin-action log in this shard (`admin_agent_ban`, etc.).
+    _LOG.warning(
+        "admin.agent.suspend agent_id=%s actor=%s reason=%r refunded=%d affected=%d",
+        agent_id,
+        caller.get("owner_id"),
+        reason_line[:200],
+        summary.get("refunded_jobs", 0),
+        summary.get("affected_jobs", 0),
+    )
+    return JSONResponse(
+        content={
+            "agent": _agent_response(agent, caller),
+            "kill_switch_summary": summary,
+        }
+    )
 
 
 @app.post(
@@ -2904,12 +2958,27 @@ def registry_call(
     try:
         proxy_agent = dict(agent)
         proxy_agent["endpoint_url"] = safe_endpoint_url
+        # Plan B Phase 1 (2026-05-27): serialize the body ONCE so the HMAC
+        # signature header covers the exact bytes the seller receives. The
+        # canonical (sorted-keys + compact) form means the seller can
+        # re-canonicalise on receipt without an ordering-mismatch flake.
+        # v1.2.0 (#91): dispatch via the pooled outbound session and wrap in
+        # observability segments; the session delegates to monkeypatched
+        # ``requests.post`` so integration mocks keep working.
+        body_bytes = json.dumps(
+            payload, separators=(",", ":"), sort_keys=True,
+        ).encode("utf-8")
         with _observability.time_segment("outbound_http"), \
              _observability.time_segment("dispatch"):
             resp = _outbound_session.post(
                 safe_endpoint_url,
-                json=payload,
-                headers=_proxy_headers_for_agent(proxy_agent),
+                data=body_bytes,
+                headers=_proxy_headers_for_agent(
+                    proxy_agent,
+                    body=body_bytes,
+                    job_id=job["job_id"],
+                    caller_owner_id=caller["owner_id"],
+                ),
                 timeout=120,
                 allow_redirects=False,
             )

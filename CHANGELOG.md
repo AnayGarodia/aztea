@@ -5,6 +5,151 @@ All notable changes to Aztea are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and Aztea follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-05-29
+
+Marketplace hardening release on top of v1.2.1's auto-hire ranker overhaul.
+Two parallel feature branches (Wave 2 + Wave 3) landed first; then a
+four-phase architectural pass made the platform credibly framework-agnostic —
+any developer, any agent stack, can list on Aztea and the platform stands
+behind it on both buyer and seller sides.
+
+PR-93 migrations renumbered to 0072–0076 to sit on top of v1.2.1's
+0067–0071 series.
+
+### Added
+
+- **HMAC signing of every outbound agent call.** Per-agent shared secret
+  surfaced once at registration; sellers verify on inbound. Stops freeloaders
+  from calling endpoints directly without paying.
+- **`aztea.verify` SDK helper** for seller-side signature verification.
+  Drop-in for FastAPI / Hono / any Python HTTP framework.
+- **`aztea wrapper init` CLI subcommand** scaffolds a deploy-ready FastAPI
+  server + Dockerfile + `fly.toml`/`render.yaml` for sellers wrapping
+  LangGraph, CrewAI, MCP, or custom-Python agents. 40-line wrapper template.
+- **`POST /registry/agents/{id}/rotate-secret`** owner-scoped rotation route
+  with one-time-display reveal in the registration response and on MyAgentsPage.
+- **`POST /registry/agents/{id}/verify-domain`** route. Sellers prove they
+  own the endpoint domain via `.well-known/aztea-agent.json` or DNS TXT
+  (`_aztea-agent.<host>`). Earns a "Domain verified" badge on the agent
+  detail page and a +5 auto-hire ranking bonus.
+- **Continuous endpoint health sweeper** (`core/observability.run_endpoint_health_sweep`).
+  Hourly probe with HMAC signature; auto-suspends agents after 3 consecutive
+  failures with `suspension_reason=health_check_failed`.
+- **Output-example replay at probe time.** Sellers' declared `output_examples`
+  are now POSTed to their endpoint at registration; mismatched shape emits a
+  WARN finding. Sellers using the wrapper template correctly return 401 and
+  are not noise-flagged.
+- **jsonschema validation guardrail in `auto_call_agent`.** LLM-extracted
+  payloads are now validated against the agent's `input_schema` BEFORE
+  invocation. Returns `reason='schema_validation_failed'` with actionable
+  error messages instead of silently refunding the buyer.
+- **Claude pin for the auto-hire LLM extractor.** Single-field extraction uses
+  Claude Haiku 4.5 (~$0.0015/decision); multi-field uses Sonnet 4.6
+  (~$0.005/decision). `json_mode=True` stops fence-wrapping. Env-overridable
+  via `AZTEA_AUTO_HIRE_EXTRACTION_MODEL_SINGLE`/`_MULTI`.
+- **Wave 2 features:**
+  - MCP rename `search_specialists` → `search_agents` (+ 3 more) with
+    bidirectional aliases so old MCP clients keep working.
+  - `/publish_agent` MCP tool — consumer-to-supplier conversion path.
+  - `aztea publish` CLI gets an AI-inferred third option (AST-based metadata).
+  - Two new PyPI packages: `aztea-anthropic` (Anthropic Messages + Agents
+    SDK adapter), `aztea-langchain` (LangChain tool adapter).
+  - Python SDK `client.agents.*` namespace (mirrors TS SDK shape).
+  - Public builder profile pages at `/builders/<username>` plus
+    `?owner_id=...` filter on `/agents`.
+  - Four new reference docs: `auth-billing.md`, `rate-limits.md`,
+    `idempotency.md`, `webhooks.md`.
+- **Wave 3 features:**
+  - Browser playground at `/build` with template gallery, "Test in sandbox"
+    button, and one-click publish path.
+  - `POST /api/playground/test` + `POST /api/playground/publish` routes,
+    gated by `AZTEA_PLAYGROUND_ENABLED`.
+  - LLM-based listing-safety judge (`core/listing_safety_judge.py`) layered
+    on top of the static scanner. Env-toggleable via `AZTEA_LISTING_JUDGE`.
+  - Admin kill switch (`POST /admin/agents/{id}/suspend`) with atomic
+    in-flight job refund.
+  - `hosted_execution_log` audit table (migration 0072) with 30-day retention
+    for anonymous playground rows.
+  - Sandbox escape test suite (`tests/security/test_sandbox_escape.py`).
+- **Wave 1 features:**
+  - Catalog cull 27 → 10 curated agents (only those demonstrating a
+    platform primitive stay).
+  - Public anonymous `/api/integrations/openai-tools.json` and
+    `/api/integrations/gemini-tools.json` endpoints.
+  - Error envelope refactor across ~80 routes for consistent
+    `{error: {code, message}}` shape.
+  - SEO meta + per-route page titles.
+  - Stripe Connect 5-state derivation on `/wallet`.
+  - CSV export button on `/my-agents`.
+
+### Changed
+
+- Pre-existing `/skills` publish path **reopened** to non-master callers.
+  Non-master publishes land in `review_status='probation'` (price-capped,
+  rank-penalized) until track record graduates them. Static scanner + LLM
+  judge enforce safety on every public submission.
+- Outbound agent calls now serialize the body once (canonical JSON with
+  sorted keys) and send via `data=` rather than `json=` so the HMAC
+  signature covers the exact bytes the seller receives.
+- `_proxy_headers_for_agent` (`part_002.py`) accepts optional `body`,
+  `job_id`, `caller_owner_id` kwargs and emits `X-Aztea-Signature` +
+  `X-Aztea-Timestamp` headers when a signing secret is present.
+- Built-in recipe list culled to `audit-deps` + `domain-health` only.
+
+### Fixed
+
+- **HIGH severity SSRF** in `core/domain_proof.verify_well_known`:
+  re-validate constructed `.well-known` URL through
+  `core.url_security.validate_outbound_url` before the GET. DNS rebinding
+  between registration and verification can no longer land probes on
+  private IPs.
+- **HIGH severity SSRF** in `core/observability._probe_endpoint_health`:
+  same SSRF re-check before every hourly health probe. Rebinding endpoints
+  now fail-closed and progress toward suspension.
+- **NaN/Inf timestamp bypass** in `core/crypto._parse_iso_or_epoch` and
+  `sdks/python-sdk/aztea/verify`: `float('nan')` previously slipped past
+  `abs(now - ts) > window` silently. Now rejected with `InvalidSignature`.
+- **Wrapper template billing surface**: generated `server.py` now
+  short-circuits Aztea's hourly `{"_aztea_health": true}` probe before
+  invoking the seller's `handler()`. Sellers no longer pay LLM/compute on
+  every health check.
+- **Health-sweep concurrent-pass race**: optimistic-concurrency guard
+  (`UPDATE ... WHERE consecutive_health_failures = <expected>`) on the
+  streak counter. Racing sweepers detect via `rowcount=0` and skip.
+- **Output-example replay false-positives** on hardened sellers: a 401/403
+  response is now treated as "endpoint correctly refused unsigned probe"
+  instead of a contract failure.
+- `frontend/src/pages/WorkspacesPage.jsx`: Button icon prop was passed
+  as a bare component class (`icon={Trash2}`) instead of an element
+  (`icon={<Trash2 size={14} />}`). Caused a runtime React error when
+  Workspaces loaded; aligned with codebase convention.
+- Stale assertions in 3 tests post-Wave-3 (SKILL.md publish path,
+  admin IP allowlist response shape).
+- GitHub Actions in new PyPI publish workflows pinned to commit SHAs
+  rather than floating major tags. Supply-chain hardening on the path
+  that holds PyPI tokens.
+
+### Test infrastructure
+
+- `fake_post()` mocks across 7 integration test files updated to accept
+  the new `data=body_bytes` dispatch kwarg used by HMAC-signed calls.
+- `test_envelope_contract.py` fixture now saves and restores
+  `module.DB_PATH` originals on teardown — direct assignment isn't tracked
+  by `monkeypatch`, so the leak was polluting every later test that
+  touched the registry via the same module global.
+- `HealthResponse` schema gains optional `db: str` and
+  `llm_providers: list[str]` fields so SDK consumers typing the
+  lightweight `/health` route's flat response against `HealthResponse`
+  compile cleanly.
+
+### Migrations (this release)
+
+- `0072_hosted_execution_log.sql` — anonymous-playground audit table
+- `0073_users_profile_visible_earnings.sql` — opt-in earnings on builder profile
+- `0074_agent_endpoint_signing_secret.sql` — per-agent HMAC secret + rotated_at + index
+- `0075_agent_consecutive_health_failures.sql` — health-sweep streak counter
+- `0076_agent_domain_verification.sql` — domain-verified badge + verified_at + method
+
 ## [1.2.1] - 2026-05-29
 
 Auto-hire ranker overhaul. 12 ranker improvements + reflex/eval foundation,

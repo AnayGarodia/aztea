@@ -1,0 +1,116 @@
+/* Wave 2 (2026-05-26): styles for /builders/<username>. Keeps the same
+   typography/spacing tokens as AgentDetailPage so the two pages feel
+   like the same product. */
+
+.bp {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: var(--space-xl, 32px) var(--space-lg, 24px);
+}
+
+.bp-header {
+  margin-bottom: var(--space-xl, 32px);
+}
+
+.bp-header__back a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-muted, #6b7280);
+  text-decoration: none;
+  font-size: 0.875rem;
+}
+
+.bp-header__back a:hover {
+  color: var(--color-fg, #111827);
+}
+
+.bp-header__name {
+  font-size: 2rem;
+  font-weight: 700;
+  margin: var(--space-sm, 12px) 0 var(--space-xs, 4px) 0;
+  letter-spacing: -0.02em;
+}
+
+.bp-header__sub {
+  color: var(--color-muted, #6b7280);
+  font-size: 0.9375rem;
+  margin: 0;
+}
+
+.bp-loading {
+  color: var(--color-muted, #6b7280);
+}
+
+.bp-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-md, 16px);
+  margin-bottom: var(--space-xl, 32px);
+}
+
+.bp-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bp-stat__icon {
+  color: var(--color-accent, #4f46e5);
+  margin-bottom: 4px;
+}
+
+.bp-stat__label {
+  font-size: 0.8125rem;
+  color: var(--color-muted, #6b7280);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.bp-stat__value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.bp-stat__hint {
+  font-size: 0.75rem;
+  color: var(--color-muted, #6b7280);
+}
+
+.bp-section-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: var(--space-lg, 24px) 0 var(--space-md, 16px) 0;
+}
+
+.bp-agents {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md, 16px);
+}
+
+.bp-agent__link {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+.bp-agent__title {
+  font-size: 1.0625rem;
+  font-weight: 600;
+}
+
+.bp-agent__desc {
+  color: var(--color-muted, #6b7280);
+  font-size: 0.9375rem;
+  margin: 4px 0 8px 0;
+}
+
+.bp-agent__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md, 16px);
+  font-size: 0.8125rem;
+  color: var(--color-muted, #6b7280);
+}

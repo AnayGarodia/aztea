@@ -81,3 +81,66 @@ def ensure_agent_signing_keys(
     except Exception:
         _logger.exception("Failed to lazy-provision signing keys for agent %s", agent_id)
         return (None, None, None)
+
+
+# Plan B Phase 1 (2026-05-27): silent backfill of endpoint_signing_secret
+# for every agent registered before migration 0074. The default decision
+# (D1.a) is "silent backfill"; an agent owner discovers the secret next
+# time they hit MyAgentsPage (which calls /registry/agents/{id} and shows
+# the secret if endpoint_signing_secret_rotated_at is missing on the
+# previous read — see frontend MyAgentsPage).
+
+
+def backfill_endpoint_signing_secrets() -> dict[str, int]:
+    """Idempotent: assign endpoint_signing_secret to every agent missing one.
+
+    Skips agents whose endpoint_url uses ``internal://`` or ``skill://``
+    (Aztea-hosted; no outbound HTTP, no HMAC use).
+
+    Returns a small summary dict for log/metrics emission. Never raises.
+    """
+    summary = {"assigned": 0, "skipped_internal": 0, "errors": 0}
+    try:
+        from core import crypto as _crypto
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with _conn() as conn:
+            rows = conn.execute(
+                "SELECT agent_id, endpoint_url FROM agents "
+                "WHERE (endpoint_signing_secret IS NULL OR endpoint_signing_secret = '')",
+            ).fetchall()
+        for row in rows:
+            try:
+                aid = row["agent_id"]
+                endpoint_url = row["endpoint_url"]
+            except (TypeError, KeyError):
+                aid, endpoint_url = row[0], row[1]
+            raw_url = str(endpoint_url or "").strip().lower()
+            if not raw_url or raw_url.startswith(("internal://", "skill://")):
+                summary["skipped_internal"] += 1
+                continue
+            try:
+                secret = _crypto.generate_endpoint_signing_secret()
+                with _conn() as conn:
+                    conn.execute(
+                        "UPDATE agents SET endpoint_signing_secret = %s, "
+                        "endpoint_signing_secret_rotated_at = %s "
+                        "WHERE agent_id = %s AND "
+                        "(endpoint_signing_secret IS NULL OR endpoint_signing_secret = '')",
+                        (secret, now_iso, aid),
+                    )
+                summary["assigned"] += 1
+            except Exception:
+                _logger.exception(
+                    "Failed to backfill endpoint_signing_secret for agent %s", aid,
+                )
+                summary["errors"] += 1
+        if summary["assigned"]:
+            _logger.info(
+                "Backfilled endpoint_signing_secret on %d agent(s); skipped %d Aztea-hosted",
+                summary["assigned"], summary["skipped_internal"],
+            )
+        return summary
+    except Exception:
+        _logger.exception("endpoint_signing_secret backfill aborted")
+        return summary

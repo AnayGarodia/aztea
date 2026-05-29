@@ -12,6 +12,7 @@ Designed to add zero overhead when the metrics table isn't available yet
 from __future__ import annotations
 
 import logging
+import os
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -480,4 +481,233 @@ def run_decision_retention() -> dict[str, int]:
         return summary
     except Exception as exc:  # noqa: BLE001 — must not crash the sweeper
         logger.warning("decision retention failed: %s", exc)
+        return summary
+
+
+# Anonymous playground rows have no billing tie — they accumulate purely
+# as an abuse-investigation aid. 30 days is long enough for incident
+# response (the kill-switch and judge dashboards both look back ≤ 14d)
+# and short enough that an adversary can't build a multi-month fingerprint
+# corpus of probe hashes. Authenticated rows (``caller_owner_id IS NOT NULL``)
+# are kept indefinitely — those tie to a paying customer's audit trail.
+_HOSTED_EXECUTION_LOG_RETENTION_DAYS = 30
+
+
+def _hosted_execution_log_cutoff(now_utc: datetime | None = None) -> str:
+    """Pure: ISO timestamp ``_HOSTED_EXECUTION_LOG_RETENTION_DAYS`` ago."""
+    base = now_utc or datetime.now(timezone.utc)
+    cutoff = base - timedelta(days=_HOSTED_EXECUTION_LOG_RETENTION_DAYS)
+    return cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# Plan B Phase 3b (2026-05-27): continuous endpoint health probe.
+#
+# An agent registered weeks ago can rot — DNS expires, the seller's Fly
+# app shuts down, a key rotates. Without a continuous probe, the rot is
+# only detected at call time, after the buyer paid pre-call charge. The
+# sweeper hits each registered http(s):// endpoint at a low cadence,
+# updates last_health_status, and after AZTEA_HEALTH_SUSPEND_THRESHOLD
+# consecutive failures transitions the agent to suspended so it stops
+# matching for new calls.
+_HEALTH_SUSPEND_THRESHOLD_DEFAULT = 3
+_HEALTH_PROBE_TIMEOUT_SECONDS = 5
+_HEALTH_BATCH_SIZE = 50  # how many agents to probe per sweeper pass
+
+
+def _health_suspend_threshold() -> int:
+    """Pure: env-tunable threshold for consecutive-failure suspension."""
+    raw = os.environ.get("AZTEA_HEALTH_SUSPEND_THRESHOLD", "").strip()
+    try:
+        value = int(raw) if raw else _HEALTH_SUSPEND_THRESHOLD_DEFAULT
+    except ValueError:
+        value = _HEALTH_SUSPEND_THRESHOLD_DEFAULT
+    return max(1, value)
+
+
+def _probe_endpoint_health(endpoint_url: str, signing_secret: str | None) -> bool:
+    """Side-effect: send one lightweight health probe. True on 2xx/3xx/4xx (alive)."""
+    try:
+        import requests
+    except Exception:  # noqa: BLE001
+        return False
+    # 2026-05-27 audit fix (SSRF): re-validate the outbound URL on every
+    # probe. The registration-time check resolved the host then; DNS
+    # rebinding between register and any later sweep would otherwise let
+    # the sweeper hit a private IP / cloud metadata via Aztea's egress
+    # identity with a valid HMAC signature. validate_outbound_url
+    # re-resolves the hostname and refuses if it points anywhere private.
+    try:
+        from core import url_security as _url_security
+        safe_url = _url_security.validate_outbound_url(endpoint_url, "endpoint_url")
+    except ValueError:
+        # An endpoint that newly resolves to a private IP is dead from
+        # Aztea's perspective. Count it as failed so the streak progresses
+        # toward suspension — better to suspend a rebinding endpoint than
+        # to silently keep paying for a half-broken listing.
+        return False
+    except Exception:  # noqa: BLE001 — url_security unimportable in test stubs
+        safe_url = endpoint_url
+    body_bytes = b'{"_aztea_health":true}'
+    headers = {"Content-Type": "application/json", "User-Agent": "Aztea-HealthProbe/1.0"}
+    if signing_secret:
+        try:
+            from core import crypto as _crypto
+            from datetime import datetime as _dt, timezone as _tz
+            ts = _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            headers["X-Aztea-Signature"] = _crypto.sign_endpoint_request(
+                body_bytes, signing_secret, ts,
+            )
+            headers["X-Aztea-Timestamp"] = ts
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        resp = requests.post(
+            safe_url, data=body_bytes, headers=headers,
+            timeout=_HEALTH_PROBE_TIMEOUT_SECONDS, allow_redirects=False,
+        )
+    except Exception:  # noqa: BLE001 — network error / DNS / timeout / SSL
+        return False
+    status = getattr(resp, "status_code", 0)
+    # 5xx = dead. Anything 1xx/2xx/3xx/4xx = endpoint is at least answering;
+    # 4xx is a structured rejection, which is healthier than no response.
+    return 100 <= status < 500
+
+
+def run_endpoint_health_sweep() -> dict[str, int]:
+    """Side-effect: probe up to N registered http(s):// agents and update health state.
+
+    Returns a small summary dict for log emission. Never raises.
+
+    Idempotent: running twice in quick succession is fine; the probe is
+    cheap and the batching loop bounds per-pass cost. Suspended agents
+    are skipped (no point probing a dead listing). Aztea-hosted
+    (internal://, skill://) endpoints are skipped — they're served
+    in-process and can't fail the way an external endpoint can.
+    """
+    summary = {"probed": 0, "healthy": 0, "failed": 0, "suspended": 0}
+    threshold = _health_suspend_threshold()
+    try:
+        conn: _db.DbConnection = _db.get_raw_connection(_db.DB_PATH)
+        rows = conn.execute(
+            """
+            SELECT agent_id, endpoint_url, endpoint_signing_secret,
+                   consecutive_health_failures
+            FROM agents
+            WHERE status = 'active'
+              AND endpoint_url IS NOT NULL
+              AND endpoint_url NOT LIKE 'internal://%'
+              AND endpoint_url NOT LIKE 'skill://%'
+            ORDER BY COALESCE(last_health_check_at, '') ASC
+            LIMIT %s
+            """,
+            (_HEALTH_BATCH_SIZE,),
+        ).fetchall()
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for row in rows:
+            try:
+                aid = row["agent_id"]
+                endpoint_url = row["endpoint_url"]
+                signing_secret = row["endpoint_signing_secret"]
+                streak = int(row["consecutive_health_failures"] or 0)
+            except (TypeError, KeyError):
+                aid, endpoint_url, signing_secret, streak = row[0], row[1], row[2], int(row[3] or 0)
+            alive = _probe_endpoint_health(endpoint_url, signing_secret)
+            summary["probed"] += 1
+            if alive:
+                summary["healthy"] += 1
+                conn.execute(
+                    """
+                    UPDATE agents
+                    SET last_health_status = 'ok',
+                        last_health_check_at = %s,
+                        consecutive_health_failures = 0
+                    WHERE agent_id = %s
+                    """,
+                    (now_iso, aid),
+                )
+            else:
+                summary["failed"] += 1
+                new_streak = streak + 1
+                # 2026-05-27 audit fix: optimistic-concurrency guard. The
+                # SELECT/UPDATE pair has no row lock, so two sweepers
+                # running concurrently could both read streak=2, both
+                # probe, both write streak=3, both flip status=suspended.
+                # The WHERE clause now requires the streak to still
+                # match what we read — racing UPDATEs detect via
+                # rowcount=0 and skip silently. Idempotent outcome,
+                # no double-increment, no race-induced suspension.
+                if new_streak >= threshold:
+                    conn.execute(
+                        """
+                        UPDATE agents
+                        SET last_health_status = 'failed',
+                            last_health_check_at = %s,
+                            consecutive_health_failures = %s,
+                            status = 'suspended',
+                            suspension_reason = 'health_check_failed'
+                        WHERE agent_id = %s
+                          AND status = 'active'
+                          AND consecutive_health_failures = %s
+                        """,
+                        (now_iso, new_streak, aid, streak),
+                    )
+                    summary["suspended"] += 1
+                    logger.warning(
+                        "Agent %s suspended after %d consecutive health failures (endpoint %s)",
+                        aid, new_streak, endpoint_url,
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE agents
+                        SET last_health_status = 'failed',
+                            last_health_check_at = %s,
+                            consecutive_health_failures = %s
+                        WHERE agent_id = %s
+                          AND consecutive_health_failures = %s
+                        """,
+                        (now_iso, new_streak, aid, streak),
+                    )
+        conn.commit()
+        return summary
+    except _db.OperationalError as exc:
+        if "no such table" not in str(exc).lower() and "no such column" not in str(exc).lower():
+            logger.warning("endpoint health sweep failed: %s", exc)
+        return summary
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("endpoint health sweep failed: %s", exc)
+        return summary
+
+
+def run_hosted_execution_log_retention() -> dict[str, int]:
+    """Side-effect: delete anonymous playground rows older than the cutoff.
+
+    Mirrors ``run_decision_retention`` in structure. Only deletes rows
+    where ``caller_owner_id IS NULL`` so authenticated invocations
+    (billing-relevant) stay forever. Never raises.
+    """
+    summary = {"rows_deleted": 0}
+    try:
+        conn: _db.DbConnection = _db.get_raw_connection(_db.DB_PATH)
+        cutoff = _hosted_execution_log_cutoff()
+        result = conn.execute(
+            """
+            DELETE FROM hosted_execution_log
+            WHERE caller_owner_id IS NULL
+              AND created_at < %s
+            """,
+            (cutoff,),
+        )
+        conn.commit()
+        # rowcount is the standard cursor attribute; both SQLite and psycopg2
+        # populate it after DELETE.
+        deleted = getattr(result, "rowcount", 0) or 0
+        summary["rows_deleted"] = int(deleted)
+        return summary
+    except _db.OperationalError as exc:
+        if "no such table" not in str(exc).lower():
+            logger.warning("hosted_execution_log retention failed: %s", exc)
+        return summary
+    except Exception as exc:  # noqa: BLE001 — must not crash the sweeper
+        logger.warning("hosted_execution_log retention failed: %s", exc)
         return summary

@@ -451,6 +451,17 @@ def ensure_builtin_agents_registered() -> None:
             )
 
     registry.backfill_agent_signing_keys(list(managed_ids), now)
+    # Plan B Phase 1 (2026-05-27): silently assign endpoint_signing_secret to
+    # every agent registered before migration 0074. Idempotent: agents that
+    # already have a secret (or are internal:///skill:// hosted) are skipped.
+    try:
+        registry.backfill_endpoint_signing_secrets()
+    except Exception:
+        # Backfill failures must not block startup. The unsigned dispatch
+        # path is still available in core/pipelines/executor.py for any
+        # agent missing a secret, so the platform stays usable while ops
+        # investigates.
+        _LOG.exception("endpoint_signing_secret backfill failed at startup")
 
     # Defensive idempotent re-activation: every agent in the curated public
     # set must have status=active, review_status=approved, internal_only=0.

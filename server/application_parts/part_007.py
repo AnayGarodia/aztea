@@ -177,7 +177,11 @@ def registry_register(
     _require_scope(caller, "worker")
     if caller["type"] == "agent_key":
         raise HTTPException(
-            status_code=403, detail="Agent-scoped keys cannot register new agents."
+            status_code=403,
+            detail=error_codes.make_error(
+                error_codes.REGISTRY_AGENT_KEY_CANNOT_REGISTER,
+                "Agent-scoped keys cannot register new agents.",
+            ),
         )
     _MAX_AGENTS_PER_OWNER = 20
     if caller["type"] != "master":
@@ -222,6 +226,7 @@ def registry_register(
             safe_endpoint_url,
             input_schema=body.input_schema,
             output_schema=body.output_schema,
+            output_examples=body.output_examples,
         )
         safe_healthcheck_url = None
         if body.healthcheck_url:
@@ -311,9 +316,21 @@ def registry_register(
             include_unapproved=True,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.VALIDATION_ERROR,
+                str(e) or "Invalid registry payload.",
+            ),
+        )
     except _db.IntegrityError:
-        raise HTTPException(status_code=409, detail="Agent ID or name already exists.")
+        raise HTTPException(
+            status_code=409,
+            detail=error_codes.make_error(
+                error_codes.REGISTRY_AGENT_DUPLICATE,
+                "Agent ID or name already exists.",
+            ),
+        )
     message = "Agent registered successfully."
     if safe_verifier_url:
         if agent and agent.get("verified"):
@@ -322,15 +339,26 @@ def registry_register(
             message = f"Agent registered; verifier did not approve ({verifier_reason})."
     if (agent or {}).get("review_status") == "pending_review":
         message = "Your agent listing is pending review. You will be notified when it goes live."
-    return JSONResponse(
-        content={
-            "agent_id": agent_id,
-            "message": message,
-            "review_status": (agent or {}).get("review_status"),
-            "agent": _agent_response(agent, caller) if agent else None,
-        },
-        status_code=201,
-    )
+    # Plan B Phase 1 (2026-05-27): surface the HMAC signing secret EXACTLY ONCE
+    # at registration. _agent_response scrubs it from every other read, so this
+    # is the only opportunity for the owner to copy it. Mirrors Stripe's API
+    # key handling.
+    response_body: dict[str, Any] = {
+        "agent_id": agent_id,
+        "message": message,
+        "review_status": (agent or {}).get("review_status"),
+        "agent": _agent_response(agent, caller) if agent else None,
+    }
+    endpoint_signing_secret = (agent or {}).get("endpoint_signing_secret")
+    if endpoint_signing_secret:
+        response_body["endpoint_signing_secret"] = endpoint_signing_secret
+        response_body["endpoint_signing_secret_note"] = (
+            "Save this secret now — it's shown only once. Your endpoint MUST "
+            "verify the X-Aztea-Signature header on every inbound call so a "
+            "leaked URL can't be called without paying. Rotate via "
+            "POST /registry/agents/{agent_id}/rotate-secret."
+        )
+    return JSONResponse(content=response_body, status_code=201)
 
 
 # Cached snapshot of the active-agent list. Keyed by the catalog_broadcast
@@ -725,9 +753,23 @@ def a2a_platform_agent_card(request: Request) -> JSONResponse:
 def a2a_agent_card(agent_id: str, request: Request) -> JSONResponse:
     agent = registry.get_agent_with_reputation(agent_id)
     if agent is None or agent.get("status") == "banned":
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.AGENT_NOT_FOUND,
+                "Agent not found.",
+                details={"agent_id": agent_id},
+            ),
+        )
     if agent.get("internal_only"):
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.AGENT_NOT_FOUND,
+                "Agent not found.",
+                details={"agent_id": agent_id},
+            ),
+        )
     return JSONResponse(
         content=_a2a_agent_card(agent),
         headers={"Content-Type": "application/json"},
@@ -823,13 +865,24 @@ def agent_did_document(agent_id: str, request: Request) -> JSONResponse:
     the agent's public key and verify signed outputs."""
     agent = registry.get_agent(agent_id, include_unapproved=True)
     if agent is None or agent.get("status") == "banned":
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.AGENT_NOT_FOUND,
+                "Agent not found.",
+                details={"agent_id": agent_id},
+            ),
+        )
     public_pem = agent.get("signing_public_key")
     did = agent.get("did")
     if not public_pem or not did:
         raise HTTPException(
             status_code=404,
-            detail=f"Agent '{agent_id}' has no published cryptographic identity yet.",
+            detail=error_codes.make_error(
+                error_codes.AGENT_IDENTITY_NOT_PUBLISHED,
+                "Agent has no published cryptographic identity yet.",
+                details={"agent_id": agent_id},
+            ),
         )
     # Probation agents (vibe-generated, community-published) only publish
     # their DID document once they have a successful call on record. This
@@ -842,9 +895,13 @@ def agent_did_document(agent_id: str, request: Request) -> JSONResponse:
         if successful <= 0:
             raise HTTPException(
                 status_code=404,
-                detail=(
-                    f"Agent '{agent_id}' is on probation; its DID document "
-                    "is published after the first successful paid call."
+                detail=error_codes.make_error(
+                    error_codes.AGENT_IDENTITY_NOT_PUBLISHED,
+                    (
+                        "Agent is on probation; its DID document is published "
+                        "after the first successful paid call."
+                    ),
+                    details={"agent_id": agent_id, "review_status": "probation"},
                 ),
             )
     try:
@@ -854,7 +911,11 @@ def agent_did_document(agent_id: str, request: Request) -> JSONResponse:
     except Exception:
         raise HTTPException(
             status_code=500,
-            detail="Failed to render the agent's public key.",
+            detail=error_codes.make_error(
+                error_codes.AGENT_IDENTITY_RENDER_FAILED,
+                "Failed to render the agent's public key.",
+                details={"agent_id": agent_id},
+            ),
         )
     key_id = f"{did}#key-1"
     # `service[]` carries an Aztea-specific pointer to the human-readable
@@ -946,15 +1007,30 @@ def a2a_tasks_send(
         or agent.get("status") in {"banned"}
     ):
         raise HTTPException(
-            status_code=404, detail=f"Skill (agent) '{body.skill_id}' not found."
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.AGENT_NOT_FOUND,
+                "Skill (agent) not found.",
+                details={"skill_id": body.skill_id},
+            ),
         )
     if agent.get("status") == "suspended":
         raise HTTPException(
-            status_code=503, detail=f"Skill (agent) '{body.skill_id}' is suspended."
+            status_code=503,
+            detail=error_codes.make_error(
+                error_codes.AGENT_SUSPENDED,
+                "Skill (agent) is suspended.",
+                details={"skill_id": body.skill_id},
+            ),
         )
     if agent.get("internal_only"):
         raise HTTPException(
-            status_code=404, detail=f"Skill (agent) '{body.skill_id}' not found."
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.AGENT_NOT_FOUND,
+                "Skill (agent) not found.",
+                details={"skill_id": body.skill_id},
+            ),
         )
 
     price_cents = _usd_to_cents(agent["price_per_call_usd"])
@@ -1061,7 +1137,14 @@ def a2a_tasks_get(
     job = jobs.get_job(task_id)
     # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
     if job is None or not _caller_can_view_job(caller, job):
-        raise HTTPException(status_code=403, detail="Task not found or not authorized.")
+        raise HTTPException(
+            status_code=403,
+            detail=error_codes.make_error(
+                error_codes.JOB_FORBIDDEN,
+                "Task not found or not authorized.",
+                details={"task_id": task_id},
+            ),
+        )
     a2a_status_map = {
         "pending": "submitted",
         "claimed": "working",
@@ -1098,11 +1181,22 @@ def a2a_tasks_cancel(
     job = jobs.get_job(task_id)
     # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
     if job is None or not _caller_can_view_job(caller, job):
-        raise HTTPException(status_code=403, detail="Task not found or not authorized.")
+        raise HTTPException(
+            status_code=403,
+            detail=error_codes.make_error(
+                error_codes.JOB_FORBIDDEN,
+                "Task not found or not authorized.",
+                details={"task_id": task_id},
+            ),
+        )
     if job.get("status") not in {"pending"}:
         raise HTTPException(
             status_code=409,
-            detail=f"Cannot cancel task in status '{job.get('status')}'.",
+            detail=error_codes.make_error(
+                error_codes.JOB_CANCEL_INVALID_STATE,
+                "Cannot cancel task in this status.",
+                details={"task_id": task_id, "status": job.get("status")},
+            ),
         )
     cancelled = jobs.update_job_status(
         task_id, "failed", error_message="Cancelled by caller.", completed=True
@@ -1147,7 +1241,12 @@ def jobs_cancel(
     # is harder when both branches return identical responses.
     if job is None or not _caller_can_view_job(caller, job):
         raise HTTPException(
-            status_code=403, detail="Job not found or not authorized."
+            status_code=403,
+            detail=error_codes.make_error(
+                error_codes.JOB_FORBIDDEN,
+                "Job not found or not authorized.",
+                details={"job_id": job_id},
+            ),
         )
     current_status = str(job.get("status") or "").strip().lower()
     if current_status not in _CANCELLABLE_JOB_STATUSES:
@@ -1415,7 +1514,12 @@ def mcp_invoke(
     agent = lookup.get(body.tool_name)
     if agent is None:
         raise HTTPException(
-            status_code=404, detail=f"Tool '{body.tool_name}' not found."
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.AGENT_NOT_FOUND,
+                "Tool not found.",
+                details={"tool_name": body.tool_name},
+            ),
         )
 
     # Build caller context from the agent key.
@@ -1636,17 +1740,21 @@ def registry_list(
     rank_by: str | None = None,
     include_reputation: bool = True,
     model_provider: str | None = None,
+    owner_id: str | None = None,
     caller: core_models.CallerContext | None = Depends(_optional_api_key),
 ) -> core_models.RegistryAgentsResponse:
     global _agents_list_cache, _agents_list_cache_at
     import time as _time
 
     include_unapproved = caller is not None and _caller_is_admin(caller)
-    # Use cached agent+reputation rows for non-admin, no-filter requests
+    # Use cached agent+reputation rows for non-admin, no-filter requests.
+    # The cache key is the same for every "default browse" page hit, so any
+    # filter-bearing query (tag, model_provider, owner_id) bypasses it.
     use_cache = (
         not include_unapproved
         and tag is None
         and model_provider is None
+        and owner_id is None
         and include_reputation
     )
     now = _time.monotonic()
@@ -1701,6 +1809,19 @@ def registry_list(
             and str(a.get("review_status") or "").strip().lower() != "sunset"
         ]
 
+    # Wave 2 (2026-05-26): owner_id filter for the builder-profile page.
+    # Applied here (post-fetch, post-sunset-filter) rather than as a SQL
+    # WHERE clause because it's a presentation concern, not a query concern,
+    # and owner_id-bearing requests bypass the agents-list cache so the
+    # filter never hits any cached rows. Empty owner_id is treated as "no
+    # filter" — same convention as the other query params.
+    owner_filter = (owner_id or "").strip()
+    if owner_filter:
+        agents = [
+            a for a in agents
+            if str(a.get("owner_id") or "").strip() == owner_filter
+        ]
+
     # Curated-public-set parity: any agent in CURATED_PUBLIC_BUILTIN_AGENT_IDS
     # must surface here, even if the registry seed hasn't run on a fresh
     # deploy or the agents-list cache is stale. The 2026-05-08 power-user
@@ -1716,10 +1837,13 @@ def registry_list(
     # `tag` / `model_provider` filters were applied to the SQL query, so
     # synthesizing builtin rows here would bypass them and silently inflate
     # the response (regression caught by test_quality_rating_and_trust_ranking).
+    # Same logic for owner_id — a builder's profile shows ONLY agents they
+    # actually own; built-in agents are owned by the platform user.
     if (
         not include_unapproved
         and tag is None
         and model_provider is None
+        and not owner_filter
     ):
         present_ids = {str(a.get("agent_id") or "") for a in agents}
         # 1.7.2 — exclude sunset agents from spec-synthesis. Pre-1.7.2 the
@@ -1786,6 +1910,54 @@ def registry_list(
         },
         headers={"ETag": etag_value},
     )
+
+
+# ─── Builder profile (Wave 2, 2026-05-26) ──────────────────────────────────
+#
+# Public endpoint backing /builders/<username> on the frontend. PUBLIC by
+# design — builder profiles are part of the marketplace trust signal, the
+# same way GitHub user pages are. Auth context is optional; the response
+# shape is identical whether the caller is signed in or not.
+#
+# Earnings are gated by users.profile_visible_earnings (migration 0073).
+# The aggregator (core.builder_profiles) omits the field when the flag
+# is 0 so the frontend hides the section entirely rather than showing $0.
+
+@app.get(
+    "/registry/builders/{username}",
+    response_model=core_models.BuilderProfileResponse,
+    response_model_exclude_none=True,
+    responses=_error_responses(404, 429, 500),
+    tags=["Registry"],
+    summary="Public builder profile — aggregate stats for one publisher.",
+)
+# Tighter than `/registry/agents` (60/min) because this endpoint is keyed
+# only on `username` and otherwise public — easy to scrape for username
+# enumeration. /review caught this 2026-05-27 along with the 404-detail
+# leak (we used to echo the requested username in the error context).
+@limiter.limit("10/minute")
+def registry_builder_profile(
+    request: Request,
+    username: str,
+) -> core_models.BuilderProfileResponse:
+    from core import builder_profiles
+
+    try:
+        profile = builder_profiles.build_profile(username)
+    except builder_profiles.BuilderNotFound:
+        # Generic message + no `username` echo in the context — denies an
+        # enumeration attacker the ability to confirm "this username exists"
+        # vs "this username is taken but has no public profile". Both look
+        # the same from the outside now.
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                "builder.unknown_username",
+                "No public builder profile found.",
+                {},
+            ),
+        )
+    return core_models.BuilderProfileResponse(**profile.to_jsonable())
 
 
 @app.get(
@@ -1904,7 +2076,12 @@ def registry_update_agent(
         )
     if updated is None:
         raise HTTPException(
-            status_code=404, detail="Agent not found or you don't own it."
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.AGENT_NOT_FOUND,
+                "Agent not found or you don't own it.",
+                details={"agent_id": agent_id},
+            ),
         )
     bulk_stats = _compute_bulk_agent_stats([agent_id])
     return JSONResponse(
@@ -1929,6 +2106,133 @@ def registry_delist_agent(
     ok = registry.delist_agent(agent_id, caller["owner_id"])
     if not ok:
         raise HTTPException(
-            status_code=404, detail="Agent not found or you don't own it."
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.AGENT_NOT_FOUND,
+                "Agent not found or you don't own it.",
+                details={"agent_id": agent_id},
+            ),
         )
     return JSONResponse(content={"delisted": True, "agent_id": agent_id})
+
+
+@app.post(
+    "/registry/agents/{agent_id}/verify-domain",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 404, 409, 429, 500),
+    tags=["Registry"],
+    summary="Verify ownership of the domain hosting your agent's endpoint.",
+)
+@limiter.limit("5/minute")
+def registry_verify_domain(
+    request: Request,
+    agent_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    """Plan B Phase 3c (2026-05-27): optional domain-ownership badge.
+
+    Tries ``.well-known/aztea-agent.json`` then DNS TXT
+    (``_aztea-agent.<host>``). Either method, once verified, sets
+    ``domain_verified=true`` on the agent and lifts ranking in auto-hire.
+
+    Aztea-hosted agents (``internal://`` / ``skill://``) return 409 —
+    domain verification is for self-hosted endpoints only.
+    """
+    _require_scope(caller, "worker")
+    agent = registry.get_agent(agent_id, include_unapproved=True)
+    if not agent or agent.get("owner_id") != caller["owner_id"]:
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.AGENT_NOT_FOUND,
+                "Agent not found or you don't own it.",
+                details={"agent_id": agent_id},
+            ),
+        )
+    endpoint_url = str(agent.get("endpoint_url") or "")
+    if endpoint_url.startswith(("internal://", "skill://")):
+        raise HTTPException(
+            status_code=409,
+            detail=error_codes.make_error(
+                "registry.domain_verification_not_applicable",
+                "This agent is Aztea-hosted. Domain verification only applies "
+                "to self-hosted http(s):// endpoints.",
+                details={"agent_id": agent_id, "endpoint_url": endpoint_url},
+            ),
+        )
+    from core import domain_proof
+    ok, detail = domain_proof.verify_domain_ownership(
+        endpoint_url=endpoint_url,
+        agent_id=agent_id,
+        owner_id=caller["owner_id"],
+    )
+    if not ok:
+        return JSONResponse(
+            content={"verified": False, "detail": detail},
+            status_code=200,  # 200 — the request succeeded, verification didn't
+        )
+    registry.mark_agent_domain_verified(agent_id, method=detail.get("method") or "unknown")
+    return JSONResponse(content={
+        "verified": True,
+        "method": detail.get("method"),
+        "detail": detail,
+        "note": (
+            "Domain verified. A 'Domain verified' badge will appear on the "
+            "agent detail page and auto-hire ranking will receive a small bonus."
+        ),
+    })
+
+
+@app.post(
+    "/registry/agents/{agent_id}/rotate-secret",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 404, 409, 429, 500),
+    tags=["Registry"],
+    summary="Rotate the agent's HMAC endpoint signing secret.",
+)
+@limiter.limit("10/minute")
+def registry_rotate_endpoint_signing_secret(
+    request: Request,
+    agent_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    """Plan B Phase 1 (2026-05-27): rotate the per-agent shared secret.
+
+    The new secret is returned ONCE in this response — the seller must copy
+    it into their endpoint's verification config before the next inbound
+    call signs with it. Owner-only; the secret is never re-displayable.
+
+    Aztea-hosted agents (``internal://`` / ``skill://`` endpoints) return
+    409 — those never receive outbound HTTP, so an HMAC secret is moot.
+    """
+    _require_scope(caller, "worker")
+    agent = registry.get_agent(agent_id, include_unapproved=True)
+    if not agent or agent.get("owner_id") != caller["owner_id"]:
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.AGENT_NOT_FOUND,
+                "Agent not found or you don't own it.",
+                details={"agent_id": agent_id},
+            ),
+        )
+    new_secret = registry.rotate_endpoint_signing_secret(agent_id)
+    if new_secret is None:
+        raise HTTPException(
+            status_code=409,
+            detail=error_codes.make_error(
+                "registry.endpoint_signing_secret_not_applicable",
+                "This agent is Aztea-hosted (internal:// or skill:// endpoint). "
+                "No outbound HMAC signing is performed, so there's no secret to rotate.",
+                details={"agent_id": agent_id, "endpoint_url": agent.get("endpoint_url")},
+            ),
+        )
+    return JSONResponse(content={
+        "agent_id": agent_id,
+        "endpoint_signing_secret": new_secret,
+        "endpoint_signing_secret_note": (
+            "Save this secret now — it's shown only once. Your endpoint MUST "
+            "verify the X-Aztea-Signature header on every inbound call. "
+            "The previous secret stops working immediately."
+        ),
+    })

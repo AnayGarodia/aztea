@@ -504,12 +504,25 @@ export async function deleteSkill(key, skillId) {
 
 // ── Registry ──────────────────────────────────────────────────────────────────
 
-export async function fetchAgents(key, tag, { rankBy = 'trust' } = {}) {
+export async function fetchAgents(key, tag, { rankBy = 'trust', ownerId } = {}) {
   const params = new URLSearchParams()
   if (tag) params.set('tag', tag)
   if (rankBy) params.set('rank_by', rankBy)
+  // Wave 2 (2026-05-26): owner_id filter powers the builder profile page.
+  // Empty string is treated as "no filter" — same convention as tag/rankBy.
+  if (ownerId) params.set('owner_id', ownerId)
   const suffix = params.toString() ? `?${params.toString()}` : ''
   const { body } = await request(`/registry/agents${suffix}`, { key })
+  return body
+}
+
+// Wave 2 (2026-05-26): public builder profile lookup. PUBLIC — no API
+// key required. Backed by GET /registry/builders/{username}; the route
+// aggregates agent count, total calls, average rating, trust score, and
+// (only when the builder opted in) total earnings.
+export async function fetchBuilder(username) {
+  if (!username) throw new Error('username is required')
+  const { body } = await request(`/registry/builders/${encodeURIComponent(username)}`)
   return body
 }
 
@@ -539,6 +552,17 @@ export async function updateAgent(key, agentId, data) {
 export async function delistAgent(key, agentId) {
   const { body } = await request(`/registry/agents/${agentId}`, {
     method: 'DELETE',
+    key,
+  })
+  return body
+}
+
+// Plan B Phase 1 (2026-05-27): rotate the per-agent HMAC signing secret.
+// The new value is returned ONCE in the response body. Caller must surface
+// it to the owner immediately — the secret cannot be re-displayed.
+export async function rotateAgentEndpointSecret(key, agentId) {
+  const { body } = await request(`/registry/agents/${agentId}/rotate-secret`, {
+    method: 'POST',
     key,
   })
   return body
@@ -1047,4 +1071,45 @@ export async function deleteWorkspace(key, workspaceId) {
     key,
     method: 'DELETE',
   })
+}
+
+
+// ── Browser playground (Wave 3) ───────────────────────────────────────────────
+
+// Run a buyer-supplied handler in the sandbox. Anonymous-callable —
+// `key` is optional. Returns { execution_id, exit_code, timed_out,
+// stdout, stderr, execution_time_ms, error }. The server enforces a
+// 5/minute IP-rate-limit + listing-safety scan before the sandbox spawns.
+export async function playgroundTest({ key, source, inputPayload, timeoutS = 5 }) {
+  const { body } = await request('/api/playground/test', {
+    method: 'POST',
+    key,
+    body: {
+      source,
+      input_payload: inputPayload ?? {},
+      timeout_s: timeoutS,
+    },
+    throwOnError: false,
+  })
+  return body
+}
+
+// Publish a SKILL.md as a hosted agent. Requires worker scope. The
+// playground endpoint 308-redirects to /skills which carries the full
+// publish pipeline (listing-safety + LLM judge + agent registration).
+export async function playgroundPublish({ key, skillMd, pricePerCallUsd, extra = {} }) {
+  // The 308 redirect from /api/playground/publish → /skills is honored
+  // by fetch() automatically. The browser preserves the method + body
+  // per RFC 7538.
+  const { body } = await request('/skills', {
+    method: 'POST',
+    key,
+    body: {
+      skill_md: skillMd,
+      price_per_call_usd: pricePerCallUsd,
+      ...extra,
+    },
+    throwOnError: false,
+  })
+  return body
 }

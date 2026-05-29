@@ -26,11 +26,14 @@ from tests.integration.support import (
 # ---------------------------------------------------------------------------
 # SKILL.md content parity across /skills and /skills/validate
 #
-# 2026-05-17: public SKILL.md publishing was removed. Both /skills and
-# /skills/validate are now master-only. Parity tests run as master to keep
-# the scanner-equivalence coverage in place for Aztea-authored compositions.
-# Non-master callers are covered by test_publish_skill_public_is_disabled
-# in test_publish_flow.py.
+# 2026-05-26 (Wave 3): POST /skills was reopened to non-master callers —
+# they can publish but land in ``review_status='probation'`` with price
+# capped and auto-invoke rank-penalised until track record graduates them.
+# POST /skills/validate remains master-only (it's an internal preview tool;
+# the public publish path runs the same scanner so there's no parity gap).
+# Parity tests run as master to exercise the full scanner-equivalence
+# coverage; the non-master probation publish path is covered in
+# test_publish_flow.py.
 # ---------------------------------------------------------------------------
 
 
@@ -91,22 +94,25 @@ def test_skill_validate_passes_clean_content(client):
 
 
 # ---------------------------------------------------------------------------
-# Public route is closed: 2026-05-17 — non-master callers can't publish
-# SKILL.md at all. Pinned here so a future "accidentally re-open the route"
-# regression catches us.
+# POST /skills (publish): reopened to non-master callers 2026-05-26 (Wave 3).
+# Non-master publishes land in probation. /skills/validate is still
+# master-only — the public path runs the same scanner so there's no
+# preview gap to close.
 # ---------------------------------------------------------------------------
 
 
-def test_skill_post_non_master_is_403(client):
+def test_skill_post_non_master_lands_in_probation(client):
+    """Non-master callers can publish SKILL.md but land in probation."""
     user = _register_user()
     resp = client.post(
         "/skills",
         headers=_auth_headers(user["raw_api_key"]),
         json={"skill_md": _SKILL_CLEAN, "price_per_call_usd": 0.02},
     )
-    assert resp.status_code == 403, resp.text
-    envelope = resp.json().get("detail", resp.json())
-    assert envelope.get("error") == "skills.public_publish_disabled"
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    # Probation status surfaces so the publisher sees the gate.
+    assert body.get("review_status") == "probation", body
 
 
 def test_skill_validate_non_master_is_403(client):

@@ -254,8 +254,40 @@ def _require_admin_caller(
     return caller
 
 
-def _proxy_headers_for_agent(agent: dict) -> dict[str, str]:
-    return {"Content-Type": "application/json"}
+def _proxy_headers_for_agent(
+    agent: dict,
+    *,
+    body: bytes | None = None,
+    job_id: str | None = None,
+    caller_owner_id: str | None = None,
+) -> dict[str, str]:
+    """Side-effect-free: assemble outbound headers, optionally signing the body.
+
+    The signing path activates when the agent has an ``endpoint_signing_secret``
+    column (Plan B Phase 1, migration 0074) AND the caller supplied the raw
+    body bytes. Agents missing a secret (legacy, pre-migration) get unsigned
+    headers — back-compat path.
+
+    Signature scheme mirrors ``core/watchers/delivery.py``: HMAC-SHA256 over
+    ``f"{timestamp}.{body}"`` so a captured signature can't be replayed against
+    a different body or at a different time. The seller verifies with
+    ``core.crypto.verify_endpoint_request`` (re-exported by the SDK).
+    """
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    secret = agent.get("endpoint_signing_secret") if isinstance(agent, dict) else None
+    if secret and isinstance(body, (bytes, bytearray)):
+        from core import crypto as _crypto
+        from datetime import datetime, timezone
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        headers["X-Aztea-Signature"] = _crypto.sign_endpoint_request(
+            bytes(body), secret, timestamp,
+        )
+        headers["X-Aztea-Timestamp"] = timestamp
+        if job_id:
+            headers["X-Aztea-Job-Id"] = str(job_id)
+        if caller_owner_id:
+            headers["X-Aztea-Caller"] = str(caller_owner_id)
+    return headers
 
 
 def _proxy_response(resp: http.Response) -> Response:
@@ -428,6 +460,11 @@ def _agent_response(
         "signing_private_key_pem",
         "signing_secret",
         "callback_secret",
+        # 2026-05-27 (Plan B Phase 1): per-agent HMAC secret used to sign
+        # outbound calls. The seller saw this exactly once at registration
+        # (or after a rotate). Never re-surface it on any list/detail read.
+        "endpoint_signing_secret",
+        "endpoint_signing_secret_rotated_at",
     ):
         out.pop(_sensitive_agent_field, None)
     out["caller_trust_min"] = min_caller_trust

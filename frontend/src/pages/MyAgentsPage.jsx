@@ -15,6 +15,7 @@ import {
   fetchAgentWallets,
   updateAgent,
   delistAgent,
+  rotateAgentEndpointSecret,
   updateAgentWalletSettings,
   sweepAgentWallet,
   createAgentCallerKey,
@@ -26,6 +27,8 @@ import {
 } from 'lucide-react'
 import './MyAgentsPage.css'
 import { fmtUsd as fmtCentsUsd } from '../utils/format.js'
+import { usePageMeta } from '../seo/usePageMeta'
+import CsvExportButton from '../features/builder/CsvExportButton'
 
 // fmtCents wraps canonical fmtUsd; fmtUsdPrecise shows up to 4 decimal places for small per-call prices
 const fmtCents = (cents) => (typeof cents !== 'number' ? '$0.00' : fmtCentsUsd(cents))
@@ -328,6 +331,28 @@ function AgentRow({ agent, earnings, onNavigate, onRefresh, apiKey }) {
     }
   }
 
+  // Plan B Phase 1 (2026-05-27): rotate the per-agent HMAC signing secret.
+  // The new value comes back ONCE in the response — the seller must copy it
+  // before navigating away. Only relevant for http(s):// endpoints; Aztea-
+  // hosted agents return 409 from the route (the button is hidden for them).
+  const [rotating, setRotating] = useState(false)
+  const [rotatedSecret, setRotatedSecret] = useState(null)
+  const [rotateError, setRotateError] = useState('')
+  const handleRotateSecret = async () => {
+    setRotating(true)
+    setRotateError('')
+    try {
+      const result = await rotateAgentEndpointSecret(apiKey, agent.agent_id)
+      setRotatedSecret(result)
+    } catch (err) {
+      setRotateError(err?.title || err?.message || 'Rotation failed.')
+    } finally {
+      setRotating(false)
+    }
+  }
+  const endpointUrl = String(agent?.endpoint_url || '')
+  const isAztteaHosted = endpointUrl.startsWith('internal://') || endpointUrl.startsWith('skill://')
+
   return (
     <motion.div
       className="myagents__row-wrap"
@@ -514,6 +539,17 @@ function AgentRow({ agent, earnings, onNavigate, onRefresh, apiKey }) {
                   {copied ? <Check size={12} /> : <Copy size={12} />}
                   <span>{copied ? 'Copied' : agent.agent_id.slice(0, 8) + '…'}</span>
                 </button>
+                {status !== 'deleted' && !isAztteaHosted && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    loading={rotating}
+                    onClick={handleRotateSecret}
+                    title="Generate a new HMAC signing secret. The current one stops working immediately."
+                  >
+                    Rotate secret
+                  </Button>
+                )}
                 {status !== 'deleted' && (
                   <Button
                     size="sm"
@@ -557,11 +593,114 @@ function AgentRow({ agent, earnings, onNavigate, onRefresh, apiKey }) {
           onClose={() => setWalletSettingsOpen(false)}
         />
       )}
+
+      {rotatedSecret && (
+        <RotatedSecretModal
+          secret={rotatedSecret.endpoint_signing_secret}
+          note={rotatedSecret.endpoint_signing_secret_note}
+          onClose={() => setRotatedSecret(null)}
+        />
+      )}
+      {rotateError && (
+        <div style={{
+          position: 'fixed',
+          bottom: 'var(--sp-4)',
+          right: 'var(--sp-4)',
+          padding: 'var(--sp-2) var(--sp-3)',
+          background: 'var(--surface-2)',
+          border: '1px solid var(--negative)',
+          borderRadius: 'var(--r-sm)',
+          fontSize: '0.8125rem',
+          zIndex: 100,
+        }}>
+          {rotateError}
+          <button
+            type="button"
+            onClick={() => setRotateError('')}
+            style={{ marginLeft: 'var(--sp-2)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink-soft)' }}
+          >
+            x
+          </button>
+        </div>
+      )}
     </motion.div>
   )
 }
 
+// Plan B Phase 1 (2026-05-27): modal that reveals a freshly-rotated HMAC
+// secret exactly once. Owner must copy + confirm before closing.
+function RotatedSecretModal({ secret, note, onClose }) {
+  const [copied, setCopied] = useState(false)
+  const [confirmed, setConfirmed] = useState(false)
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(secret)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch { /* clipboard blocked */ }
+  }
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.55)',
+        display: 'grid',
+        placeItems: 'center',
+        zIndex: 200,
+        padding: 'var(--sp-4)',
+      }}
+      onClick={(e) => { if (e.target === e.currentTarget && confirmed) onClose() }}
+    >
+      <Card style={{ maxWidth: 560, width: '100%', padding: 'var(--sp-5)' }}>
+        <h3 style={{ margin: 0, marginBottom: 'var(--sp-2)', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+          Secret rotated — save this now
+        </h3>
+        <p style={{ fontSize: '0.875rem', color: 'var(--ink-soft)', marginBottom: 'var(--sp-3)' }}>
+          The previous secret stops working immediately. Update your endpoint's verification config before the next inbound call.
+        </p>
+        <div style={{
+          fontFamily: 'var(--font-mono, monospace)',
+          fontSize: '0.8125rem',
+          background: 'var(--surface-2)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--r-sm)',
+          padding: 'var(--sp-2) var(--sp-3)',
+          wordBreak: 'break-all',
+          userSelect: 'all',
+          marginBottom: 'var(--sp-3)',
+        }}>
+          {secret}
+        </div>
+        {note && (
+          <p style={{ fontSize: '0.75rem', color: 'var(--ink-soft)', lineHeight: 1.5, marginBottom: 'var(--sp-3)' }}>
+            {note}
+          </p>
+        )}
+        <div style={{ display: 'flex', gap: 'var(--sp-2)', alignItems: 'center', flexWrap: 'wrap' }}>
+          <Button variant="ghost" size="small" onClick={handleCopy}>
+            {copied ? 'Copied' : 'Copy'}
+          </Button>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: '0.8125rem', cursor: 'pointer' }}>
+            <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
+            I've saved this secret
+          </label>
+          <Button variant="primary" size="small" disabled={!confirmed} onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </Card>
+    </div>
+  )
+}
+
 export default function MyAgentsPage() {
+  usePageMeta({
+    title: 'My Agents — Aztea',
+    description:
+      'Per-agent earnings, call counts, payout history, and CSV export ' +
+      'for agents you have published on Aztea.',
+  })
   const { apiKey } = useAuth()
   const navigate = useNavigate()
   const [agents, setAgents] = useState([])
@@ -610,14 +749,21 @@ export default function MyAgentsPage() {
                 <h1 className="myagents__title">My Agents</h1>
                 <p className="myagents__sub">Agents you have listed on Aztea.</p>
               </div>
-              <Button
-                variant="primary"
-                size="sm"
-                icon={<Plus size={14} />}
-                onClick={() => navigate('/list-skill')}
-              >
-                List your first agent
-              </Button>
+              <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
+                <CsvExportButton
+                  agents={agents}
+                  earningsMap={earningsMap}
+                  disabled={loading}
+                />
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon={<Plus size={14} />}
+                  onClick={() => navigate('/list-skill')}
+                >
+                  {agents.length === 0 ? 'Publish your first agent' : 'Publish another'}
+                </Button>
+              </div>
             </div>
           </Reveal>
 

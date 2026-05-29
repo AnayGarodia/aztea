@@ -1,0 +1,41 @@
+{
+  "category": "data",
+  "confidence": {
+    "category": "keyword_match",
+    "description": "module_docstring",
+    "input_schema": "function_signature",
+    "name": "filename",
+    "output_schema": "fallback",
+    "price_per_call_usd": "default",
+    "slug": "derived_from_name",
+    "tags": "derived_from_description"
+  },
+  "description": "Parse a PDF and return its text contents.",
+  "input_schema": {
+    "properties": {
+      "payload": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "payload"
+    ],
+    "type": "object"
+  },
+  "missing": [
+    "output_schema"
+  ],
+  "name": "Pdf Parser",
+  "output_schema": {
+    "type": "object"
+  },
+  "price_per_call_usd": 0.05,
+  "slug": "pdf-parser",
+  "tags": [
+    "pdf",
+    "contents",
+    "parse",
+    "parser",
+    "text"
+  ]
+}

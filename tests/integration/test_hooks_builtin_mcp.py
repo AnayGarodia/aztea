@@ -329,6 +329,9 @@ def test_builtin_sync_and_async_paths_return_identical_payloads(
 
 
 def test_registry_lists_new_builtin_agents(client):
+    """The 10 curated public agents after the 2026-05-26 platform-pivot cull
+    must show up in /registry/agents; the sunset agents (incl. the agents
+    dropped in that cull) must not surface."""
     listed = client.get("/registry/agents", headers=_auth_headers(TEST_MASTER_KEY))
     assert listed.status_code == 200, listed.text
     names = {agent["name"] for agent in listed.json()["agents"]}
@@ -340,13 +343,20 @@ def test_registry_lists_new_builtin_agents(client):
         "Multi-Language Executor",
         "Lighthouse Auditor",
         "Accessibility Auditor",
-        "Broken Link Crawler",
-        "PDF Document Parser",
     }.issubset(names)
+    # 2026-05-20 cull
     assert {
         "Visual Regression",
         "Security Headers Grader",
         "Web Search",
+    }.isdisjoint(names)
+    # 2026-05-26 platform-pivot cull
+    assert {
+        "Broken Link Crawler",
+        "PDF Document Parser",
+        "Secret Scanner",
+        "SAST Scanner",
+        "Quant Patch Validator",
     }.isdisjoint(names)
 
 

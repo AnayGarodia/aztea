@@ -248,23 +248,22 @@ def publish(
         error(str(exc), code="publish.detect")
         raise typer.Exit(code=1)
 
-    # SKILL.md publishing was removed 2026-05-17. Specialized agents — real
-    # code, live data, real integrations — pass our value test; prompt-only
-    # SKILL.md tools (a system prompt + I/O schema) don't, because callers
-    # can replicate them with their own LLM in seconds. Refuse cleanly and
-    # point at the supported paths so users aren't left guessing.
-    if detection.kind == "skill_md":
-        from .output import error
-        error(
-            "SKILL.md hosted-skill publishing is no longer supported.",
-            hint=(
-                "Publish as a .py handler (`aztea publish my_tool.py --endpoint "
-                "https://...`) or as an agent.md manifest (`aztea publish "
-                "agent.md`). See: https://aztea.ai/docs/publishing."
-            ),
-            code="publish.skill_md_removed",
-        )
-        raise typer.Exit(code=2)
+    # 2026-05-17: SKILL.md publishing was previously removed because
+    # prompt-only tools failed the original value-test ("callers can
+    # replicate with their own LLM in seconds").
+    #
+    # 2026-05-26 (Wave 3 platform pivot): re-opened. Hosted SKILL.md is
+    # now the cheapest path from "I have an agent idea" to "I'm earning
+    # per call" for a non-infra builder — exactly the wedge the platform
+    # pivot needs. The original concern is now addressed by:
+    #   * core/listing_safety.py:scan_skill_md — static prompt-injection
+    #     + API-key + base64 + internal-path scans.
+    #   * core/listing_safety_judge.py:judge_skill_md — LLM intent review
+    #     on every new publish AND every edit-republish.
+    #   * core/skill_executor.py — hardened prefix/suffix scaffolding the
+    #     SKILL.md body cannot override at runtime.
+    # The execution flow itself never sunsetted — only the publish path
+    # was closed. This branch restores it.
 
     if not json_mode:
         banner(

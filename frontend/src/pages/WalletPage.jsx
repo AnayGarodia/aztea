@@ -50,6 +50,12 @@ import {
 import './WalletPage.css'
 import { fmtDate, fmtUsd } from '../utils/format.js'
 import { formatApiError } from '../utils/errorCopy.js'
+import { usePageMeta } from '../seo/usePageMeta'
+import {
+  deriveConnectState,
+  derivePayoutState,
+  PAYOUT_STATE_LABELS,
+} from '../features/wallet/connectState'
 
 const CREDIT_TYPES = new Set(['deposit', 'refund', 'payout'])
 const MIN_DEPOSIT_CENTS = 500
@@ -86,6 +92,12 @@ function ActivityRow({ entry }) {
 }
 
 export default function WalletPage() {
+  usePageMeta({
+    title: 'Wallet — Aztea',
+    description:
+      'Add funds via Stripe, withdraw your agent earnings via Stripe ' +
+      'Connect, and review every wallet transaction with a signed receipt.',
+  })
   const { wallet, apiKey, refreshWallet, showToast, agents } = useMarket()
   const [searchParams, setSearchParams] = useSearchParams()
   const [amount, setAmount] = useState('10')
@@ -221,11 +233,17 @@ export default function WalletPage() {
       })
     }
     for (const w of withdrawalHistory ?? []) {
+      // 2026-05-26 wave-1: derive the explicit payout state from the raw
+      // backend status so the badge copy matches the documented 5-state
+      // contract (none/initiated/in_transit/failed_retry/completed). See
+      // features/wallet/connectState.js for the mapping.
+      const payoutState = derivePayoutState(w.status)
       items.push({
         id: `wd-${w.transfer_id ?? w.created_at}`,
         kind: 'withdrawal',
         label: w.memo || 'Withdrawal',
-        badge: w.status || 'withdrawal',
+        badge: PAYOUT_STATE_LABELS[payoutState] || w.status || 'withdrawal',
+        payout_state: payoutState,
         amount_cents: -Math.abs(w.amount_cents ?? 0),
         created_at: w.created_at,
       })
@@ -450,31 +468,78 @@ export default function WalletPage() {
 
               {actionTab === 'withdraw' && (
                 <div className="wallet__action-body">
-                  {connectStatus === null ? (
-                    <>
-                      <Skeleton variant="rect" height={40} />
-                      <Skeleton variant="text" width="60%" />
-                    </>
-                  ) : !connectStatus.connected ? (
-                    <>
-                      <p className="wallet__action-note" style={{ textAlign: 'left' }}>
-                        Connect a bank account to withdraw earnings via Stripe.
-                      </p>
-                      <Button variant="primary" loading={connectLoading} icon={<ExternalLink size={13} />} style={{ width: '100%' }} onClick={handleConnectOnboard}>
-                        Connect bank account
-                      </Button>
-                    </>
-                  ) : !connectStatus.charges_enabled ? (
-                    <>
-                      <div className="wallet__inline-warn">
-                        <AlertCircle size={14} />
-                        <span>Onboarding incomplete. Finish setup to enable payouts.</span>
-                      </div>
-                      <Button variant="secondary" loading={connectLoading} icon={<ExternalLink size={13} />} style={{ width: '100%' }} onClick={handleConnectOnboard}>
-                        Resume onboarding
-                      </Button>
-                    </>
-                  ) : (
+                  {(() => {
+                    // 2026-05-26 wave-1: derive a single discriminated
+                    // ConnectState rather than chaining boolean predicates
+                    // — keeps the 5 documented states unambiguous and
+                    // lets the kyc_rejected + microdeposit branches render
+                    // distinct copy instead of being swallowed by the
+                    // generic "onboarding incomplete" message.
+                    if (connectStatus === null) {
+                      return (
+                        <>
+                          <Skeleton variant="rect" height={40} />
+                          <Skeleton variant="text" width="60%" />
+                        </>
+                      )
+                    }
+                    const state = deriveConnectState(connectStatus)
+                    if (state === 'not_started') {
+                      return (
+                        <>
+                          <p className="wallet__action-note" style={{ textAlign: 'left' }}>
+                            Connect a bank account to withdraw earnings via Stripe.
+                          </p>
+                          <Button variant="primary" loading={connectLoading} icon={<ExternalLink size={13} />} style={{ width: '100%' }} onClick={handleConnectOnboard}>
+                            Connect bank account
+                          </Button>
+                        </>
+                      )
+                    }
+                    if (state === 'kyc_in_progress') {
+                      return (
+                        <>
+                          <div className="wallet__inline-warn">
+                            <AlertCircle size={14} />
+                            <span>Verification in progress. Finish setup to enable payouts.</span>
+                          </div>
+                          <Button variant="secondary" loading={connectLoading} icon={<ExternalLink size={13} />} style={{ width: '100%' }} onClick={handleConnectOnboard}>
+                            Resume onboarding
+                          </Button>
+                        </>
+                      )
+                    }
+                    if (state === 'kyc_rejected') {
+                      return (
+                        <>
+                          <div className="wallet__inline-warn">
+                            <AlertCircle size={14} />
+                            <span>Verification failed. Contact support or restart onboarding with corrected details.</span>
+                          </div>
+                          <Button variant="secondary" loading={connectLoading} icon={<ExternalLink size={13} />} style={{ width: '100%' }} onClick={handleConnectOnboard}>
+                            Restart onboarding
+                          </Button>
+                        </>
+                      )
+                    }
+                    if (state === 'bank_pending_microdeposit') {
+                      return (
+                        <>
+                          <div className="wallet__inline-warn">
+                            <AlertCircle size={14} />
+                            <span>Bank verification pending — confirm the microdeposits Stripe sent before you can withdraw.</span>
+                          </div>
+                          <Button variant="secondary" loading={connectLoading} icon={<ExternalLink size={13} />} style={{ width: '100%' }} onClick={handleConnectOnboard}>
+                            Verify microdeposits
+                          </Button>
+                        </>
+                      )
+                    }
+                    // bank_connected_ready — fall through to the
+                    // existing withdraw form below.
+                    return null
+                  })()}
+                  {connectStatus !== null && deriveConnectState(connectStatus) === 'bank_connected_ready' && (
                     <form onSubmit={handleWithdraw}>
                       <Input
                         label="Amount (USD)"

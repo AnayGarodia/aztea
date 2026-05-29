@@ -266,8 +266,122 @@ def _stringify(body: Any) -> str:
         return repr(body)
 
 
+def evaluate_output_example_replay(
+    example_input: dict[str, Any] | None,
+    declared_output: dict[str, Any] | None,
+    actual_output: dict[str, Any] | str | None,
+) -> list[VerificationFinding]:
+    """Pure: compare what the seller PROMISED with what the endpoint ACTUALLY returned.
+
+    Plan B Phase 3a (2026-05-27). Sellers declare ``output_examples``
+    (input -> output pairs) at registration to communicate the agent's
+    contract. Pre-Phase-3a, Aztea persisted those examples but never
+    replayed them, so a seller could publish a CodeReview agent whose
+    endpoint actually returns weather forecasts and the listing would
+    still be approved. This helper closes that loophole.
+
+    Matching policy is intentionally tolerant: agents are non-deterministic,
+    so byte-equal comparison would flake. We check structural conformance:
+
+      * Every TOP-LEVEL key the seller declared appears in the actual response
+      * Each declared key's value has the same JSON-type as the declared value
+        (str-str, int-int, bool-bool, list-list, dict-dict, None matches None
+        or absent)
+
+    A mismatch becomes a WARN finding — the publish still proceeds (sellers
+    do legitimately tweak output shape between writing the example and
+    going live), but the reviewer sees the discrepancy explicitly. BLOCK
+    is reserved for the security-critical checks in ``evaluate_probe_response``.
+    """
+    findings: list[VerificationFinding] = []
+    if not isinstance(declared_output, dict) or not declared_output:
+        return findings  # no contract declared; nothing to enforce
+    if not isinstance(actual_output, dict):
+        findings.append(VerificationFinding(
+            code="probe.output_example_shape_mismatch",
+            level=LEVEL_WARN,
+            message=(
+                "Output example replay: agent returned non-dict "
+                f"({type(actual_output).__name__}) but the declared example "
+                "was a JSON object."
+            ),
+            detail={
+                "declared_output_keys": sorted(declared_output.keys()),
+                "actual_type": type(actual_output).__name__,
+            },
+        ))
+        return findings
+
+    missing: list[str] = []
+    type_mismatches: list[dict[str, Any]] = []
+    for key, declared_value in declared_output.items():
+        if key not in actual_output:
+            if declared_value is None:
+                continue  # None can also mean "absent"
+            missing.append(key)
+            continue
+        actual_value = actual_output[key]
+        if not _json_types_compatible(declared_value, actual_value):
+            type_mismatches.append({
+                "key": key,
+                "declared_type": _json_type_name(declared_value),
+                "actual_type": _json_type_name(actual_value),
+            })
+
+    if missing or type_mismatches:
+        findings.append(VerificationFinding(
+            code="probe.output_example_replay_mismatch",
+            level=LEVEL_WARN,
+            message=(
+                "Output example replay: agent's actual response doesn't match "
+                "the declared output_examples. Buyers may dispute calls."
+            ),
+            detail={
+                "example_input": example_input,
+                "missing_keys": missing,
+                "type_mismatches": type_mismatches,
+            },
+        ))
+    return findings
+
+
+def _json_type_name(value: Any) -> str:
+    """Pure: cheap JSON type label for diagnostic strings."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return type(value).__name__
+
+
+def _json_types_compatible(declared: Any, actual: Any) -> bool:
+    """Pure: True when the two values share a JSON type for tolerant comparison."""
+    if declared is None:
+        return actual is None
+    if isinstance(declared, bool):  # bool must be checked BEFORE int (bool is int subclass)
+        return isinstance(actual, bool)
+    if isinstance(declared, (int, float)):
+        return isinstance(actual, (int, float)) and not isinstance(actual, bool)
+    if isinstance(declared, str):
+        return isinstance(actual, str)
+    if isinstance(declared, list):
+        return isinstance(actual, list)
+    if isinstance(declared, dict):
+        return isinstance(actual, dict)
+    return type(declared) is type(actual)
+
+
 __all__ = [
     "adversarial_probes",
+    "evaluate_output_example_replay",
     "evaluate_probe_response",
     "synthesize_input_from_schema",
 ]

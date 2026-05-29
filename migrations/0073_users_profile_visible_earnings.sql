@@ -1,0 +1,12 @@
+-- 0068_users_profile_visible_earnings.sql
+-- Opt-in flag controlling whether a builder's earnings appear on their public
+-- profile page (`/builders/<username>`). Default 0 — earnings are private
+-- unless the builder explicitly opts in. The profile page reads this column;
+-- a 0 value causes the `total_earnings_usd` field to be omitted from the
+-- /registry/builders/<username> response and the frontend to hide the
+-- "Earnings" section entirely (no zero-state).
+--
+-- Why opt-in: revenue is identity-adjacent. Builders may have legitimate
+-- reasons to keep earnings private (employer rules, competitive dynamics,
+-- personal preference) and the default must not surprise anyone.
+ALTER TABLE users ADD COLUMN profile_visible_earnings INTEGER NOT NULL DEFAULT 0;

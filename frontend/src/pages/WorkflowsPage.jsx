@@ -1,8 +1,7 @@
 // OWNS: discoverability of platform-curated multi-step recipes (the
-// audit-deps / secret-scan-and-audit / domain-health catalog). Surfaces
-// each recipe's steps, slug, total cost, and lets the user launch a run
-// with the standard AgentInputForm pre-bound to the recipe's
-// default_input_schema.
+// audit-deps / domain-health catalog). Surfaces each recipe's steps,
+// slug, total cost, and lets the user launch a run with the standard
+// AgentInputForm pre-bound to the recipe's default_input_schema.
 //
 // NOT OWNS: the run-detail page (existing /jobs/:id), the pipeline
 // executor (core/pipelines/), or per-step monitoring beyond launch.

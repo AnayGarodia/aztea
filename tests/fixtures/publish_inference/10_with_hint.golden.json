@@ -1,0 +1,41 @@
+{
+  "category": "web",
+  "confidence": {
+    "category": "keyword_match",
+    "description": "user_hint",
+    "input_schema": "function_signature",
+    "name": "filename",
+    "output_schema": "fallback",
+    "price_per_call_usd": "default",
+    "slug": "derived_from_name",
+    "tags": "derived_from_description"
+  },
+  "description": "Scrape a webpage and return its main-content text for security review.",
+  "input_schema": {
+    "properties": {
+      "payload": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "payload"
+    ],
+    "type": "object"
+  },
+  "missing": [
+    "output_schema"
+  ],
+  "name": "10 With Hint",
+  "output_schema": {
+    "type": "object"
+  },
+  "price_per_call_usd": 0.05,
+  "slug": "10-with-hint",
+  "tags": [
+    "content",
+    "main",
+    "review",
+    "scrape",
+    "security"
+  ]
+}

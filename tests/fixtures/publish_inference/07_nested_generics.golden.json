@@ -1,0 +1,54 @@
+{
+  "category": "developer-tools",
+  "confidence": {
+    "category": "fallback",
+    "description": "function_docstring",
+    "input_schema": "function_signature",
+    "name": "filename",
+    "output_schema": "return_annotation",
+    "price_per_call_usd": "default",
+    "slug": "derived_from_name",
+    "tags": "derived_from_description"
+  },
+  "description": "Bucket numeric records by their `category` key.",
+  "input_schema": {
+    "properties": {
+      "records": {
+        "items": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "records"
+    ],
+    "type": "object"
+  },
+  "missing": [],
+  "name": "Record Grouper",
+  "output_schema": {
+    "additionalProperties": {
+      "items": {
+        "additionalProperties": {
+          "type": "integer"
+        },
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "type": "object"
+  },
+  "price_per_call_usd": 0.05,
+  "slug": "record-grouper",
+  "tags": [
+    "bucket",
+    "category",
+    "grouper",
+    "key",
+    "numeric"
+  ]
+}

@@ -179,9 +179,10 @@ def test_claude_stdio_mcp_smoke_lists_and_calls_control_plane_tool(buyer_surface
         tools = listed["result"]["tools"]
         names = {tool["name"] for tool in tools}
         # Phase 5.3 lazy MCP: 26+ per-agent tools collapsed to 3 surface tools.
-        # Verb-first names are canonical; legacy aztea_* names still resolve via
-        # the dispatch alias map.
-        assert {"search_specialists", "describe_specialist", "call_specialist"} <= names
+        # Wave 2 rename (2026-05-26) flipped the canonical names; both Wave-2
+        # legacy (`*_specialist*`) and pre-Wave-2 verb-style (`aztea_*`) names
+        # still resolve via the dispatch alias map.
+        assert {"search_agents", "describe_agent", "call_agent"} <= names
 
         # Hit the legacy alias path explicitly to prove backward compat.
         called = server_obj._handle_request(
@@ -243,7 +244,9 @@ def test_codex_tool_manifest_supports_meta_and_registry_execution(buyer_surface_
         client_id="codex",
     )
     assert ok_recipes is True
-    assert recipes["count"] >= 3
+    # 2026-05-26 platform-pivot cull dropped two secret-scanner-fan-out recipes;
+    # curated catalog is now {audit-deps, domain-health}.
+    assert recipes["count"] >= 2
 
     ok_run, result = _execute_platform_tool(
         manifest=manifest,
@@ -282,7 +285,7 @@ def test_gemini_tool_manifest_supports_meta_and_registry_execution(buyer_surface
         client_id="gemini-cli",
     )
     assert ok_recipes is True
-    assert recipes["count"] >= 3
+    assert recipes["count"] >= 2  # 2026-05-26 platform-pivot cull
 
     ok_run, result = _execute_platform_tool(
         manifest=manifest,

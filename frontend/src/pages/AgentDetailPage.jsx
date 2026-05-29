@@ -22,6 +22,8 @@ import ModelBadge from '../components/ModelBadge'
 import { BarChart, Bar, ResponsiveContainer, Tooltip as RechartTooltip } from 'recharts'
 import './AgentDetailPage.css'
 import { fmtMs, relativeTime } from '../utils/format.js'
+import { usePageMeta } from '../seo/usePageMeta'
+import { agentDetailMeta } from '../seo/copy'
 
 function PricingInfo({ agent }) {
   const vp = agent?.variable_pricing
@@ -148,6 +150,9 @@ export default function AgentDetailPage() {
       return slugifyAgentName(a.name) === wanted
     })
   }, [agents, id])
+
+  const meta = useMemo(() => agentDetailMeta(publicAgent), [publicAgent])
+  usePageMeta(meta)
   const [ownerAgent, setOwnerAgent] = useState(null)
   const [ownerLookupDone, setOwnerLookupDone] = useState(false)
 
@@ -346,6 +351,15 @@ export default function AgentDetailPage() {
                         <Zap size={12} fill="currentColor" /> Verified
                       </span>
                     )}
+                    {agent.domain_verified ? (
+                      <span
+                        className="agent-detail__verified-badge"
+                        title={`Domain verified via ${agent.domain_verification_method || 'unknown'} on ${agent.domain_verified_at || 'unknown date'}`}
+                        style={{ background: 'var(--positive-soft, #d4edda)', color: 'var(--positive, #155724)' }}
+                      >
+                        Domain verified
+                      </span>
+                    ) : null}
                     {highDispute && (
                       <span className="agent-detail__dispute-badge">
                         <AlertTriangle size={11} /> High disputes

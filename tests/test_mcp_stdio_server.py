@@ -103,10 +103,10 @@ def test_registry_bridge_uses_lazy_tool_list_when_flag_enabled(monkeypatch):
     # Lazy mode: 4 core lazy tools + 3 always-visible resource-grouped tools.
     # Order matters: lazy core first, then grouped resource dispatchers.
     assert names[:4] == [
-        "search_specialists",
-        "describe_specialist",
-        "call_specialist",
-        "do_specialist_task",
+        "search_agents",
+        "describe_agent",
+        "call_agent",
+        "auto_call_agent",
     ]
     # 2026-05-17: aztea_call_streaming + aztea_steer were dropped from the
     # lazy MCP surface — the streaming runtime had RECEIPT_NOT_BUILT and
@@ -114,10 +114,13 @@ def test_registry_bridge_uses_lazy_tool_list_when_flag_enabled(monkeypatch):
     # Dispatch still recognises the names and returns tool_not_supported.
     # Three observability tools (aztea_status / aztea_inspect / aztea_query)
     # join the lazy surface in this set, wired to /admin/usage/*.
+    # Wave 2 (2026-05-26): `publish_agent` added — consumer-to-supplier
+    # conversion path lets a Claude Code user publish from inside chat.
     assert set(names[4:]) == {
         "aztea_status",
         "aztea_inspect",
         "aztea_query",
+        "publish_agent",
         "manage_job",
         "manage_budget",
         "manage_workflow",
@@ -206,7 +209,8 @@ def test_initialize_instructions_encourage_proactive_orchestration():
     # decision rule is the load-bearing sentence, plus an explicit no-brand-keyword
     # clause so the model picks specialists on intent matching alone.
     assert "Decision rule" in instructions
-    assert "do_specialist_task" in instructions
+    # Wave 2 rename (2026-05-26): `do_specialist_task` → `auto_call_agent`.
+    assert "auto_call_agent" in instructions
     # PR #38 rewrote instructions: "brand keyword" → "the word 'Aztea'".
     # Same intent — model picks specialists by category match, not by the
     # user typing "use Aztea". Pin the new wording so a future rewrite that
@@ -217,7 +221,7 @@ def test_initialize_instructions_encourage_proactive_orchestration():
     # `manage_workflow(action="hire_batch", ...)` form. Assert on the
     # category names + grouped dispatcher instead.
     assert "hire_batch" in instructions
-    assert "manage_workflow" in instructions or "do_specialist_task" in instructions
+    assert "manage_workflow" in instructions or "auto_call_agent" in instructions
 
 
 def test_registry_bridge_lazy_search_returns_workflow_hints_for_parallel_tasks(monkeypatch):
@@ -283,40 +287,55 @@ def test_describe_surfaces_output_schema_fields(monkeypatch):
     assert described["output_required_fields"] == ["issues", "clean"]
 
 
-def test_aztea_do_tool_is_registered_in_lazy_surface():
-    """The fast-path auto-invoke tool must be exposed alongside the legacy
+def test_auto_call_agent_tool_is_registered_in_lazy_surface():
+    """The fast-path auto-invoke tool must be exposed alongside the
     search/describe/call lazy trio. Catches accidental removal during
     refactors of the lazy tool registration."""
-    assert _MODULE._LAZY_DO_TOOL["name"] == "do_specialist_task"
+    assert _MODULE._LAZY_DO_TOOL["name"] == "auto_call_agent"
     schema = _MODULE._LAZY_DO_TOOL["input_schema"]
     assert "intent" in schema["properties"]
     assert "max_cost_usd" in schema["properties"]
     assert "dry_run" in schema["properties"]
     assert schema["required"] == ["intent"]
-    # Backward-compat: the legacy `aztea_do` name must still resolve.
-    assert _MODULE._LAZY_TOOL_NAME_ALIASES["aztea_do"] == "do_specialist_task"
+    # Backward-compat: both pre-Wave-2 aliases (`aztea_do`) AND the Wave 2
+    # legacy name (`do_specialist_task`) must still resolve to the new
+    # canonical name. Two generations of clients depend on these.
+    assert _MODULE._LAZY_TOOL_NAME_ALIASES["aztea_do"] == "auto_call_agent"
+    assert (
+        _MODULE._LAZY_TOOL_NAME_ALIASES["do_specialist_task"]
+        == "auto_call_agent"
+    )
 
 
 def test_legacy_lazy_tool_names_alias_to_verb_first_dispatch():
-    """Old clients (cached tool lists, hardcoded SDK examples) keep calling
-    `aztea_do` / `aztea_search` / `aztea_describe` / `aztea_call`. The
-    dispatch must normalize these so behavior is identical to the new names."""
+    """Old clients across two generations keep calling legacy names. The
+    dispatch must normalize all of them so behavior is identical to the
+    Wave 2 canonical names. Generations covered:
+      1. Wave 2 rename (2026-05-26): `search_specialists`, etc.
+      2. Pre-Wave-2 verb-style: `aztea_search`, `aztea_do`, etc.
+    """
     aliases = _MODULE._LAZY_TOOL_NAME_ALIASES
     assert aliases == {
-        "aztea_do": "do_specialist_task",
-        "aztea_search": "search_specialists",
-        "aztea_describe": "describe_specialist",
-        "aztea_call": "call_specialist",
+        # Wave 2 rename (2026-05-26) — "specialist" framing dropped.
+        "search_specialists": "search_agents",
+        "describe_specialist": "describe_agent",
+        "call_specialist": "call_agent",
+        "do_specialist_task": "auto_call_agent",
+        # Pre-Wave-2 verb-style aliases — now point at the new names.
+        "aztea_do": "auto_call_agent",
+        "aztea_search": "search_agents",
+        "aztea_describe": "describe_agent",
+        "aztea_call": "call_agent",
         # Grouped resource dispatchers — same backward-compat technique.
         "aztea_job": "manage_job",
         "aztea_budget": "manage_budget",
         "aztea_workflow": "manage_workflow",
     }
-    # New names ARE the canonical names on the four lazy tool dicts.
-    assert _MODULE._LAZY_SEARCH_TOOL["name"] == "search_specialists"
-    assert _MODULE._LAZY_DESCRIBE_TOOL["name"] == "describe_specialist"
-    assert _MODULE._LAZY_CALL_TOOL["name"] == "call_specialist"
-    assert _MODULE._LAZY_DO_TOOL["name"] == "do_specialist_task"
+    # Wave 2 names ARE the canonical names on the four lazy tool dicts.
+    assert _MODULE._LAZY_SEARCH_TOOL["name"] == "search_agents"
+    assert _MODULE._LAZY_DESCRIBE_TOOL["name"] == "describe_agent"
+    assert _MODULE._LAZY_CALL_TOOL["name"] == "call_agent"
+    assert _MODULE._LAZY_DO_TOOL["name"] == "auto_call_agent"
 
 
 def test_mcp_text_formatter_makes_search_results_readable():
@@ -450,16 +469,16 @@ def _make_bridge_with_one_agent(monkeypatch):
 
 
 def test_published_tools_list_uses_verb_first_canonical_names(monkeypatch):
-    """tools/list must publish ONLY the verb-first names; legacy aztea_*
-    names must NOT appear as separate entries — they are dispatch-time
-    aliases, not catalog entries. Two duplicate entries would dilute the
-    model's selection signal."""
+    """tools/list must publish ONLY the Wave 2 canonical names; legacy names
+    (both pre-Wave-2 `aztea_*` and Wave-2-legacy `*_specialist*`) must NOT
+    appear as separate entries — they are dispatch-time aliases, not catalog
+    entries. Duplicate entries would dilute the model's selection signal."""
     bridge = _make_bridge_with_one_agent(monkeypatch)
     names = {tool["name"] for tool in bridge.tools()}
-    assert {"do_specialist_task", "search_specialists",
-            "describe_specialist", "call_specialist",
+    assert {"auto_call_agent", "search_agents",
+            "describe_agent", "call_agent",
             "manage_job", "manage_budget", "manage_workflow"} <= names
-    # Legacy names must NOT appear in the published catalog.
+    # Pre-Wave-2 verb-style aliases must NOT appear in the published catalog.
     assert "aztea_do" not in names
     assert "aztea_search" not in names
     assert "aztea_describe" not in names
@@ -467,23 +486,34 @@ def test_published_tools_list_uses_verb_first_canonical_names(monkeypatch):
     assert "aztea_job" not in names
     assert "aztea_budget" not in names
     assert "aztea_workflow" not in names
+    # Wave 2 legacy names also must NOT appear in the published catalog —
+    # they dispatch via the alias map but are not advertised.
+    assert "search_specialists" not in names
+    assert "describe_specialist" not in names
+    assert "call_specialist" not in names
+    assert "do_specialist_task" not in names
 
 
 @pytest.mark.parametrize("legacy,canonical", [
-    ("aztea_search", "search_specialists"),
-    ("aztea_describe", "describe_specialist"),
-    ("aztea_do", "do_specialist_task"),
+    # Pre-Wave-2 verb-style aliases.
+    ("aztea_search", "search_agents"),
+    ("aztea_describe", "describe_agent"),
+    ("aztea_do", "auto_call_agent"),
     ("aztea_job", "manage_job"),
     ("aztea_budget", "manage_budget"),
     ("aztea_workflow", "manage_workflow"),
-    # aztea_call → call_specialist requires HTTP plumbing the dummy bridge
-    # doesn't have, so we cover that pair via the smoke test in
-    # test_buyer_surface_smoke.py instead.
+    # Wave 2 rename — `*_specialist*` → verb_agent.
+    ("search_specialists", "search_agents"),
+    ("describe_specialist", "describe_agent"),
+    ("do_specialist_task", "auto_call_agent"),
+    # aztea_call / call_specialist → call_agent require HTTP plumbing the
+    # dummy bridge doesn't have, so we cover that pair via the dispatch
+    # round-trip in tests/test_mcp_renames_backcompat.py instead.
 ])
 def test_each_legacy_alias_dispatches_to_its_verb_first_handler(
     monkeypatch, legacy, canonical
 ):
-    """tools/call with the legacy name must reach the same handler as the
+    """tools/call with any legacy name must reach the same handler as the
     canonical name. We verify by patching the alias map and confirming the
     dispatch normalization happens before any handler dispatch."""
     # Helper sets LAZY_MCP_SCHEMAS via monkeypatch; the bridge itself is
@@ -492,21 +522,30 @@ def test_each_legacy_alias_dispatches_to_its_verb_first_handler(
     assert _MODULE._LAZY_TOOL_NAME_ALIASES[legacy] == canonical
 
 
-def test_call_specialist_rejects_both_legacy_and_new_names_as_slug(monkeypatch):
-    """Recursion guard: call_specialist(slug=<any-lazy-tool-name>) must be
+def test_call_agent_rejects_both_legacy_and_new_names_as_slug(monkeypatch):
+    """Recursion guard: call_agent(slug=<any-lazy-tool-name>) must be
     rejected. Without this, a model could recurse infinitely by passing
-    'aztea_call' or 'call_specialist' as the slug."""
+    'aztea_call' or 'call_agent' as the slug. We exercise both the new
+    canonical entry point (`call_agent`) AND the Wave 2 legacy alias
+    (`call_specialist`) — both must reject every lazy-tool slug."""
     bridge = _MODULE.RegistryBridge(base_url="https://aztea.test", api_key="az_test")
     forbidden_slugs = [
-        "aztea_call", "call_specialist",
-        "aztea_search", "search_specialists",
-        "aztea_describe", "describe_specialist",
-        "aztea_do", "do_specialist_task",
+        # Pre-Wave-2 verb-style.
+        "aztea_call", "aztea_search", "aztea_describe", "aztea_do",
+        # Wave 2 legacy.
+        "call_specialist", "search_specialists",
+        "describe_specialist", "do_specialist_task",
+        # Wave 2 canonical.
+        "call_agent", "search_agents",
+        "describe_agent", "auto_call_agent",
     ]
-    for slug in forbidden_slugs:
-        ok, result = bridge.call_tool("call_specialist", {"slug": slug})
-        assert ok is False, f"slug={slug!r} should have been rejected"
-        assert result["error"] == "INVALID_INPUT"
+    for entrypoint in ("call_agent", "call_specialist", "aztea_call"):
+        for slug in forbidden_slugs:
+            ok, result = bridge.call_tool(entrypoint, {"slug": slug})
+            assert ok is False, (
+                f"entrypoint={entrypoint!r} slug={slug!r} should have been rejected"
+            )
+            assert result["error"] == "INVALID_INPUT"
         # Same rejection must happen via the legacy alias entry point.
         ok2, result2 = bridge.call_tool("aztea_call", {"slug": slug})
         assert ok2 is False, f"legacy aztea_call should also reject slug={slug!r}"
@@ -527,17 +566,20 @@ def test_server_instructions_contain_four_categories_and_decision_rule():
 
 
 def test_server_instructions_lead_with_verb_first_names_in_default_path():
-    """The DEFAULT path in instructions must name do_specialist_task before
-    any aztea_* legacy reference. Legacy names should appear only in a
-    backward-compat NOTE near the end."""
+    """The DEFAULT path in instructions must name auto_call_agent before any
+    legacy reference (`do_specialist_task`, `aztea_do`). Legacy names should
+    appear only in a backward-compat NOTE near the end, if at all."""
     server = _MODULE.MCPStdioServer(bridge=_DummyBridge(), refresh_seconds=60)
     instructions = server._initialize_result()["instructions"]
-    do_pos = instructions.find("do_specialist_task")
-    legacy_pos = instructions.find("aztea_do")
-    assert do_pos != -1, "do_specialist_task must appear in instructions"
-    assert legacy_pos == -1 or do_pos < legacy_pos, (
-        "verb-first name must appear before any legacy name reference"
-    )
+    canonical_pos = instructions.find("auto_call_agent")
+    assert canonical_pos != -1, "auto_call_agent must appear in instructions"
+    for legacy_name in ("aztea_do", "do_specialist_task"):
+        legacy_pos = instructions.find(legacy_name)
+        assert legacy_pos == -1 or canonical_pos < legacy_pos, (
+            f"canonical name auto_call_agent must appear before any "
+            f"legacy reference ({legacy_name!r}); got canonical={canonical_pos}, "
+            f"legacy={legacy_pos}"
+        )
 
 
 def test_server_version_was_bumped_for_cache_invalidation():
@@ -554,13 +596,23 @@ def test_server_version_was_bumped_for_cache_invalidation():
 
 
 def test_lazy_tool_alias_map_is_exhaustive_and_consistent():
-    """Every legacy lazy tool has an alias entry, and every alias target is
-    the canonical name on its corresponding _LAZY_*_TOOL dict (for the four
-    lazy tools) or a grouped-dispatcher name (for manage_job/budget/workflow).
-    No orphans."""
+    """Every legacy lazy tool (across both alias generations) has an entry,
+    and every alias target is the canonical name on its corresponding
+    _LAZY_*_TOOL dict (for the four lazy tools) or a grouped-dispatcher
+    name (for manage_job/budget/workflow). No orphans.
+
+    Two generations of legacy here:
+      1. Wave 2 rename (2026-05-26): `search_specialists`, etc.
+      2. Pre-Wave-2 verb-style: `aztea_search`, `aztea_do`, etc.
+    """
     aliases = _MODULE._LAZY_TOOL_NAME_ALIASES
     assert set(aliases.keys()) == {
+        # Wave 2 legacy.
+        "search_specialists", "describe_specialist",
+        "call_specialist", "do_specialist_task",
+        # Pre-Wave-2 verb-style.
         "aztea_do", "aztea_search", "aztea_describe", "aztea_call",
+        # Pre-Wave-2 grouped-dispatcher aliases.
         "aztea_job", "aztea_budget", "aztea_workflow",
     }
     lazy_canonical_names = {
