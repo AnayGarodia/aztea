@@ -5431,6 +5431,8 @@ export interface components {
             workspace_context?: {
                 [key: string]: unknown;
             } | null;
+            /** Cache */
+            _cache?: string | null;
         };
         /**
          * _WatcherCreateRequest

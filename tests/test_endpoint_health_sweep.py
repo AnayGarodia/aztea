@@ -95,7 +95,7 @@ def test_sweep_skips_internal_and_skill_endpoints():
     """Aztea-hosted agents shouldn't be probed (no outbound URL)."""
     aid = _register_test_agent(endpoint_url="internal://my-builtin")
     with patch.object(observability, "_probe_endpoint_health", return_value=False):
-        summary = observability.run_endpoint_health_sweep()
+        observability.run_endpoint_health_sweep()
     refetched = registry.get_agent(aid, include_unapproved=True)
     # Should not have been touched.
     assert refetched["consecutive_health_failures"] == 0
