@@ -143,6 +143,10 @@ def test_run_never_raises(payload):
 # ---------------------------------------------------------------------------
 
 
+# Override the global pytest-timeout (60s) — this test allows up to 3 retries
+# at the 30s ``quick`` budget, so the envelope can grow to ~120s legitimately.
+# 180s gives headroom for the slow GH runner.
+@pytest.mark.timeout(180)
 def test_triage_closure_on_lookahead_bug():
     """Every cluster in a real regression must carry a known triage verdict."""
     ref = (
@@ -160,20 +164,21 @@ def test_triage_closure_on_lookahead_bug():
         "p[i-window:i]", "p[i-window+1:i+1]"
     )
     # 2026-05-30: the search is time-budgeted and Hypothesis-driven, so
-    # the slow GH runner has flaked even at ``standard`` (300s). Retry
-    # up to 3 times — each attempt re-rolls Hypothesis's seed and the
-    # internal random.Random(0) interleaves differently with the time
-    # budget, so a transient miss converges on a hit within 2–3 tries.
-    # ``regressions_found`` is the only correct verdict for this input
-    # (the candidate has a one-step lookahead bug); we don't accept
-    # ``equivalent`` as a flaky pass.
+    # transient verdict='equivalent' happens on the slow GH runner.
+    # Retry up to 3 times at the ``quick`` budget (30s) — each attempt
+    # re-rolls Hypothesis's seed and interleaves with the time budget
+    # differently, so a transient miss converges to a hit within 2-3
+    # tries. ``regressions_found`` is the only correct verdict for this
+    # input (the candidate has a one-step lookahead bug); ``equivalent``
+    # is never accepted as a flaky pass. The pytest-timeout default of
+    # 60s isn't enough for the retry envelope, so override per-test.
     out = None
     for _attempt in range(3):
         out = validator_run(
             {
                 "reference_code": ref,
                 "candidate_code": cand,
-                "fuzz_budget": "standard",
+                "fuzz_budget": "quick",
             }
         )
         if out.get("verdict") == "regressions_found":
