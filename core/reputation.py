@@ -1135,3 +1135,117 @@ def _push_rating_to_hosted_async(**rating: object) -> None:
             _LOG.debug("reputation: hosted push failed: %s", exc)
 
     threading.Thread(target=_send, daemon=True).start()
+
+
+# Phase 3 (2026-05-28): boundary helper for the per-intent-class success
+# rollup. Other modules MUST NOT read job_quality_ratings directly — go
+# through this helper so the ownership boundary stays explicit (see
+# CLAUDE.md "Database" invariants and /autoplan E-6 finding).
+
+
+def success_labels_for_decisions(
+    job_ids: list[str],
+) -> dict[str, dict[str, int]]:
+    """Return per-job success labels for use by the auto-hire rollup.
+
+    Pure-ish (one DB read). For each job_id with an associated quality
+    rating, returns:
+        {job_id: {"rating": int, "success_5star": 0|1, "success_4plus": 0|1}}
+    Jobs without a rating are omitted from the result (caller treats as
+    unlabeled — exclude from training).
+
+    Why this boundary: core/observability.py needs to compute the
+    per-intent-class success rollup. Without this helper it would
+    SELECT from job_quality_ratings directly — second module touching
+    the table = drift over time as semantics evolve.
+    """
+    if not job_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(job_ids))
+    out: dict[str, dict[str, int]] = {}
+    try:
+        with _db.get_raw_connection(_db.DB_PATH) as conn:
+            rows = conn.execute(
+                f"SELECT job_id, rating FROM job_quality_ratings "
+                f"WHERE job_id IN ({placeholders})",
+                tuple(job_ids),
+            ).fetchall()
+        for row in rows or []:
+            jid = str(row["job_id"])
+            try:
+                rating = int(row["rating"])
+            except (TypeError, ValueError):
+                continue
+            out[jid] = {
+                "rating": rating,
+                "success_5star": 1 if rating >= 5 else 0,
+                "success_4plus": 1 if rating >= 4 else 0,
+            }
+    except _db.OperationalError:
+        # Table missing in some test fixtures — return empty rather
+        # than raise. Callers (observability sweeper) treat empty as
+        # "no labels available; nothing to roll up."
+        return {}
+    return out
+
+
+# Phase 1 (C3, 2026-05-28): per-caller per-agent affinity for the auto-
+# hire ranker. Reads job_quality_ratings; never written to from outside
+# this module per the CLAUDE.md "Database" invariant.
+
+
+def caller_agent_affinity(
+    caller_owner_id: str, agent_ids: list[str] | None = None,
+) -> dict[str, dict[str, float]]:
+    """Return per-agent rating stats for one caller.
+
+    Result shape:
+        {agent_id: {"avg_rating": float, "rating_count": int,
+                    "five_star_rate": float}}
+
+    Used by core/registry/auto_hire_caller_affinity.py to add a small
+    bias toward agents this caller has previously rated well.
+    """
+    if not caller_owner_id:
+        return {}
+    params: tuple
+    if agent_ids:
+        placeholders = ",".join(["%s"] * len(agent_ids))
+        sql = (
+            f"SELECT agent_id, AVG(rating) AS avg_rating, "
+            f"       COUNT(*) AS n, "
+            f"       SUM(CASE WHEN rating >= 5 THEN 1 ELSE 0 END) AS n_5 "
+            f"  FROM job_quality_ratings "
+            f" WHERE caller_owner_id = %s AND agent_id IN ({placeholders}) "
+            f" GROUP BY agent_id"
+        )
+        params = (caller_owner_id, *agent_ids)
+    else:
+        sql = (
+            "SELECT agent_id, AVG(rating) AS avg_rating, "
+            "       COUNT(*) AS n, "
+            "       SUM(CASE WHEN rating >= 5 THEN 1 ELSE 0 END) AS n_5 "
+            "  FROM job_quality_ratings "
+            " WHERE caller_owner_id = %s "
+            " GROUP BY agent_id"
+        )
+        params = (caller_owner_id,)
+    out: dict[str, dict[str, float]] = {}
+    try:
+        with _db.get_raw_connection(_db.DB_PATH) as conn:
+            rows = conn.execute(sql, params).fetchall()
+        for row in rows or []:
+            agent_id = str(row["agent_id"])
+            n = int(row["n"] or 0)
+            if n <= 0:
+                continue
+            out[agent_id] = {
+                "avg_rating": float(row["avg_rating"] or 0.0),
+                "rating_count": n,
+                "five_star_rate": (
+                    float(row["n_5"] or 0) / n if n else 0.0
+                ),
+            }
+    except _db.OperationalError:
+        return {}
+    return out
