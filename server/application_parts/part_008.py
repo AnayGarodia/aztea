@@ -2329,12 +2329,13 @@ def registry_call(
     agent_wallet = payments.get_or_create_wallet(_agent_payout_owner)
     platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
 
-    charge_tx_id = _pre_call_charge_or_402(
-        caller=caller,
-        caller_wallet_id=caller_wallet["wallet_id"],
-        charge_cents=caller_charge_cents,
-        agent_id=agent_id,
-    )
+    with _observability.time_segment("pre_call_charge"):
+        charge_tx_id = _pre_call_charge_or_402(
+            caller=caller,
+            caller_wallet_id=caller_wallet["wallet_id"],
+            charge_cents=caller_charge_cents,
+            agent_id=agent_id,
+        )
     if builtin_agent_id is not None or hosted_skill_row is not None:
         try:
             job = jobs.create_job(
@@ -2388,10 +2389,12 @@ def registry_call(
         )
         try:
             if hosted_skill_row is not None:
-                output = _skill_executor.execute_hosted_skill(hosted_skill_row, payload)
+                with _observability.time_segment("dispatch"):
+                    output = _skill_executor.execute_hosted_skill(hosted_skill_row, payload)
             else:
                 try:
-                    output = _execute_builtin_agent(builtin_agent_id, payload)
+                    with _observability.time_segment("dispatch"):
+                        output = _execute_builtin_agent(builtin_agent_id, payload)
                 except _AgentSlotUnavailable as slot_exc:
                     # Per-agent concurrency cap saturated. Refund the caller,
                     # mark the job failed, and surface 429 — was previously a
@@ -2634,14 +2637,16 @@ def registry_call(
                 actor_owner_id=caller["owner_id"],
                 payload={"status": completed["status"], "source": "registry_call_sync"},
             )
-            _settle_successful_with_metric(completed, actor_owner_id=caller["owner_id"])
+            with _observability.time_segment("post_call_settle"):
+                _settle_successful_with_metric(completed, actor_owner_id=caller["owner_id"])
             # 1.7.2 — receipt build is now unconditional at completion
             # (decoupled from settlement). Sync /call already worked in
             # 1.7.1 because settlement fires inline; we still pull the
             # call out so the contract matches the async path. Re-read
             # `completed` after the build so the sync response carries
             # the populated `receipt_jws` field too.
-            _build_job_receipt_best_effort(job["job_id"])
+            with _observability.time_segment("receipt_write"):
+                _build_job_receipt_best_effort(job["job_id"])
             completed = jobs.get_job(job["job_id"]) or completed
             _maybe_refund_pricing_diff(
                 agent=agent,
@@ -2657,13 +2662,14 @@ def registry_call(
                 platform_fee_pct=platform_fee_pct_at_create,
                 fee_bearer_policy=fee_bearer_policy,
             )
-            _record_public_work_example(
-                agent,
-                payload,
-                output,
-                job_id=job["job_id"],
-                latency_ms=_job_latency_ms(completed),
-            )
+            with _observability.time_segment("work_example"):
+                _record_public_work_example(
+                    agent,
+                    payload,
+                    output,
+                    job_id=job["job_id"],
+                    latency_ms=_job_latency_ms(completed),
+                )
             # Workspaces v0: auto-write the success output to the workspace
             # when _workspace_id was included in the call envelope. Never
             # raises — failures log and continue.
@@ -2712,9 +2718,10 @@ def registry_call(
                     version_token=cache_version_token,
                 )
                 _cache_singleflight_release(singleflight_key or "")
-            response_payload = _decorate_with_rendered_output(
-                response_payload, output_format=requested_output_format, agent=agent
-            )
+            with _observability.time_segment("output_render"):
+                response_payload = _decorate_with_rendered_output(
+                    response_payload, output_format=requested_output_format, agent=agent
+                )
             response_payload = _attach_post_call_actions(
                 response_payload, job=completed
             )
@@ -2897,13 +2904,15 @@ def registry_call(
     try:
         proxy_agent = dict(agent)
         proxy_agent["endpoint_url"] = safe_endpoint_url
-        resp = http.post(
-            safe_endpoint_url,
-            json=payload,
-            headers=_proxy_headers_for_agent(proxy_agent),
-            timeout=120,
-            allow_redirects=False,
-        )
+        with _observability.time_segment("outbound_http"), \
+             _observability.time_segment("dispatch"):
+            resp = _outbound_session.post(
+                safe_endpoint_url,
+                json=payload,
+                headers=_proxy_headers_for_agent(proxy_agent),
+                timeout=120,
+                allow_redirects=False,
+            )
     except http.exceptions.Timeout:
         failed = jobs.update_job_status(
             job["job_id"],

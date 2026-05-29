@@ -1,0 +1,43 @@
+# Per-segment SLO targets for the buyer-agent call path.
+#
+# Set after the first `scripts/benchmark_call_path.py --runs 200` against a
+# zero-cost built-in agent on a freshly-started server. Targets are warm-state
+# (after first call) unless noted; cold-start is tracked separately in the
+# buyer-surface smoke test.
+#
+# Format: each segment has a target_p50_ms and target_p95_ms. The benchmark
+# harness compares its measured percentiles against these and prints a delta
+# table. A regression of >25% on any segment fails the CI smoke harness.
+
+backend_sqlite:
+  auth:                { p50_ms: 0.5,  p95_ms: 1.0  }   # request.state._caller; no cross-req cache
+  agent_lookup:        { p50_ms: 1.0,  p95_ms: 5.0  }   # catalog cache hit; warm
+  embed_search:        { p50_ms: 10.0, p95_ms: 50.0 }   # auto-hire only; LRU on vector
+  gating:              { p50_ms: 0.5,  p95_ms: 1.0  }   # pure CPU
+  pre_call_charge:     { p50_ms: 3.0,  p95_ms: 10.0 }   # 1 conditional UPDATE + ledger INSERT
+  dispatch:            { p50_ms: 5.0,  p95_ms: 50.0 }   # in-process builtin; agent-runtime excluded
+  post_call_settle:    { p50_ms: 5.0,  p95_ms: 15.0 }   # 2-4 ledger rows + wallet UPDATEs
+  decision_audit:      { p50_ms: 0.05, p95_ms: 0.2  }   # deferred; only enqueue cost on critical path
+  receipt_write:       { p50_ms: 0.05, p95_ms: 0.2  }   # deferred
+  work_example:        { p50_ms: 0.05, p95_ms: 0.2  }   # deferred; in-memory ring buffer
+  output_render:       { p50_ms: 0.0,  p95_ms: 0.1  }   # skipped for json format (default)
+  outbound_http:       { p50_ms: 2.0,  p95_ms: 10.0 }   # warm pool; TCP+TLS handshake removed
+
+backend_postgres:
+  auth:                { p50_ms: 1.0,  p95_ms: 2.0  }
+  agent_lookup:        { p50_ms: 2.0,  p95_ms: 8.0  }
+  embed_search:        { p50_ms: 10.0, p95_ms: 50.0 }
+  gating:              { p50_ms: 0.5,  p95_ms: 1.0  }
+  pre_call_charge:     { p50_ms: 5.0,  p95_ms: 20.0 }
+  dispatch:            { p50_ms: 5.0,  p95_ms: 50.0 }
+  post_call_settle:    { p50_ms: 8.0,  p95_ms: 25.0 }
+  decision_audit:      { p50_ms: 0.05, p95_ms: 0.2  }
+  receipt_write:       { p50_ms: 0.05, p95_ms: 0.2  }
+  work_example:        { p50_ms: 0.05, p95_ms: 0.2  }
+  output_render:       { p50_ms: 0.0,  p95_ms: 0.1  }
+  outbound_http:       { p50_ms: 2.0,  p95_ms: 10.0 }
+
+# Cold-start gate: first-call-from-fresh-process latency. Checked separately
+# in docs/runbooks/buyer-surface-smoke-test.md after every deploy.
+cold_start:
+  first_call_p99_ms: 1500   # includes module imports, embedding model load, DB warmup

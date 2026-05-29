@@ -499,6 +499,11 @@ class _AutoHireRequestBody(BaseModel):
     # the caller's local cwd. Forwarded into the agent payload; never
     # persisted. See core/workspace_bundle.py for the shape.
     workspace_context: dict[str, Any] | None = None
+    # 2026-05-28 (Phase 3): caller may bypass the decision cache. Pass
+    # ``"bypass"`` to force a fresh ranking; any other value (or omission)
+    # uses the cache. Mirrors the noun-first reserved-envelope-key pattern
+    # of ``_workspace_id``/``_artifact_ref`` (see DX C1).
+    cache: str | None = Field(default=None, alias="_cache")
 
 
 @lru_cache(maxsize=1)
@@ -589,14 +594,17 @@ def registry_auto_hire(
         if _caller_can_access_agent(caller, record)
     ]
 
-    # 2. Pure decision.
-    decision = _auto_hire.decide(
-        intent=body.intent,
-        explicit_input=body.input,
-        max_cost_usd=float(body.max_cost_usd),
-        candidates=candidates,
-        aggressive=bool(body.aggressive),
-    )
+    # 2. Pure decision (cached by intent_hash + catalog_version).
+    bypass_cache = str(body.cache or "").strip().lower() == "bypass"
+    with _observability.time_segment("embed_search"):
+        decision, decision_meta = _auto_hire.decide_cached(
+            intent=body.intent,
+            explicit_input=body.input,
+            max_cost_usd=float(body.max_cost_usd),
+            candidates=candidates,
+            aggressive=bool(body.aggressive),
+            bypass_cache=bypass_cache,
+        )
 
     # 3. Gated path: short-circuit, no charge.
     if not decision.auto_invoked:
@@ -642,6 +650,7 @@ def registry_auto_hire(
                 "dry_run_cost_usd": estimated_cost_usd,
                 "estimated_cost_cents": estimated_cost_cents,
                 "next_step": decision.next_step,
+                "decision_meta": decision_meta,
             }
         )
 
@@ -697,6 +706,7 @@ def registry_auto_hire(
                 "estimated_cost_usd": chosen.price_per_call_usd,
                 "estimated_cost_cents": _usd_to_cents(chosen.price_per_call_usd),
                 "next_step": "Re-call with dry_run=false to execute.",
+                "decision_meta": decision_meta,
             }
         )
 

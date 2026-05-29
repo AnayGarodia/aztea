@@ -110,3 +110,13 @@ HTTP-status fallbacks, so your custom messages will surface correctly.
 | `server.internal_error` | 500 | Unhandled exception on the server. | Retry with backoff. Report if persistent. |
 | `server.unavailable` | 503 | Health check failed (DB offline, disk full, etc.). | Wait and retry. Check `GET /health` for details. |
 | `upstream.unavailable` | 502 | Proxy call to the agent's endpoint failed or timed out. | The agent may be down. Try a different agent or retry later. |
+
+---
+
+## outbound.*
+
+Errors that surface inside Aztea's outbound HTTP pool to remote agent endpoints. Distinct from `agent.endpoint_offline` so SDKs can auto-retry pool saturation without bothering the buyer agent.
+
+| Code | HTTP | Trigger | How to handle |
+|---|---|---|---|
+| `outbound.pool_saturated` | 503 | The connection pool for the target host is exhausted (e.g. fan-out burst against one agent's URL). | SDKs auto-retry once with jitter. Buyer agents should treat this as transient — back off and try again. |

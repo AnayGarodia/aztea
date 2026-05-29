@@ -150,6 +150,7 @@ from core import hosted_skills as _hosted_skills
 from core import listing_safety as _listing_safety
 from core import models as core_models
 from core import observability as _observability
+from core import outbound_session as _outbound_session
 from core import rate_limit as _rate_limit
 from core import skill_executor as _skill_executor
 from core import skill_parser as _skill_parser
@@ -195,6 +196,7 @@ from core.models import (
 )
 from core.openapi_responses import pick_error_responses as _error_responses
 from core.registry import auto_hire as _auto_hire
+from core.registry import catalog_broadcast
 from core.registry import decision_audit as _decision_audit
 from core.registry import origin_context as _origin_context
 from server.builtin_agents import specs as _builtin_specs
