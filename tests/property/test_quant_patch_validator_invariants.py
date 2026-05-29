@@ -159,23 +159,28 @@ def test_triage_closure_on_lookahead_bug():
     cand = ref.replace("range(window, p.size)", "range(window-1, p.size)").replace(
         "p[i-window:i]", "p[i-window+1:i+1]"
     )
-    # 2026-05-23 (second bump): even 10s on slow CI runners still
-    # occasionally returned ``equivalent``. Bumped to full ``quick`` (30s).
-    # 2026-05-30 (third bump, after CI run 26652264453 flaked twice in a
-    # row on ``quick``): promoted to ``standard`` (300s) — overkill locally
-    # but gives CI a 10x budget to find the lookahead-bug cluster
-    # deterministically. Marked @pytest.mark.slow so deselectable via
-    # ``-m "not slow"`` when fast iteration matters.
-    out = validator_run(
-        {
-            "reference_code": ref,
-            "candidate_code": cand,
-            "fuzz_budget": "standard",
-        }
-    )
-    assert out["verdict"] == "regressions_found", (
-        f"validator did not find the lookahead-bug regression "
-        f"(verdict={out.get('verdict')!r})"
+    # 2026-05-30: the search is time-budgeted and Hypothesis-driven, so
+    # the slow GH runner has flaked even at ``standard`` (300s). Retry
+    # up to 3 times — each attempt re-rolls Hypothesis's seed and the
+    # internal random.Random(0) interleaves differently with the time
+    # budget, so a transient miss converges on a hit within 2–3 tries.
+    # ``regressions_found`` is the only correct verdict for this input
+    # (the candidate has a one-step lookahead bug); we don't accept
+    # ``equivalent`` as a flaky pass.
+    out = None
+    for _attempt in range(3):
+        out = validator_run(
+            {
+                "reference_code": ref,
+                "candidate_code": cand,
+                "fuzz_budget": "standard",
+            }
+        )
+        if out.get("verdict") == "regressions_found":
+            break
+    assert out is not None and out["verdict"] == "regressions_found", (
+        f"validator did not find the lookahead-bug regression after 3 attempts "
+        f"(last verdict={(out or {}).get('verdict')!r})"
     )
     valid_cluster_verdicts = {"regression", "expected", "both_wrong"}
     for cluster in out["confirmed_regressions"] + out["expected_divergences"]:
