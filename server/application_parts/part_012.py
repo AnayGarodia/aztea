@@ -589,13 +589,15 @@ def registry_auto_hire(
         if _caller_can_access_agent(caller, record)
     ]
 
-    # 2. Pure decision.
+    # 2. Pure decision. Phase 1 (C3): caller_owner_id threaded through
+    # so per-caller affinity scoring has the data it needs.
     decision = _auto_hire.decide(
         intent=body.intent,
         explicit_input=body.input,
         max_cost_usd=float(body.max_cost_usd),
         candidates=candidates,
         aggressive=bool(body.aggressive),
+        caller_owner_id=caller.get("owner_id"),
     )
 
     # 3. Gated path: short-circuit, no charge.
@@ -613,18 +615,25 @@ def registry_auto_hire(
             "gated", str(decision.reason or "unknown"),
             time.perf_counter() - _route_started_at,
         )
-        _decision_audit.record_decision(
-            intent_text=body.intent,
-            auto_invoked=False,
-            dry_run=bool(body.dry_run),
-            reason=decision.reason,
-            chosen_agent_id=None,
-            confidence=decision.confidence,
-            candidates=decision.candidates,
-            caller_owner_id=caller.get("owner_id"),
-            caller_key_id=caller.get("key_id"),
-            resulting_job_id=None,
-        )
+        # Belt-and-suspenders /cso H2 layer 4 (2026-05-29):
+        # `compound_intent` rows are unactionable telemetry — they
+        # have NULL chosen_agent_id so they don't pump the catchall
+        # numerator, but they do pump the denominator. Suppressing
+        # them shrinks the surface area an attacker can use to
+        # adjust the catchall rate via spam-shaped refused intents.
+        if str(decision.reason or "") != "compound_intent":
+            _decision_audit.record_decision(
+                intent_text=body.intent,
+                auto_invoked=False,
+                dry_run=bool(body.dry_run),
+                reason=decision.reason,
+                chosen_agent_id=None,
+                confidence=decision.confidence,
+                candidates=decision.candidates,
+                caller_owner_id=caller.get("owner_id"),
+                caller_key_id=caller.get("key_id"),
+                resulting_job_id=None,
+            )
         return JSONResponse(
             content={
                 "auto_invoked": False,
@@ -664,13 +673,16 @@ def registry_auto_hire(
 
     # 4. Dry-run: report what *would* happen, no invocation.
     #
-    # Compact shape: dry_run is called speculatively per-turn as a routing
-    # reflex, so the response is intentionally tight. The full payload,
-    # 240-char description, and duplicated delegation/mode/charge_status
-    # fields are omitted to defuse context-window pollution across long
-    # sessions. Callers needing the full schema still have call_specialist +
-    # describe_specialist.
+    # Single-call is now the canonical shape (the router refuses for free
+    # when nothing matches, so a separate preview round-trip is rarely
+    # useful). dry_run stays available for callers that want an explicit
+    # preview, but we surface a deprecation hint on the response so the
+    # client owners can migrate away.
     if body.dry_run:
+        # Soft deprecation: structured hint on the response, not a runtime
+        # warning that callers won't see. Keeps the parameter working
+        # (backward-compat is non-negotiable for an MCP API) while telling
+        # human readers of the JSON to migrate.
         _observability.record_route_decision(
             "dry_run", "dry_run",
             time.perf_counter() - _route_started_at,
@@ -696,7 +708,12 @@ def registry_auto_hire(
                 "confidence": decision.confidence,
                 "estimated_cost_usd": chosen.price_per_call_usd,
                 "estimated_cost_cents": _usd_to_cents(chosen.price_per_call_usd),
-                "next_step": "Re-call with dry_run=false to execute.",
+                "next_step": "Re-call without dry_run to execute (or set dry_run=false explicitly).",
+                "deprecation_hint": (
+                    "dry_run is being de-emphasised in favour of the single-call "
+                    "shape; the router refuses for free when no agent matches, "
+                    "so the two-step preview is rarely worth the round-trip."
+                ),
             }
         )
 

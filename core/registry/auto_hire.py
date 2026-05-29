@@ -85,6 +85,13 @@ class CandidateAgent:
 
     @classmethod
     def from_agent_record(cls, record: dict[str, Any]) -> "CandidateAgent":
+        # C2 (2026-05-28): stability_override (from agents table) wins
+        # over the spec's stability_tier when non-empty. Lets the
+        # stability_monitor sweeper mark agents 'broken' without a spec
+        # rewrite, while leaving operator-set spec values untouched.
+        override = str(record.get("stability_override") or "").strip().lower()
+        spec_tier = str(record.get("stability_tier") or "").strip().lower()
+        effective_tier = override or spec_tier
         return cls(
             agent_id=str(record.get("agent_id") or ""),
             slug=_derive_slug(record),
@@ -95,7 +102,7 @@ class CandidateAgent:
             price_per_call_usd=_safe_float(record.get("price_per_call_usd"), 0.0),
             trust_score=_safe_float(record.get("trust_score"), 0.0),
             success_rate=_safe_float(record.get("success_rate"), 0.0),
-            stability_tier=str(record.get("stability_tier") or "").strip().lower(),
+            stability_tier=effective_tier,
             input_schema=dict(record.get("input_schema") or {}),
             match_keywords=[
                 str(k).lower().strip()
@@ -241,10 +248,17 @@ def _check_disabled_or_empty(
 def _rank_candidates(
     candidates: list[CandidateAgent], intent_text: str,
     explicit_input: dict[str, Any] | None,
+    caller_owner_id: str | None = None,
 ) -> list:
-    """Pure: score every candidate and return non-zero matches sorted by descending score."""
+    """Pure: score every candidate and return non-zero matches sorted by descending score.
+
+    Phase 1 (C3, 2026-05-28): ``caller_owner_id`` threaded through so the
+    caller-affinity scoring helper can read per-caller per-agent ratings.
+    Defaulted to None for backward compat with tests and historical
+    callers — when None the affinity bonus contributes 0.
+    """
     ranked = sorted(
-        (_score_candidate(c, intent_text, explicit_input) for c in candidates),
+        (_score_candidate(c, intent_text, explicit_input, caller_owner_id) for c in candidates),
         key=lambda r: r.score,
         reverse=True,
     )
@@ -413,17 +427,62 @@ def _no_match_decision() -> Decision:
     )
 
 
+# Phase 1 (B4): width of the tiebreak band BELOW the confidence floor.
+# When confidence sits in [floor - _TIEBREAK_BAND, floor), an LLM call
+# disambiguates among the top 3 candidates instead of refusing outright.
+_TIEBREAK_BAND = 0.15
+
+
 def _attempt_auto_invoke(
     top: Any, ranked: list, intent_text: str,
     explicit_input: dict[str, Any] | None,
     max_cost_usd: float, aggressive: bool,
+    *, caller_owner_id: str | None = None,
+    request_budget: Any | None = None,
 ) -> Decision:
-    """Pure-ish: run every gate against the top candidate; produce a Decision."""
+    """Pure-ish: run every gate against the top candidate; produce a Decision.
+
+    Phase 1 (B4, 2026-05-28): when confidence is just below the floor
+    (within ``_TIEBREAK_BAND``), call the LLM tiebreaker to disambiguate
+    among the top 3 candidates before refusing. If the LLM picks one,
+    use it as the chosen top and continue through the remaining gates
+    (quality, price, payload) so trust/price are still enforced.
+    """
     confidence, low_conf = _check_confidence_gate(
         top, ranked[1:], ranked, aggressive=aggressive,
     )
     if low_conf is not None:
-        return low_conf
+        floor = (
+            _AGGRESSIVE_CONFIDENCE_FLOOR
+            if aggressive
+            else feature_flags.auto_invoke_confidence_floor()
+        )
+        # Phase 1 B4 (gated by auto_invoke_llm_tiebreaker): only fire
+        # the LLM tiebreak when within the close-confidence band.
+        in_tiebreak_band = (
+            confidence >= floor - _TIEBREAK_BAND and len(ranked) >= 2
+        )
+        if in_tiebreak_band and feature_flags.auto_invoke_llm_tiebreaker():
+            try:
+                from core.registry import llm_tiebreaker as _tiebreak
+                picked = _tiebreak.try_tiebreak(
+                    ranked, intent_text,
+                    caller_owner_id=caller_owner_id,
+                    request_budget=request_budget,
+                )
+            except Exception:  # noqa: BLE001 — never crash scoring
+                picked = None
+            if picked is not None:
+                top = picked
+                # Recompute confidence treating the picked candidate
+                # as the top; raw signal strength holds, dominance is
+                # the LLM's call. Cap at floor so the gate-pass is
+                # honest rather than synthetic.
+                confidence = max(confidence, floor)
+            else:
+                return low_conf
+        else:
+            return low_conf
     blocked = (
         _check_quality_gates(top, confidence)
         or _check_price_gate(top, max_cost_usd, confidence)
@@ -441,6 +500,63 @@ def _attempt_auto_invoke(
     )
 
 
+def _check_compound_intent(intent_text: str) -> Decision | None:
+    """Pure-ish: detect compound intents and refuse with a recipe pointer.
+
+    Why: do_specialist_task picks ONE specialist; "audit my repo and
+    post findings to Slack" is two steps. Without this gate, the
+    router would force-fit one half of the intent into the chosen
+    agent's payload and silently lose the rest. Refusing with a
+    `compound_intent` reason + recipe candidates lets the caller
+    re-issue via `manage_workflow` with explicit consent for the
+    multi-step charge.
+
+    Recipe list is read lazily (and cached at module load) so this
+    helper stays import-cycle-safe.
+    """
+    from core.registry import compound_intent as _ci
+    compound = _ci.detect_compound(intent_text)
+    if compound is None:
+        return None
+    # Lazy import — core/recipes.py imports from server.builtin_agents
+    # which can be heavy at module load. Defer to first compound hit.
+    try:
+        from core.recipes import BUILTIN_RECIPES as _RECIPES
+    except Exception:  # noqa: BLE001 — graceful: still refuse with reason
+        _RECIPES = []
+    matches = _ci.match_recipes(compound, _RECIPES) if _RECIPES else []
+    candidates_preview: list[dict[str, Any]] = [
+        {
+            "recipe_id": m.recipe_id,
+            "name": m.name,
+            "description": m.description,
+            "match_score": m.score,
+        }
+        for m in matches[:3]
+    ]
+    if candidates_preview:
+        next_step = (
+            f"Compound intent detected ({len(compound.steps)} steps). "
+            f"Best matching recipe: '{candidates_preview[0]['recipe_id']}'. "
+            "Re-call via manage_workflow(action='run_recipe', recipe_id=...) "
+            "with explicit consent for the multi-step charge."
+        )
+    else:
+        steps_preview = " | ".join(compound.steps[:3])
+        next_step = (
+            f"Compound intent detected ({len(compound.steps)} steps: "
+            f"{steps_preview}). No built-in recipe matches; build an "
+            "ad-hoc pipeline via manage_workflow(action='hire_batch', "
+            "jobs=[...]) — one job per step."
+        )
+    return Decision(
+        auto_invoked=False,
+        reason="compound_intent",
+        candidates=candidates_preview,
+        next_step=next_step,
+    )
+
+
 def decide(
     *,
     intent: str,
@@ -448,22 +564,48 @@ def decide(
     max_cost_usd: float,
     candidates: list[CandidateAgent],
     aggressive: bool = False,
+    caller_owner_id: str | None = None,
+    request_budget: Any | None = None,
 ) -> Decision:
     """Pure-ish: run every auto-invoke gate; return a ``Decision`` the caller can act on.
 
-    Why: gates run in a fixed order — score → confidence → stability →
-    trust → success → price → fields — so callers get a deterministic
-    refusal reason rather than a non-deterministic union of failures.
+    Why: gates run in a fixed order — compound → score → confidence →
+    stability → trust → success → price → fields — so callers get a
+    deterministic refusal reason rather than a non-deterministic union
+    of failures.
+
+    Phase 5 (2026-05-28): compound intent check runs FIRST. If the
+    intent is multi-step, refuse with a recipe pointer instead of
+    force-fitting one half into the top candidate's payload.
     """
     intent_text = (intent or "").strip()
     early = _check_disabled_or_empty(candidates, intent_text)
     if early is not None:
         return early
-    ranked = _rank_candidates(candidates, intent_text, explicit_input)
+    # Phase 5 (gated by auto_invoke_compound_routing): compound check
+    # runs before ranking. Caller-supplied `explicit_input` bypasses
+    # this gate — if the caller already shaped a structured payload,
+    # they own the multi-step decomposition.
+    if (
+        explicit_input is None
+        and feature_flags.auto_invoke_compound_routing()
+    ):
+        compound_decision = _check_compound_intent(intent_text)
+        if compound_decision is not None:
+            return compound_decision
+    # Lazy-create a per-request budget when the route handler didn't
+    # supply one (preserves backward compat for tests + older callers
+    # while still capping amplification).
+    if request_budget is None:
+        from core.registry import _llm_budget as _budget_mod
+        request_budget = _budget_mod.new_request_budget()
+    ranked = _rank_candidates(candidates, intent_text, explicit_input, caller_owner_id)
     if not ranked:
         return _no_match_decision()
     return _attempt_auto_invoke(
         ranked[0], ranked, intent_text, explicit_input, max_cost_usd, aggressive,
+        caller_owner_id=caller_owner_id,
+        request_budget=request_budget,
     )
 
 
@@ -560,6 +702,19 @@ _CATCHALL_PENALTY = 15.0
 _CATCHALL_RATE_THRESHOLD = 0.25
 _CATCHALL_WINDOW_DAYS = 14
 _CATCHALL_REFRESH_S = 3600
+# /cso H2 (2026-05-28): require this many distinct caller owners to
+# have picked an agent before applying the catchall penalty. Defeats
+# Sybil sabotage where one caller floods do_specialist_task to drag
+# a competitor's win-rate over 25%.
+_CATCHALL_MIN_DISTINCT_CALLERS = 3
+# Belt-and-suspenders /cso H2 layer 2 (2026-05-29): minimum agent age
+# in days before catchall applies. New agents lack the spread of
+# legitimate callers needed to outrun a 3-account Sybil; older agents
+# have a base of real callers a Sybil cohort would have to overwhelm.
+_CATCHALL_MIN_AGENT_AGE_DAYS = 14
+# Belt-and-suspenders layer 3: minimum total picks before catchall
+# applies (already 20 inline; promote to a named constant).
+_CATCHALL_MIN_TOTAL = 20
 _catchall_rate_cache: dict[str, float] = {}
 _catchall_refreshed_at: float = 0.0
 
@@ -695,19 +850,143 @@ def _score_intent_interlocks(
     return score, reasons
 
 
+# B3 (2026-05-28): lemma-normalized keyword matching. Prefers simplemma
+# (declared in requirements.in) when available; falls back to a tiny
+# pure-Python suffix stripper so the routing path never breaks on a
+# missing optional dependency. Both sides (intent tokens and curated
+# keywords) get normalized to the same lemma before matching, so an
+# author's "audit" hits an intent's "auditing" and an author's "cve"
+# hits an intent's "cves" without manually pluralizing every keyword.
+try:
+    import simplemma as _simplemma  # type: ignore[import-not-found]
+except Exception:  # noqa: BLE001 — optional dep
+    _simplemma = None
+
+# Common English suffixes in descending length order. First match wins.
+# Conservative on purpose: only strips suffixes that almost always leave
+# a valid stem. Avoids over-stripping ("auditing" → "audit", but
+# "auction" → "auction" because "ion" is not in the list).
+_SUFFIX_STRIPS: tuple[str, ...] = (
+    "ization", "izations", "iveness", "iously",
+    "ationally", "ation", "ations",
+    "ingly", "fully", "lessly", "ously", "able", "ible",
+    "ing", "ed", "es", "er", "ers", "ly", "s",
+)
+_LEMMA_MIN_RETAIN = 3  # never strip a stem shorter than this many chars
+
+
+def _lemma_normalize(word: str) -> str:
+    """Pure: lower-case word → its lemma. Stable, no dependencies required.
+
+    Why: substring matching alone misses plural/conjugated keyword forms
+    ("cve" vs "cves", "audit" vs "auditing"). Both sides of the keyword
+    match get normalized through this function so an author's curated
+    keyword list doesn't need every English suffix manually expanded.
+    """
+    w = word.lower().strip()
+    if not w:
+        return ""
+    if _simplemma is not None:
+        try:
+            lemma = _simplemma.lemmatize(w, lang="en")
+            if isinstance(lemma, str) and lemma:
+                return lemma.lower()
+        except Exception:  # noqa: BLE001 — never let a normalizer crash scoring
+            pass
+    # Fallback: tiny pure-Python suffix stripper. Conservative — only
+    # touches suffixes that almost always leave a valid English stem.
+    for suffix in _SUFFIX_STRIPS:
+        if len(w) > len(suffix) + _LEMMA_MIN_RETAIN - 1 and w.endswith(suffix):
+            return w[: -len(suffix)]
+    return w
+
+
+def _normalize_keyword(kw: str) -> str | None:
+    """Pure: route a curated keyword to its lemma form.
+
+    Returns None for keywords that contain whitespace, digits, or
+    punctuation we don't normalize through (e.g. "log4j", "cve-2021",
+    "package.json") — those keep substring semantics. Single-token
+    alphabetic keywords get the lemma treatment.
+    """
+    s = kw.strip().lower()
+    if not s or any(not (ch.isalpha() or ch == "-") for ch in s):
+        return None
+    if "-" in s:
+        return None
+    return _lemma_normalize(s)
+
+
+def _intent_lemma_token_set(intent_lower: str) -> frozenset[str]:
+    """Pure: lemma-normalized token set for the intent, cached per call.
+
+    `_score_keyword_overrides` runs once per candidate, but the intent
+    is the same across candidates. Using ``frozenset`` keeps membership
+    checks O(1); ``lru_cache`` keeps the work per intent, not per call.
+    """
+    return _intent_lemma_token_set_cached(intent_lower)
+
+
+@lru_cache(maxsize=128)
+def _intent_lemma_token_set_cached(intent_lower: str) -> frozenset[str]:
+    """Side-effect-free: cached helper; see _intent_lemma_token_set."""
+    return frozenset(_lemma_normalize(t) for t in _tokenize(intent_lower) if t)
+
+
 def _score_keyword_overrides(
     c: CandidateAgent, intent_lower: str,
 ) -> tuple[float, list[str]]:
-    """Pure: curated match/block keyword adjustments — the strongest natural-language signal."""
+    """Pure: curated match/block keyword adjustments — the strongest natural-language signal.
+
+    Matching strategy (2026-05-28 B3):
+    - Single-word alphabetic keywords get lemma-normalized on both sides
+      so "audit" ↔ "auditing", "cve" ↔ "cves", "scan" ↔ "scans".
+    - Multi-word / punctuated keywords ("log4j", "package.json",
+      "cve-2021-...") keep substring semantics — their lexical form is
+      the signal.
+    Both paths run for every keyword; either hit counts. This is purely
+    additive over the prior substring-only logic — no existing match is
+    lost.
+    """
     score = 0.0
     reasons: list[str] = []
+    # B3 flag (gated by auto_invoke_lemmatize_keywords, default on):
+    # when disabled, fall back to pure substring matching as before.
+    lemmatize = feature_flags.auto_invoke_lemmatize_keywords()
+    intent_lemmas: frozenset[str] | None = None
     if c.match_keywords:
-        hits = [kw for kw in c.match_keywords if kw and kw in intent_lower]
+        hits: list[str] = []
+        for kw in c.match_keywords:
+            if not kw:
+                continue
+            if lemmatize:
+                kw_lemma = _normalize_keyword(kw)
+                if kw_lemma is not None:
+                    if intent_lemmas is None:
+                        intent_lemmas = _intent_lemma_token_set(intent_lower)
+                    if kw_lemma in intent_lemmas:
+                        hits.append(kw)
+                        continue
+            if kw in intent_lower:
+                hits.append(kw)
         if hits:
             score += min(_KEYWORD_MATCH_CAP, len(hits) * _KEYWORD_MATCH_PER)
             reasons.append(f"keyword match: {','.join(hits[:_KEYWORD_PREVIEW_LIMIT])}")
     if c.block_keywords:
-        blocks = [kw for kw in c.block_keywords if kw and kw in intent_lower]
+        blocks: list[str] = []
+        for kw in c.block_keywords:
+            if not kw:
+                continue
+            if lemmatize:
+                kw_lemma = _normalize_keyword(kw)
+                if kw_lemma is not None:
+                    if intent_lemmas is None:
+                        intent_lemmas = _intent_lemma_token_set(intent_lower)
+                    if kw_lemma in intent_lemmas:
+                        blocks.append(kw)
+                        continue
+            if kw in intent_lower:
+                blocks.append(kw)
         if blocks:
             score -= min(_BLOCK_KEYWORD_CAP, len(blocks) * _BLOCK_KEYWORD_PER)
             reasons.append(f"blocked by: {','.join(blocks[:_KEYWORD_PREVIEW_LIMIT])}")
@@ -892,25 +1171,169 @@ def _refresh_catchall_cache() -> None:
                 (since,),
             ).fetchone()
             total = int(total_row["total"] or 0) if total_row else 0
-            if total < 20:
+            if total < _CATCHALL_MIN_TOTAL:
                 _catchall_rate_cache.clear()
                 return
+            # /cso H2 + belt-and-suspenders (2026-05-28/29):
+            # Three independent Sybil-defense layers:
+            #   1. agent must be ≥ _CATCHALL_MIN_AGENT_AGE_DAYS old
+            #   2. picks must come from ≥ _CATCHALL_MIN_DISTINCT_CALLERS owners
+            #   3. total decisions must be ≥ _CATCHALL_MIN_TOTAL (above)
             rows = conn.execute(
-                "SELECT chosen_agent_id, COUNT(*) AS hits "
-                "FROM auto_hire_decisions "
-                "WHERE created_at >= %s AND chosen_agent_id IS NOT NULL "
-                "GROUP BY chosen_agent_id",
+                "SELECT d.chosen_agent_id, COUNT(*) AS hits, "
+                "       COUNT(DISTINCT d.caller_owner_id) AS callers, "
+                "       MIN(a.created_at) AS agent_created_at "
+                "FROM auto_hire_decisions d "
+                "JOIN agents a ON a.agent_id = d.chosen_agent_id "
+                "WHERE d.created_at >= %s "
+                "  AND d.chosen_agent_id IS NOT NULL "
+                "GROUP BY d.chosen_agent_id",
                 (since,),
             ).fetchall()
         _catchall_rate_cache.clear()
+        from datetime import datetime as _dt, timezone as _tz
+        now_utc = _dt.now(_tz.utc)
+        min_age_seconds = _CATCHALL_MIN_AGENT_AGE_DAYS * 86400
         for row in rows or []:
             agent_id = str(row["chosen_agent_id"] or "").strip()
             hits = int(row["hits"] or 0)
+            callers = int(row["callers"] or 0)
+            agent_created = row["agent_created_at"] or ""
             if not agent_id or hits == 0:
+                continue
+            # Layer 2: distinct callers.
+            if callers < _CATCHALL_MIN_DISTINCT_CALLERS:
+                continue
+            # Layer 1: agent age gate. New agents have no legitimate
+            # caller base to outweigh a Sybil cohort; skip them.
+            try:
+                created_dt = _dt.fromisoformat(
+                    str(agent_created).replace("Z", "+00:00")
+                )
+                age_seconds = (now_utc - created_dt).total_seconds()
+            except Exception:  # noqa: BLE001 — malformed timestamp → safe-skip
+                continue
+            if age_seconds < min_age_seconds:
                 continue
             _catchall_rate_cache[agent_id] = hits / total
     except Exception:  # noqa: BLE001 — never crash scoring
         return
+
+
+# Phase 3 (2026-05-28): per-intent-class success bonus. Reads the
+# rollup table written by core/observability.py::run_decision_retention.
+# Until Phase 2's classifier populates intent_class on new decisions,
+# this helper sits idle (the rollup is empty) and contributes 0.
+_INTENT_CLASS_FIT_BONUS_CAP = 8.0  # bounded so it doesn't outweigh slug match
+_INTENT_CLASS_FIT_MIN_EVIDENCE = 10
+_intent_class_fit_cache: dict[tuple[str, str], float] = {}
+_intent_class_fit_refreshed_at: float = 0.0
+_INTENT_CLASS_FIT_REFRESH_S = 600  # 10 min — slow-moving signal
+
+
+def _refresh_intent_class_fit_cache() -> None:
+    """Side-effect: reload per (agent_id, intent_class) success posterior.
+
+    Beta(1,1) prior: posterior_mean = (n_success_4plus + 1) / (n_decisions + 2).
+    Bounded magnitude so cold-start agents (no rows) contribute ~0, not
+    a wild positive. Failures fall back to the previous snapshot.
+
+    /cso H2 (2026-05-28) — known Sybil exposure: this rollup does not
+    yet count distinct callers, so a single Sybil could in principle
+    poison the per-class success rate for a competitor. Today the
+    rollup is empty (Phase 3 ships forward-only). When the
+    observability sweeper starts populating
+    agent_intent_class_success_daily, add a distinct_callers column
+    in a migration and gate on it the same way _refresh_catchall_cache
+    does (>= _CATCHALL_MIN_DISTINCT_CALLERS).
+    """
+    global _intent_class_fit_refreshed_at
+    now_mono = time.monotonic()
+    if (now_mono - _intent_class_fit_refreshed_at < _INTENT_CLASS_FIT_REFRESH_S
+            and _intent_class_fit_refreshed_at > 0):
+        return
+    _intent_class_fit_refreshed_at = now_mono
+    try:
+        with _db.get_raw_connection(_db.DB_PATH) as conn:
+            rows = conn.execute(
+                "SELECT agent_id, intent_class, "
+                "       SUM(n_decisions) AS n, "
+                "       SUM(n_success_4plus) AS s "
+                "FROM agent_intent_class_success_daily "
+                "GROUP BY agent_id, intent_class"
+            ).fetchall()
+        new_cache: dict[tuple[str, str], float] = {}
+        for row in rows or []:
+            agent_id = str(row["agent_id"] or "")
+            klass = str(row["intent_class"] or "")
+            n = int(row["n"] or 0)
+            s = int(row["s"] or 0)
+            if not agent_id or not klass or n < _INTENT_CLASS_FIT_MIN_EVIDENCE:
+                continue
+            # Beta(1,1) posterior mean centered around 0.5; convert to
+            # +/- bonus where 1.0 success rate → +cap, 0.0 → -cap.
+            posterior = (s + 1.0) / (n + 2.0)
+            bonus = (posterior - 0.5) * 2.0 * _INTENT_CLASS_FIT_BONUS_CAP
+            new_cache[(agent_id, klass)] = bonus
+        _intent_class_fit_cache.clear()
+        _intent_class_fit_cache.update(new_cache)
+    except Exception:  # noqa: BLE001 — never crash scoring
+        return
+
+
+def _score_intent_class_fit(
+    c: CandidateAgent, intent_class: str | None,
+) -> tuple[float, list[str]]:
+    """Pure-ish: per-class success posterior bonus or penalty.
+
+    Subsumes both anti-catchall (catchall agents under-perform in most
+    classes → naturally penalized) and the cold-start prior (no class
+    history → no bonus, no penalty). Magnitude is bounded by
+    ``_INTENT_CLASS_FIT_BONUS_CAP`` so this never outweighs a strong
+    keyword or slug match.
+    """
+    if not intent_class:
+        return 0.0, []
+    _refresh_intent_class_fit_cache()
+    bonus = _intent_class_fit_cache.get((c.agent_id, intent_class), 0.0)
+    if abs(bonus) < 0.1:
+        return 0.0, []
+    sign = "+" if bonus > 0 else ""
+    return bonus, [f"intent-class fit: {sign}{bonus:.1f} ({intent_class})"]
+
+
+# Phase 1 (C4, 2026-05-28): expected-utility scoring adjustment.
+# Penalizes agents whose observed avg_latency_ms is meaningfully above
+# the catalog median. Encodes the "$0.05 wrong agent that wastes 8
+# minutes is worse than $0.50 right agent" insight without changing
+# the hard price gate (which still applies independently).
+_UTILITY_LATENCY_PENALTY_CAP = 6.0  # bounded so it's a tiebreaker
+_UTILITY_LATENCY_FLOOR_MS = 2000.0  # below this, no penalty
+_UTILITY_LATENCY_CEILING_MS = 30000.0  # above this, max penalty
+
+
+def _score_utility_adjustment(c: CandidateAgent) -> tuple[float, list[str]]:
+    """Pure: negative bonus for agents with high observed latency.
+
+    Reads avg_latency_ms from the agent record (already loaded;
+    no DB hit). Cold-start agents (no calls) report 0 latency by
+    default — they get no penalty, no bonus.
+    """
+    avg_ms = _safe_float(c.raw.get("avg_latency_ms"), 0.0)
+    if avg_ms <= _UTILITY_LATENCY_FLOOR_MS:
+        return 0.0, []
+    if avg_ms >= _UTILITY_LATENCY_CEILING_MS:
+        return -_UTILITY_LATENCY_PENALTY_CAP, [
+            f"utility: -{_UTILITY_LATENCY_PENALTY_CAP:.1f} "
+            f"(avg_latency={avg_ms:.0f}ms)"
+        ]
+    # Linear ramp between floor and ceiling.
+    span = _UTILITY_LATENCY_CEILING_MS - _UTILITY_LATENCY_FLOOR_MS
+    excess = avg_ms - _UTILITY_LATENCY_FLOOR_MS
+    penalty = -(_UTILITY_LATENCY_PENALTY_CAP * (excess / span))
+    if abs(penalty) < 0.1:
+        return 0.0, []
+    return penalty, [f"utility: {penalty:.1f} (avg_latency={avg_ms:.0f}ms)"]
 
 
 def _score_anti_catchall(c: CandidateAgent) -> tuple[float, list[str]]:
@@ -934,6 +1357,7 @@ def _score_candidate(
     c: CandidateAgent,
     intent: str,
     explicit_input: dict[str, Any] | None = None,
+    caller_owner_id: str | None = None,
 ) -> Ranked:
     """Pure: lean confidence-oriented scorer; sums independent signal helpers.
 
@@ -948,8 +1372,37 @@ def _score_candidate(
         return Ranked(candidate=c, score=0.0)
     combined = _candidate_combined_text(c)
     audit_signal = _detect_audit_signal(intent_lower, tokens)
+    # Phase 2 + 3 (gated by auto_invoke_use_intent_classifier): classify
+    # the intent once per call (the classifier's lru_cache dedupes
+    # across the N candidates in this ranking pass) so
+    # _score_intent_class_fit has the label it needs. classify()
+    # returns None for first-sight intents and dispatches a background
+    # populate, so the hot path is never blocked.
+    intent_class: str | None = None
+    if feature_flags.auto_invoke_use_intent_classifier():
+        try:
+            from core.registry.intent_classifier import classify as _classify
+            intent_class = _classify(intent_lower)
+        except Exception:  # noqa: BLE001 — never crash scoring
+            intent_class = None
     score = 0.0
     reasons: list[str] = []
+    # Phase 1 C3 (gated by auto_invoke_per_caller_bias): per-caller
+    # affinity. Reads ratings via the cached helper in
+    # core/registry/caller_affinity.py. Bounded ±8.
+    affinity_delta, affinity_why = 0.0, []
+    if feature_flags.auto_invoke_per_caller_bias():
+        try:
+            from core.registry import caller_affinity as _caller_aff
+            affinity_delta, affinity_why = _caller_aff.score_for(
+                caller_owner_id, c.agent_id,
+            )
+        except Exception:  # noqa: BLE001 — never crash scoring
+            affinity_delta, affinity_why = 0.0, []
+    # Phase 1 C4 (gated by auto_invoke_utility_pricing): latency penalty.
+    utility_delta, utility_why = 0.0, []
+    if feature_flags.auto_invoke_utility_pricing():
+        utility_delta, utility_why = _score_utility_adjustment(c)
     for delta, why in (
         _score_string_signals(c, intent_lower, tokens),
         _score_quality_signals(c),
@@ -957,6 +1410,9 @@ def _score_candidate(
         _score_keyword_overrides(c, intent_lower),
         _score_schema_shape(c, explicit_input),
         _score_semantic_similarity(c, intent),
+        _score_intent_class_fit(c, intent_class),
+        (utility_delta, utility_why),
+        (affinity_delta, affinity_why),
         _apply_probation_penalty(c),
         _score_anti_catchall(c),
     ):
@@ -1093,6 +1549,7 @@ def _llm_extract_field(
     try:
         response = run_with_fallback(
             CompletionRequest(
+                model="",  # fallback chain picks the model — see CLAUDE.md
                 messages=[
                     Message(role="system", content=system),
                     Message(role="user", content=user),
@@ -1180,6 +1637,14 @@ def _resolve_intent_only_payload(
     # extracted payload; otherwise list the unfilled fields as missing.
     if composite_variants:
         variant = composite_variants[0]
+        # Phase 1 (C1, 2026-05-28): try one-shot whole-payload LLM
+        # extraction first when the variant has 2+ string-ish fields.
+        # One round-trip is cheaper than N per-field calls. Fall back
+        # to the per-field path on failure.
+        if len(variant) >= 2:
+            one_shot = _llm_extract_whole_payload(intent, variant, properties)
+            if one_shot is not None:
+                return one_shot, []
         extracted_payload: dict[str, Any] = {}
         unfilled: list[str] = []
         for fname in variant:
@@ -1200,6 +1665,186 @@ def _resolve_intent_only_payload(
             return extracted_payload, []
         return {}, variant
     return {}, all_required
+
+
+# Phase 1 (C1): one-shot whole-payload extraction. Replaces N per-field
+# LLM calls with a single structured-output call when the schema has
+# multiple required string-like fields. Returns the extracted payload
+# dict on success or None on failure (caller falls back to per-field).
+_WHOLE_PAYLOAD_MAX_TOKENS = 600
+_WHOLE_PAYLOAD_TEMPERATURE = 0.0
+# Belt-and-suspenders M1 layer 2 (2026-05-29): bound the shape of the
+# extracted payload. A prompt-injected LLM could otherwise return a
+# 100-level nested dict or a 50KB string that the downstream agent
+# might mishandle.
+_WHOLE_PAYLOAD_MAX_DEPTH = 5
+_WHOLE_PAYLOAD_MAX_STRING = 8192
+_WHOLE_PAYLOAD_MAX_LIST_LEN = 256
+_WHOLE_PAYLOAD_MAX_DICT_KEYS = 64
+
+
+def _within_payload_bounds(value: Any, depth: int = 0) -> bool:
+    """Pure: True iff `value` is within the depth/length bounds.
+
+    Belt-and-suspenders M1 (2026-05-29): bounds an LLM-extracted JSON
+    structure so a prompt-injected response can't smuggle a huge or
+    deeply-nested payload past the type-check layer.
+    """
+    if depth > _WHOLE_PAYLOAD_MAX_DEPTH:
+        return False
+    if isinstance(value, str):
+        return len(value) <= _WHOLE_PAYLOAD_MAX_STRING
+    if isinstance(value, list):
+        if len(value) > _WHOLE_PAYLOAD_MAX_LIST_LEN:
+            return False
+        return all(_within_payload_bounds(v, depth + 1) for v in value)
+    if isinstance(value, dict):
+        if len(value) > _WHOLE_PAYLOAD_MAX_DICT_KEYS:
+            return False
+        # Keys must be strings within bounds; values recurse.
+        for k, v in value.items():
+            if not isinstance(k, str) or len(k) > _WHOLE_PAYLOAD_MAX_STRING:
+                return False
+            if not _within_payload_bounds(v, depth + 1):
+                return False
+        return True
+    # Scalars (int, float, bool) are trivially bounded; None handled
+    # by the caller as "not extracted."
+    return True
+
+
+def _llm_extract_whole_payload(
+    intent: str, required_fields: list[str], properties: dict[str, Any],
+    *, caller_owner_id: str | None = None,
+    request_budget: Any | None = None,
+) -> dict[str, Any] | None:
+    """Side-effect: one LLM call returning the full payload dict.
+
+    Returns None on:
+      - LLM stack missing (graceful degradation to per-field path)
+      - Non-JSON response
+      - Missing or empty required fields in the response
+      - Any field whose value violates the declared JSON-Schema type
+        (/review M6 — prompt-injection safety: a malicious intent
+        must not be able to coerce a string-typed field into a
+        nested dict/list that bypasses the agent's validation)
+    """
+    if not _AUTO_HIRE_LLM_EXTRACT_ENABLED:
+        return None
+    if len(intent.strip()) < _LLM_EXTRACT_MIN_INTENT_CHARS:
+        return None
+    # If any required field is code-like, the per-field path's intent-
+    # unfit gate handles it more carefully; defer to per-field.
+    if any(f in _CODE_LIKE_FIELDS for f in required_fields):
+        return None
+    # /review M3 + /cso H1 + belt-and-suspenders: three budget layers.
+    from core.registry import _llm_budget
+    if not _llm_budget.try_consume(
+        "whole_payload",
+        caller_owner_id=caller_owner_id,
+        request_budget=request_budget,
+    ):
+        return None
+    try:
+        from core.llm import CompletionRequest, Message, run_with_fallback
+    except Exception:  # noqa: BLE001
+        return None
+    field_lines: list[str] = []
+    for fname in required_fields:
+        spec = properties.get(fname) or {}
+        desc = str(spec.get("description") or "").strip()
+        ftype = str(spec.get("type") or "string")
+        field_lines.append(
+            f"  - {fname} ({ftype}): {desc or '(no description)'}"
+        )
+    system = (
+        "You extract structured values from a user intent for an API "
+        "call. Reply with EXACTLY one JSON object whose keys are the "
+        "field names listed below. Use the literal value null when a "
+        "field cannot be extracted. Do NOT invent values. No code "
+        "fences, no explanation."
+    )
+    user = (
+        f"Fields:\n" + "\n".join(field_lines) +
+        f"\n\nIntent:\n{intent.strip()[:1000]}"
+    )
+    try:
+        response = run_with_fallback(
+            CompletionRequest(
+                model="",  # fallback chain picks the model
+                messages=[
+                    Message(role="system", content=system),
+                    Message(role="user", content=user),
+                ],
+                temperature=_WHOLE_PAYLOAD_TEMPERATURE,
+                max_tokens=_WHOLE_PAYLOAD_MAX_TOKENS,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("auto_hire: whole-payload extract failed: %s", exc)
+        return None
+    text = (response.text or "").strip()
+    if not text:
+        return None
+    try:
+        import json as _json
+        parsed = _json.loads(text)
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    # Belt-and-suspenders M1 layer 2: reject the whole response if
+    # any field exceeds the depth/length bounds. One pass over the
+    # parsed dict is cheaper than per-field bound-checking inside
+    # the type-enforcement loop.
+    if not _within_payload_bounds(parsed):
+        return None
+    out: dict[str, Any] = {}
+    for fname in required_fields:
+        if fname not in parsed:
+            return None
+        value = parsed[fname]
+        if value is None:
+            return None
+        # /review M6: enforce the declared JSON-Schema type. Without
+        # this, a prompt-injected LLM could return a nested dict/list
+        # for a string-typed field, bypassing the agent's validation.
+        spec = properties.get(fname) or {}
+        declared_type = str(spec.get("type") or "").lower()
+        if declared_type == "string":
+            if isinstance(value, (int, float, bool)):
+                value = str(value)
+            if not isinstance(value, str):
+                return None
+            if not value.strip():
+                return None
+        elif declared_type == "integer":
+            if isinstance(value, bool) or not isinstance(value, int):
+                return None
+        elif declared_type == "number":
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return None
+        elif declared_type == "boolean":
+            if not isinstance(value, bool):
+                return None
+        elif declared_type == "array":
+            if not isinstance(value, list):
+                return None
+        elif declared_type == "object":
+            if not isinstance(value, dict):
+                return None
+        else:
+            # /cso M1: no declared type → default to STRING-only. The
+            # prior policy accepted dict/list which let a prompt-injected
+            # LLM smuggle nested structures past the agent's validation.
+            if isinstance(value, (int, float, bool)):
+                value = str(value)
+            if not isinstance(value, str):
+                return None
+            if not value.strip():
+                return None
+        out[fname] = value
+    return out
 
 
 def _resolve_payload(
