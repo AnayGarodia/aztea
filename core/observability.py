@@ -50,6 +50,31 @@ def timed() -> Generator[CallTimer, None, None]:
         timer.elapsed_ms = (time.perf_counter() - start) * 1000.0
 
 
+@contextmanager
+def time_segment(name: str) -> Generator[CallTimer, None, None]:
+    """Context manager that observes one bucket of ``call_segment_seconds``.
+
+    Used by the registry call handler and the auto-hire route to attribute
+    p50/p99 to specific steps (auth, agent_lookup, embed_search, gating,
+    pre_call_charge, dispatch, post_call_settle, decision_audit,
+    receipt_write, work_example, output_render, outbound_http).
+
+    Never raises. If the histogram backend errors, the timer still yields
+    the elapsed value so callers that consume ``.elapsed_ms`` still work.
+    """
+    timer = CallTimer()
+    start = time.perf_counter()
+    try:
+        yield timer
+    finally:
+        elapsed = time.perf_counter() - start
+        timer.elapsed_ms = elapsed * 1000.0
+        try:
+            call_segment_seconds.labels(segment=name).observe(elapsed)
+        except Exception as exc:  # pragma: no cover — metric path never raises
+            logger.debug("observability: segment metric failed for %s: %s", name, exc)
+
+
 def record_call(
     *,
     agent_id: str,
@@ -179,6 +204,68 @@ try:
         ["outcome"],
         buckets=[0.01, 0.025, 0.05, 0.1, 0.2, 0.4, 1.0, 2.5, 5.0],
     )
+    # Per-segment latency for the buyer-agent call path. Convention: no
+    # `aztea_` prefix to match `job_duration_seconds` / `builtin_agent_calls_total`
+    # (see /autoplan 2026-05-28 DX M1). Segments include auth, agent_lookup,
+    # embed_search, gating, pre_call_charge, dispatch, post_call_settle,
+    # decision_audit, receipt_write, work_example, output_render, outbound_http.
+    # Use the `time_segment(name)` context manager to record.
+    call_segment_seconds = _PHistogram(
+        "call_segment_seconds",
+        "Per-segment latency of the buyer-agent call path. "
+        "Used to identify which step in the request handler dominates p50/p99.",
+        ["segment"],
+        buckets=[0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5],
+    )
+    # Outbound HTTP pool health. Saturation increments when an external-agent
+    # call fails because the pool is exhausted (HTTPAdapter pool_block=False).
+    # Recycles count periodic Session.close() calls done from the sweeper to
+    # protect against stale keepalives behind a DNS rotation. See
+    # core/outbound_session.py.
+    outbound_pool_saturation_total = _PCounter(
+        "outbound_pool_saturation_total",
+        "Outbound HTTP requests that failed because the connection pool was full.",
+        ["host"],
+    )
+    outbound_session_recycles_total = _PCounter(
+        "outbound_session_recycles_total",
+        "Outbound HTTP Session.close() recycles (DNS-rotation protection).",
+    )
+    # Deferred queue health. See core/deferred.py.
+    deferred_processed_total = _PCounter(
+        "deferred_processed_total",
+        "Items drained from the deferred-write queue by the worker.",
+        ["name"],
+    )
+    deferred_drops_total = _PCounter(
+        "deferred_drops_total",
+        "Items dropped from the deferred-write queue (queue full or shutdown).",
+        ["name", "reason"],
+    )
+    deferred_drops_by_caller_total = _PCounter(
+        "deferred_drops_by_caller_total",
+        "Head-of-line drops attributed to a single noisy caller (caller_owner_id).",
+        ["caller_owner_id"],
+    )
+    deferred_lag_seconds = _PHistogram(
+        "deferred_lag_seconds",
+        "Wall-clock seconds between enqueue and dequeue for deferred writes.",
+        ["name"],
+        buckets=[0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
+    )
+    # Catalog broadcast (Postgres LISTEN/NOTIFY) reconnects. Should sit at 0
+    # in steady state — a non-zero rate indicates a listener-side network
+    # issue or DB restarts.
+    catalog_broadcast_reconnects_total = _PCounter(
+        "catalog_broadcast_reconnects_total",
+        "Number of times the catalog_broadcast listener reconnected.",
+    )
+    # Decision-cache effectiveness.
+    decision_cache_outcomes_total = _PCounter(
+        "decision_cache_outcomes_total",
+        "Outcome of consulting the decision cache (hit / miss / skipped / version_drift).",
+        ["outcome"],
+    )
 except ImportError:
     # prometheus_client not installed — use no-op stubs so callers never need IS_PROM guards.
     class _NoopLabels:
@@ -211,6 +298,15 @@ except ImportError:
     payout_curve_clawback_skipped_total = _NoopMetric()  # type: ignore[assignment]
     route_decisions_total = _NoopMetric()  # type: ignore[assignment]
     route_latency_seconds = _NoopMetric()  # type: ignore[assignment]
+    call_segment_seconds = _NoopMetric()  # type: ignore[assignment]
+    outbound_pool_saturation_total = _NoopMetric()  # type: ignore[assignment]
+    outbound_session_recycles_total = _NoopMetric()  # type: ignore[assignment]
+    deferred_processed_total = _NoopMetric()  # type: ignore[assignment]
+    deferred_drops_total = _NoopMetric()  # type: ignore[assignment]
+    deferred_drops_by_caller_total = _NoopMetric()  # type: ignore[assignment]
+    deferred_lag_seconds = _NoopMetric()  # type: ignore[assignment]
+    catalog_broadcast_reconnects_total = _NoopMetric()  # type: ignore[assignment]
+    decision_cache_outcomes_total = _NoopMetric()  # type: ignore[assignment]
 
 
 _JOB_TERMINAL_STATUSES = ("complete", "failed")

@@ -55,6 +55,10 @@ AGENT_INTERNAL_ERROR = "agent.internal_error"
 AGENT_REJECTED_REQUEST = "agent.rejected_request"
 AGENT_INVALID_RESPONSE = "agent.invalid_response"
 AGENT_RESPONSE_TOO_LARGE = "agent.response_too_large"
+# 503-class: the outbound HTTP pool to this host is full. Caller should retry
+# with Retry-After hint. Distinct from AGENT_ENDPOINT_OFFLINE so SDKs can
+# auto-retry pool-saturation but surface offline-host as a user-visible error.
+OUTBOUND_POOL_SATURATED = "outbound.pool_saturated"
 # 1.7.1 — distinct envelope for "agent ran fine but the URL/domain you gave
 # can't be reached." Lets SDKs surface 'fix the input' vs 'retry later' vs
 # 'page oncall'. 422-class.
