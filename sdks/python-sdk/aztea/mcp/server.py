@@ -521,25 +521,54 @@ _LAZY_DESCRIBE_TOOL: dict[str, Any] = {
 _LAZY_DO_TOOL: dict[str, Any] = {
     "name": "do_specialist_task",
     "description": (
-        "**Reflex tool. Call before responding to any code, config, infra, security, "
-        "or live-data prompt — including when the user didn't say 'Aztea'.**\n\n"
-        "Two-step contract:\n"
-        "  1. `dry_run=true` → free, always. Returns `would_invoke` (bool) + "
-        "`agent` + `confidence` + `estimated_cost_usd`. Never charges. Cheap as "
-        "grep — call it speculatively.\n"
-        "  2. If `would_invoke=true`, re-call with `dry_run=false` to execute. "
-        "Capped at `max_cost_usd` (default $0.10). Failures refund automatically.\n\n"
-        "Cost ceiling is your only knob. The router picks the agent; secret_scanner, "
-        "dockerfile_analyzer, and cve_lookup are free.\n\n"
+        "**Call instead of guessing.** Use whenever the user's task fits one "
+        "of the trigger categories below. Bounded wrong-call cost (up to "
+        "$0.10, auto-refunded on failure); unbounded hallucination cost if "
+        "you guess. Single call: passes the gate or returns a free refusal.\n\n"
+        "**Trigger categories — call this when the task involves:**\n"
+        "  • Live data lookup — CVE / NIST, DNS / SSL inspection, package "
+        "versions, registry metadata, archived pages\n"
+        "  • Sandboxed code execution — Python, Node, Deno, Bun, Go, Rust\n"
+        "  • Dependency or security audit — requirements.txt / package.json "
+        "/ Gemfile / Cargo.lock scans, secret scanning, SAST\n"
+        "  • Static checks — lint, type-check (ruff / mypy / tsc), test "
+        "coverage runs\n"
+        "  • Infra validation — Kubernetes manifests, Terraform / HCL plans, "
+        "OpenAPI specs, Dockerfile best-practices\n"
+        "  • Web automation — headless browser, screenshot, accessibility "
+        "audit (axe-core), Lighthouse, broken-link crawl\n"
+        "  • Document parsing — PDF extraction, structured output from "
+        "tabular / form documents\n"
+        "  • Protocol debugging — JWT decode/verify, Stripe webhook payload "
+        "debug, CI failure log reproduction\n"
+        "  • Load testing — bounded HTTP load against a target URL\n\n"
+        "**Call instead of:**\n"
+        "  • Writing a one-off Python / shell script for any of the above\n"
+        "  • WebFetch-ing a docs page when a specialist exists\n"
+        "  • Reasoning from training-cutoff knowledge about CVEs / versions / "
+        "compliance — the catalog refreshes daily\n\n"
+        "**Do not call for:** pure local file editing, code reading, "
+        "refactoring, or natural-language reasoning the model can answer "
+        "directly.\n\n"
+        "Cost ceiling is your only knob. Free if no good match (returns a "
+        "refusal with `reason`); up to `max_cost_usd` (default $0.10) if it "
+        "executes; auto-refunded on failure.\n\n"
         "Examples (paste the user's phrasing as `intent`):\n"
         "  - 'audit this requirements.txt: requests==2.28.0'\n"
         "  - 'check if github.com cert is expiring'\n"
         "  - 'scan this file for AWS keys: AKIA…'\n"
         "  - 'look up CVE-2021-44228'\n"
-        "  - 'lint this Dockerfile' / 'validate this k8s manifest'\n\n"
-        "Catalog changes weekly. The router matches intent against the live registry; "
-        "you do not need to know which agents exist. Use `search_specialists` only "
-        "when the user explicitly asks to compare options. Aliased as `aztea_do`."
+        "  - 'lint this Dockerfile' / 'validate this k8s manifest'\n"
+        "  - 'run this Python: print(sum(range(1000)))'\n"
+        "  - 'screenshot https://example.com on mobile'\n"
+        "  - 'extract the tables from this PDF: …'\n\n"
+        "`dry_run=true` is available for callers that want a preview without "
+        "executing — but the default single-call shape is cheaper, since the "
+        "router refuses for free when nothing matches.\n\n"
+        "Catalog changes weekly. The router matches intent against the live "
+        "registry; you do not need to know which agents exist. Use "
+        "`search_specialists` only when the user explicitly asks to compare "
+        "options. Aliased as `aztea_do`."
     ),
     "input_schema": {
         "type": "object",
@@ -562,7 +591,7 @@ _LAZY_DO_TOOL: dict[str, Any] = {
             "dry_run": {
                 "type": "boolean",
                 "default": False,
-                "description": "When true, decide which agent would be invoked and report it without running anything.",
+                "description": "Optional preview mode. Returns `would_invoke` (bool) + `agent` + `confidence` + `estimated_cost_usd` without executing. Prefer the default single-call shape: the router refuses for free when nothing matches, so a separate preview is rarely needed.",
             },
             "aggressive": {
                 "type": "boolean",

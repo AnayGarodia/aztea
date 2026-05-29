@@ -109,6 +109,44 @@ WORKSPACE_ARTIFACT_CONFLICT = "workspace.artifact.conflict"
 WORKSPACE_BACKING_EVICTED = "workspace.backing.evicted"
 WORKSPACE_SEAL_SIGNING_FAILED = "workspace.seal.signing_failed"
 
+# Phase 0 (2026-05-28): auto-hire refusal reason taxonomy. These mirror
+# the `reason` field on Decision objects returned from
+# core/registry/auto_hire.py::decide(). LOCKED — additive-only stability
+# promised to callers writing switch statements against them. Add a new
+# code by appending here; never repurpose an existing string.
+AUTO_HIRE_NO_MATCH = "auto_hire.no_match"
+AUTO_HIRE_LOW_CONFIDENCE = "auto_hire.low_confidence"
+AUTO_HIRE_LOW_TRUST = "auto_hire.low_trust"
+AUTO_HIRE_LOW_SUCCESS_RATE = "auto_hire.low_success_rate"
+AUTO_HIRE_BROKEN_AGENT = "auto_hire.broken_agent"
+AUTO_HIRE_BETA_AGENT = "auto_hire.beta_agent"
+AUTO_HIRE_PRICE_EXCEEDS_MAX = "auto_hire.price_exceeds_max"
+AUTO_HIRE_MISSING_FIELDS = "auto_hire.missing_fields"
+AUTO_HIRE_DISABLED = "auto_hire.disabled"
+AUTO_HIRE_EMPTY_INTENT = "auto_hire.empty_intent"
+# Phase 5
+AUTO_HIRE_COMPOUND_INTENT = "auto_hire.compound_intent"
+# Phase 1 B4 reserved for future tiebreaker-specific outcomes
+AUTO_HIRE_TIEBREAKER_FAILED = "auto_hire.tiebreaker_failed"
+# Phase 0.5 C2 reserved for the "agent just got auto-flipped" code
+AUTO_HIRE_AGENT_RECENTLY_FLIPPED_BROKEN = "auto_hire.agent_recently_flipped_broken"
+
+AUTO_HIRE_REASONS: frozenset[str] = frozenset({
+    AUTO_HIRE_NO_MATCH,
+    AUTO_HIRE_LOW_CONFIDENCE,
+    AUTO_HIRE_LOW_TRUST,
+    AUTO_HIRE_LOW_SUCCESS_RATE,
+    AUTO_HIRE_BROKEN_AGENT,
+    AUTO_HIRE_BETA_AGENT,
+    AUTO_HIRE_PRICE_EXCEEDS_MAX,
+    AUTO_HIRE_MISSING_FIELDS,
+    AUTO_HIRE_DISABLED,
+    AUTO_HIRE_EMPTY_INTENT,
+    AUTO_HIRE_COMPOUND_INTENT,
+    AUTO_HIRE_TIEBREAKER_FAILED,
+    AUTO_HIRE_AGENT_RECENTLY_FLIPPED_BROKEN,
+})
+
 DEFAULT_BY_STATUS: dict[int, str] = {
     400: INVALID_INPUT,
     401: "auth.invalid_key",

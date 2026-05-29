@@ -3,11 +3,20 @@
 Audit 2026-05-16 #12 + #14: prove that bare CVE-id prompts route to
 ``cve_lookup`` (not ``dependency_auditor``) and that chat-shaped questions
 do NOT land on a code executor.
+
+2026-05-28 B3: lemma-normalized keyword matching so "audit" hits
+"auditing" without the keyword author manually expanding every plural
+/ conjugation.
 """
 
 from __future__ import annotations
 
-from core.registry.auto_hire import CandidateAgent, _rank_candidates
+from core.registry.auto_hire import (
+    CandidateAgent,
+    _lemma_normalize,
+    _normalize_keyword,
+    _rank_candidates,
+)
 
 
 def _candidate(
@@ -129,3 +138,79 @@ def test_explain_questions_demote_code_executor():
         candidates, "explain how DNS resolution works", explicit_input=None
     )
     assert ranked[0].candidate.slug != "python_code_executor"
+
+
+# --- B3 (2026-05-28): lemma-normalized keyword matching ---------------------
+
+
+def test_lemma_normalize_strips_common_suffixes():
+    assert _lemma_normalize("auditing") == "audit"
+    assert _lemma_normalize("audited") == "audit"
+    assert _lemma_normalize("scans") == "scan"
+    # "dependencies" → "dependenci" with the pure-Python fallback
+    # stemmer; "dependency" with simplemma. Both work consistently as
+    # long as the keyword side normalizes through the same function.
+    assert _lemma_normalize("dependencies") in {"dependenc", "dependenci", "dependency"}
+
+
+def test_lemma_normalize_preserves_short_stems():
+    # Never strip a stem shorter than 3 chars — "is" must NOT become "".
+    assert _lemma_normalize("is") == "is"
+    assert _lemma_normalize("be") == "be"
+
+
+def test_lemma_normalize_idempotent_on_unsuffixed():
+    assert _lemma_normalize("audit") == "audit"
+    assert _lemma_normalize("cve") == "cve"
+
+
+def test_normalize_keyword_skips_multiword_and_punctuated():
+    # Codes and identifiers keep substring semantics — never normalize.
+    assert _normalize_keyword("log4j") is None      # digits
+    assert _normalize_keyword("package.json") is None  # punctuation
+    assert _normalize_keyword("cve-2021") is None   # dash + digits
+    assert _normalize_keyword("a b") is None        # whitespace
+    # Pure alphabetic keywords get normalized.
+    assert _normalize_keyword("Audit") == "audit"
+    assert _normalize_keyword("scans") == "scan"
+
+
+def test_keyword_match_via_lemma_finds_conjugated_intent():
+    """Keyword 'audit' must hit intent 'auditing my repo'."""
+    # dependency_auditor has match_keywords=("audit", "dependency").
+    # Without lemma matching, "auditing my repo" doesn't trigger the
+    # +12 keyword bonus because "audit" isn't a substring of the
+    # *tokenized* form ("auditing"). With lemma matching, it does.
+    candidates = [DEP_AUDITOR, DNS_INSPECTOR]
+    assert _top_slug("auditing my repo", candidates) == "dependency_auditor"
+
+
+def test_keyword_match_does_not_overstrip_to_false_positive():
+    """Negative test: don't let 'audition' or 'auctioneer' fire 'audit' bonus.
+
+    Both 'audition' and 'auctioneer' contain 'audit' as a substring,
+    but neither would be a real user-intent for the dependency auditor.
+    The lemma path normalizes to 'audition' / 'auctioneer' (not stripped
+    because no listed suffix matches), so they do NOT hit the lemma path.
+    The legacy substring path WILL still catch 'audit' inside 'audition'
+    — that's pre-existing behavior preserved by design (B3 is purely
+    additive). This test pins the lemma-side behavior so a future
+    suffix-list change can't quietly start matching them.
+    """
+    # Direct check: lemma form is not "audit".
+    assert _lemma_normalize("audition") != "audit"
+    assert _lemma_normalize("auctioneer") != "audit"
+
+
+def test_block_keyword_via_lemma_form():
+    """Block keywords also get lemma treatment."""
+    # Build a candidate where 'audit' is BOTH match AND block — verify
+    # the block path uses lemmas the same way.
+    blocked = _candidate(
+        slug="not_an_auditor",
+        match_keywords=(),
+    )
+    blocked.block_keywords = ["audit"]  # mutate to add the block side
+    candidates = [blocked, DEP_AUDITOR]
+    # 'auditing' should still route to DEP_AUDITOR (block fires on 'blocked').
+    assert _top_slug("auditing my repo", candidates) == "dependency_auditor"

@@ -361,6 +361,12 @@ def _emit_pending_starvation_signal() -> None:
 _DECISION_RETENTION_INTERVAL_SECONDS: int = 24 * 60 * 60
 _decision_retention_last_run_at: float = 0.0
 
+# C2 (2026-05-28): hourly auto-flip pass. One hour is the right cadence
+# because the decision window (50 calls) takes time to accumulate; running
+# this every minute would not produce different flips, just more DB load.
+_STABILITY_MONITOR_INTERVAL_SECONDS: int = 60 * 60
+_stability_monitor_last_run_at: float = 0.0
+
 
 def _maybe_run_decision_retention() -> None:
     """Side-effect: invoke ``observability.run_decision_retention`` at most once per day.
@@ -381,6 +387,37 @@ def _maybe_run_decision_retention() -> None:
         )
 
 
+def _maybe_run_stability_monitor() -> None:
+    """Side-effect: invoke ``stability_monitor.run_sweep`` at most once per hour.
+
+    Why: gates auto-flip decisions on a fixed cadence so we don't issue
+    a flip the instant a transient blip pushes one agent past the
+    threshold. The monitor itself never raises — it returns a SweepResult
+    summary that we surface to the sweeper log only when there was work
+    to log.
+    """
+    global _stability_monitor_last_run_at
+    now = time.monotonic()
+    if now - _stability_monitor_last_run_at < _STABILITY_MONITOR_INTERVAL_SECONDS:
+        return
+    _stability_monitor_last_run_at = now
+    try:
+        from core.registry import stability_monitor as _stability
+        result = _stability.run_sweep()
+    except Exception:  # noqa: BLE001 — never let monitor crash the sweeper
+        _LOG.exception("stability_monitor sweep failed")
+        return
+    if result.flipped_broken or result.cleared or result.errors:
+        logging_utils.log_event(
+            _LOG, logging.INFO, "stability_monitor.swept", {
+                "evaluated": result.evaluated,
+                "flipped_broken": result.flipped_broken,
+                "cleared": result.cleared,
+                "errors": result.errors,
+            },
+        )
+
+
 def _jobs_sweeper_loop(stop_event: threading.Event) -> None:
     _set_sweeper_state(running=True, started_at=_utc_now_iso())
     while not stop_event.wait(_SWEEPER_INTERVAL_SECONDS):
@@ -394,6 +431,7 @@ def _jobs_sweeper_loop(stop_event: threading.Event) -> None:
             )
             _emit_pending_starvation_signal()
             _maybe_run_decision_retention()
+            _maybe_run_stability_monitor()
             _run_workspaces_sweeper_pass(summary)
             _run_sandbox_sweeper_pass(summary)
             _set_sweeper_state(

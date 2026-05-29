@@ -262,7 +262,7 @@ def post(url: str, **kwargs: Any) -> requests.Response:
     with pin_ctx:
         try:
             return sess.post(url, **kwargs)
-        except requests.ConnectionError as exc:
+        except requests.ConnectionError:
             # urllib3's MaxRetryError wrapping when pool_block=False and the
             # pool can't supply a connection. Bubble up to the route, but tag
             # the saturation counter first.

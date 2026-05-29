@@ -51,22 +51,54 @@ def _now_iso() -> str:
 
 def _write_row(params: tuple[Any, ...]) -> None:
     """Synchronous INSERT. Called either from the request thread (fallback)
-    or from the deferred worker. Never raises out of the worker."""
+    or from the deferred worker. Never raises out of the worker.
+
+    ``params`` is the 16-tuple matching the migration-0068 column order
+    (see ``record_decision``). On a "no such column" failure — i.e. an
+    environment where migration 0068 hasn't been applied — we drop the
+    three forward-only columns and retry the legacy 13-column INSERT so
+    the audit row still lands.
+    """
     try:
         conn: _db.DbConnection = _db.get_raw_connection(_db.DB_PATH)
-        conn.execute(
-            """
-            INSERT INTO auto_hire_decisions (
-                decision_id, caller_owner_id, caller_key_id,
-                intent_text, intent_hash, auto_invoked, dry_run, reason,
-                chosen_agent_id, confidence, candidates_json,
-                resulting_job_id, created_at
-            ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        try:
+            conn.execute(
+                """
+                INSERT INTO auto_hire_decisions (
+                    decision_id, caller_owner_id, caller_key_id,
+                    intent_text, intent_hash, auto_invoked, dry_run, reason,
+                    chosen_agent_id, confidence, candidates_json,
+                    resulting_job_id, feature_vector_json,
+                    shadow_chosen_agent_id, intent_class, created_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                """,
+                params,
             )
-            """,
-            params,
-        )
+        except _db.OperationalError as exc:
+            msg = str(exc).lower()
+            if "no such column" in msg or "undefined column" in msg:
+                # Migration 0068 not applied yet. Drop the 3 forward-only
+                # columns (indices 12..14) and write the legacy column
+                # set. Preserves auditability in dev envs / partial
+                # rollouts.
+                legacy_params = params[:12] + (params[15],)
+                conn.execute(
+                    """
+                    INSERT INTO auto_hire_decisions (
+                        decision_id, caller_owner_id, caller_key_id,
+                        intent_text, intent_hash, auto_invoked, dry_run, reason,
+                        chosen_agent_id, confidence, candidates_json,
+                        resulting_job_id, created_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    """,
+                    legacy_params,
+                )
+            else:
+                raise
         conn.commit()
     except _db.OperationalError as exc:
         if "no such table" not in str(exc).lower():
@@ -87,6 +119,9 @@ def record_decision(
     caller_owner_id: str | None = None,
     caller_key_id: str | None = None,
     resulting_job_id: str | None = None,
+    feature_vector: dict[str, Any] | None = None,
+    shadow_chosen_agent_id: str | None = None,
+    intent_class: str | None = None,
 ) -> str | None:
     """Enqueue one auto-hire decision write. Returns the decision_id.
 
@@ -99,11 +134,23 @@ def record_decision(
     caller gets the decision_id back immediately so the response can reference
     it. If enqueue overflows or the queue is not started (e.g. tests), the
     INSERT falls through to a direct synchronous write.
+
+    Phase 3.5 (2026-05-28): ``feature_vector``, ``shadow_chosen_agent_id``,
+    and ``intent_class`` are forward-only logging columns added in
+    migration 0068. Write-only — no current code path reads them. They
+    accumulate so Phase 4's learned-ranker backtest has data. The
+    ``_write_row`` helper falls back to a 13-column INSERT when migration
+    0068 is missing, so callers in partial-rollout envs still record.
     """
     decision_id = uuid.uuid4().hex
     safe_intent = (intent_text or "")[:_INTENT_TEXT_TRUNCATE]
     intent_hash = _hash_intent(intent_text or "")
     candidates_json = json.dumps(candidates or [], default=str)
+    feature_vector_json = (
+        json.dumps(feature_vector, default=str)
+        if feature_vector is not None
+        else None
+    )
     params = (
         decision_id,
         caller_owner_id,
@@ -117,6 +164,9 @@ def record_decision(
         confidence,
         candidates_json,
         resulting_job_id,
+        feature_vector_json,
+        shadow_chosen_agent_id,
+        intent_class,
         _now_iso(),
     )
     enqueued = _deferred.enqueue(

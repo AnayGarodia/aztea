@@ -377,3 +377,100 @@ def auto_repair_threshold_cents() -> int:
         "AZTEA_AUTO_REPAIR_THRESHOLD_CENTS",
         default=AUTO_REPAIR_THRESHOLD_CENTS,
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 0/1/2/3/4/5 (2026-05-28): auto-hire ranker rollout flags
+# ---------------------------------------------------------------------------
+# All default OFF. Operators enable per-phase as the rollout progresses.
+# Several flags have prerequisites (declared in
+# AUTO_INVOKE_FLAG_DEPENDENCIES). The orchestrator MUST NOT enable a
+# dependent flag without its prerequisite.
+
+
+def auto_invoke_use_learned_ranker() -> bool:
+    """Phase 4: when ON, score candidates with the learned model (if
+    one is registered) and use its calibrated confidence."""
+    return flag("AZTEA_AUTO_INVOKE_USE_LEARNED_RANKER")
+
+
+def auto_invoke_use_calibrated_confidence() -> bool:
+    """Phase 4: when ON, the confidence value returned to callers comes
+    from the learned ranker's Platt-scaled probability rather than the
+    heuristic `0.5*raw + 0.5*margin` formula."""
+    return flag("AZTEA_AUTO_INVOKE_USE_CALIBRATED_CONFIDENCE")
+
+
+def auto_invoke_use_intent_classifier() -> bool:
+    """Phase 2: when ON, classify intents and use the label in
+    per-intent-class success scoring + audit logging."""
+    return flag("AZTEA_AUTO_INVOKE_USE_INTENT_CLASSIFIER")
+
+
+def auto_invoke_use_example_intents() -> bool:
+    """Phase 2: when ON, semantic similarity scoring uses per-agent
+    example intents rather than only name+description embedding."""
+    return flag("AZTEA_AUTO_INVOKE_USE_EXAMPLE_INTENTS")
+
+
+def auto_invoke_lemmatize_keywords() -> bool:
+    """Phase 0.5 (B3): when ON, lemma-normalize both sides of curated
+    keyword matching. Default ON (this is a strict superset of the
+    pre-Phase-0.5 substring matching — no behavioral regression)."""
+    return flag("AZTEA_AUTO_INVOKE_LEMMATIZE_KEYWORDS", default=True)
+
+
+def auto_invoke_llm_tiebreaker() -> bool:
+    """Phase 1 (B4): when ON, LLM tiebreaker fires for confidence in
+    [floor - 0.15, floor)."""
+    return flag("AZTEA_AUTO_INVOKE_LLM_TIEBREAKER", default=True)
+
+
+def auto_invoke_per_caller_bias() -> bool:
+    """Phase 1 (C3): when ON, per-caller affinity bias applies."""
+    return flag("AZTEA_AUTO_INVOKE_PER_CALLER_BIAS", default=True)
+
+
+def auto_invoke_utility_pricing() -> bool:
+    """Phase 1 (C4): when ON, agent latency penalises ranking."""
+    return flag("AZTEA_AUTO_INVOKE_UTILITY_PRICING", default=True)
+
+
+def auto_invoke_compound_routing() -> bool:
+    """Phase 5 (C5): when ON, compound intents refuse with a recipe
+    pointer instead of force-fitting into the top candidate."""
+    return flag("AZTEA_AUTO_INVOKE_COMPOUND_ROUTING", default=True)
+
+
+# Flag dependencies. Key MUST NOT be enabled unless every value is also
+# enabled. Enforced by check_auto_invoke_flag_dependencies() called from
+# the application startup probe — fails closed (warning logged, dependent
+# flag treated as off) rather than crashing.
+AUTO_INVOKE_FLAG_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    "AZTEA_AUTO_INVOKE_USE_LEARNED_RANKER": (
+        "AZTEA_AUTO_INVOKE_USE_CALIBRATED_CONFIDENCE",
+    ),
+    "AZTEA_AUTO_INVOKE_USE_EXAMPLE_INTENTS": (
+        "AZTEA_AUTO_INVOKE_USE_INTENT_CLASSIFIER",
+    ),
+}
+
+
+def check_auto_invoke_flag_dependencies() -> list[str]:
+    """Return list of human-readable warnings for any unmet dependency.
+
+    Called from server startup; an empty list means all flag relationships
+    are consistent. Operators see the warnings in the log; we never crash
+    on a config mistake.
+    """
+    warnings: list[str] = []
+    for dependent, prereqs in AUTO_INVOKE_FLAG_DEPENDENCIES.items():
+        if not _truthy(_read(dependent)):
+            continue
+        for prereq in prereqs:
+            if not _truthy(_read(prereq)) and not flag(prereq, default=False):
+                warnings.append(
+                    f"{dependent}=1 requires {prereq}=1 (currently off); "
+                    f"behavior of {dependent} is undefined without it."
+                )
+    return warnings

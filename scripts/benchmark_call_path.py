@@ -52,7 +52,6 @@ _SEGMENTS = (
 
 def _parse_histogram_buckets(metrics_text: str, segment: str) -> list[tuple[float, int]]:
     """Pure: extract `(le_value, cumulative_count)` for one segment label."""
-    target = f'call_segment_seconds_bucket{{segment="{segment}"}}'
     buckets: list[tuple[float, int]] = []
     for line in metrics_text.splitlines():
         if not line.startswith("call_segment_seconds_bucket"):

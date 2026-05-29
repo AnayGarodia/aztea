@@ -757,3 +757,77 @@ def _count_emoji(severity: str) -> str:
         "warning": "🟡",
         "error": "🔴",
     }.get(severity.lower(), "•")
+
+
+# Phase 0 (2026-05-28) refusal envelope renderer. The existing render()
+# handles successful agent outputs; refusal envelopes (returned by
+# do_specialist_task when the gates refuse) bypass it. Without this
+# helper, a caller passing output_format=github_pr_comment on a refusal
+# gets raw JSON. Per /autoplan D-5.
+
+
+def render_refusal(
+    reason: str | None,
+    next_step: str | None,
+    output_format: str,
+    candidates: list[dict] | None = None,
+) -> str | None:
+    """Pure: render an auto-hire refusal in the requested output format.
+
+    Returns None when ``output_format`` is unrecognized or refusal
+    rendering doesn't add value (e.g. raw JSON — caller can read the
+    structured fields directly). Returns a string when a human-readable
+    rendering exists for the format.
+    """
+    fmt = (output_format or "").lower().strip()
+    if fmt not in {"markdown", "github_pr_comment", "slack_blocks", "text"}:
+        return None
+    safe_reason = reason or "unspecified"
+    safe_next = next_step or "(no next-step hint)"
+    cand_preview = ""
+    if candidates:
+        names = []
+        for c in candidates[:3]:
+            slug = str(c.get("slug") or c.get("recipe_id") or "?")
+            names.append(slug)
+        if names:
+            cand_preview = "Top candidates: " + ", ".join(names)
+    if fmt == "text":
+        parts = [
+            f"Aztea refused — {safe_reason}",
+            "",
+            safe_next,
+        ]
+        if cand_preview:
+            parts.append("")
+            parts.append(cand_preview)
+        return "\n".join(parts)
+    if fmt in {"markdown", "github_pr_comment"}:
+        parts = [
+            f"### Aztea: `{safe_reason}`",
+            "",
+            safe_next,
+        ]
+        if cand_preview:
+            parts.append("")
+            parts.append(f"_{cand_preview}_")
+        return "\n".join(parts)
+    if fmt == "slack_blocks":
+        # Slack expects an array of block-kit blocks serialized as JSON.
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Aztea refused* — `{safe_reason}`\n{safe_next}",
+                },
+            }
+        ]
+        if cand_preview:
+            blocks.append({
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": cand_preview}],
+            })
+        import json as _json
+        return _json.dumps(blocks)
+    return None

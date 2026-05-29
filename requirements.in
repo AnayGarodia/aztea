@@ -77,3 +77,10 @@ PyJWT>=2.8
 # 2026-05-20: openapi_validator imports openapi_spec_validator to validate
 # OpenAPI 3.x specs. Same explicit-dep rationale as PyJWT above.
 openapi-spec-validator>=0.7
+# 2026-05-28: simplemma for keyword normalization in auto-hire routing (B3).
+# match_keywords / block_keywords get lemma-normalized so "audit" matches
+# "auditing", "vulnerability" matches "vulns", etc. Optional at import time —
+# core/registry/auto_hire.py falls back to a tiny pure-Python suffix stripper
+# when simplemma is unavailable so the routing path never breaks on missing
+# dependency. Pin to a recent stable release; the API has been stable since 1.0.
+simplemma>=1.1
