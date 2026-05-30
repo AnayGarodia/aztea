@@ -35,7 +35,7 @@ import logging
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,11 @@ _MAX_PER_CALLER_ENTRIES = int(
 _PER_REQUEST_CAP = int(os.environ.get("AZTEA_LLM_BUDGET_PER_REQUEST", "4"))
 
 # Throttle redundant exhaustion logs (one per category per minute).
+# Guarded by its own lock (NOT _lock): _log_exhaustion is called both inside
+# _lock (the bucket-consume path) and outside it (RequestBudget.try_consume),
+# so reusing the non-reentrant _lock here would deadlock.
 _last_exhaustion_log: dict[str, float] = {}
+_exhaustion_log_lock = threading.Lock()
 _EXHAUSTION_LOG_INTERVAL_S = 60.0
 
 
@@ -91,12 +95,15 @@ def _log_exhaustion(category: str, reason: str) -> None:
 
     Why: ops needs to know when budgets are saturated, but per-call
     logging would itself amplify under attack. Token-bucketed logging.
+    The check-then-set on _last_exhaustion_log must be atomic or two threads
+    can both pass the throttle and double-log.
     """
     now = time.monotonic()
-    last = _last_exhaustion_log.get(category, 0.0)
-    if now - last < _EXHAUSTION_LOG_INTERVAL_S:
-        return
-    _last_exhaustion_log[category] = now
+    with _exhaustion_log_lock:
+        last = _last_exhaustion_log.get(category, 0.0)
+        if now - last < _EXHAUSTION_LOG_INTERVAL_S:
+            return
+        _last_exhaustion_log[category] = now
     logger.warning(
         "llm_budget.exhausted category=%s reason=%s "
         "(throttled: 1/min per category)",
@@ -112,16 +119,33 @@ class RequestBudget:
     and threads it through to every LLM call site. Even if the
     global/per-owner buckets allow it, a single request can never
     fire more than _PER_REQUEST_CAP LLM calls.
+
+    The handler may thread this object through to call sites that run on
+    different threads (e.g. a parallel runner), so the `used` read-modify-write
+    is guarded by a per-instance lock — otherwise concurrent try_consume calls
+    lose updates (bypassing the cap) and concurrent refunds underflow.
     """
     cap: int = _PER_REQUEST_CAP
     used: int = 0
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def try_consume(self, category: str) -> bool:
-        if self.used >= self.cap:
+        with self._lock:
+            if self.used >= self.cap:
+                exhausted = True
+            else:
+                self.used += 1
+                exhausted = False
+        # Log outside the per-instance lock to avoid holding it across I/O.
+        if exhausted:
             _log_exhaustion(category, "per_request_cap")
             return False
-        self.used += 1
         return True
+
+    def refund(self) -> None:
+        """Return one consumed unit (a downstream layer rejected the call)."""
+        with self._lock:
+            self.used = max(0, self.used - 1)
 
 
 def new_request_budget() -> RequestBudget:
@@ -216,13 +240,13 @@ def try_consume(
                 _log_exhaustion(category, "per_caller")
                 # Layer 1 already consumed; refund.
                 if request_budget is not None:
-                    request_budget.used = max(0, request_budget.used - 1)
+                    request_budget.refund()
                 return False
         _refill(global_bucket, now)
         if global_bucket.tokens < tokens:
             _log_exhaustion(category, "global")
             if request_budget is not None:
-                request_budget.used = max(0, request_budget.used - 1)
+                request_budget.refund()
             return False
         if per_caller is not None:
             per_caller.tokens -= tokens
