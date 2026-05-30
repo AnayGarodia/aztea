@@ -7,7 +7,19 @@
 
 ## Remediation status (branch `fix/security-review-2026-05-30`, worktree `aztea-review-fixes`)
 
-Fixes are being landed on a separate worktree, each with tests + flake8, smallest-risk first.
+Fixes landed on a separate worktree, each with tests + flake8, smallest-risk first.
+
+**Branch verification (post-fix):**
+- Full unit suite (`tests`, minus sdk_contract + integration): **green except one environmental
+  meta-test** — `test_oss_audit_extras.py::test_make_oss_check_runs_clean` fails because the
+  worktree has no `.venv` so the Makefile falls back to bare `python` (absent on this host;
+  only `python3`/venv exist). It fails identically with zero edits; passes on `main` only
+  because `main` has a `.venv`. The actual oss-check *work* passes: OSS isolation 8/8,
+  no hardcoded `aztea.ai` URLs, line-budget unaffected. Not caused by any code change.
+- `flake8` clean across all 15 changed `.py` files.
+- Targeted per-fix suites all green (auth/OTP, listing_safety+onboarding, llm/provider/fallback/byok,
+  llm-budget, pipeline/workspace/outbound, auto_hire/hosted_index). Frontend build ✓ + vitest 89/89 ✓.
+- Every new diagnostic test verified **failing on `main`, passing on the branch**.
 
 | Finding | Status | Commit |
 |---|---|---|
