@@ -9,17 +9,27 @@
 
 Fixes landed on a separate worktree, each with tests + flake8, smallest-risk first.
 
-**Branch verification (post-fix):**
-- Full unit suite (`tests`, minus sdk_contract + integration): **green except one environmental
-  meta-test** — `test_oss_audit_extras.py::test_make_oss_check_runs_clean` fails because the
-  worktree has no `.venv` so the Makefile falls back to bare `python` (absent on this host;
-  only `python3`/venv exist). It fails identically with zero edits; passes on `main` only
-  because `main` has a `.venv`. The actual oss-check *work* passes: OSS isolation 8/8,
-  no hardcoded `aztea.ai` URLs, line-budget unaffected. Not caused by any code change.
-- `flake8` clean across all 15 changed `.py` files.
-- Targeted per-fix suites all green (auth/OTP, listing_safety+onboarding, llm/provider/fallback/byok,
-  llm-budget, pipeline/workspace/outbound, auto_hire/hosted_index). Frontend build ✓ + vitest 89/89 ✓.
+**Rebased onto `origin/main` @ `12e23c69` (v1.3.0, wave-merge PR #93)** — the branch was cut
+from the old `085fc45c` (v1.2.1); origin had advanced 173 files / +29.5K lines. One conflict
+(`core/pipelines/executor.py`, B-S4 vs origin's new HMAC request-signing) resolved by keeping
+BOTH: origin's `signing_secret`/`X-Aztea-Signature` path AND routing transport through
+`outbound_session.post`. All 9 fixes verified present after rebase. Synced venv to v1.3.0
+requirements (notably fastapi 0.136.3→0.136.1, the OSV-flagged malicious release).
+
+**Branch verification (post-rebase), compared against clean `origin/main` baseline:**
+- **Full unit suite** (`tests` minus sdk_contract + integration): only failure is
+  `test_oss_audit_extras.py::test_make_oss_check_runs_clean` — **fails identically on clean
+  origin/main** (`bash: python: command not found`; the test worktree has no `.venv` so the
+  Makefile falls back to bare `python`, absent on this host). Environmental, NOT a regression.
+- **Integration suite**: only failure is `test_onboarding_registry::…auto_verifies_with_verifier_url`
+  — **fails identically on clean origin/main** (sandbox blocks the outbound `verifier.aztea.dev`
+  POST). Environmental, NOT a regression. My pipeline/workspace test edits + origin's
+  `test_wallets_stripe_auth` admin-scope tests all pass.
+- **SDK contract suite**: PASS (exit 0). **Frontend**: build ✓ + vitest 89/89 ✓ (deps re-`npm ci`'d to rebased lockfile).
+- **`flake8 .` repo-wide**: 0 findings (origin CI lint gate).
 - Every new diagnostic test verified **failing on `main`, passing on the branch**.
+- **Net: zero new test failures vs origin/main** — the two failures are the same environmental/network
+  ones that fail on clean origin too.
 
 | Finding | Status | Commit |
 |---|---|---|
