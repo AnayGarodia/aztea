@@ -1725,13 +1725,21 @@ def _score_candidate(
     return Ranked(candidate=c, score=final_score, reasons=reasons)
 
 
+# Confidence blends absolute signal strength with dominance over the runner-up.
+# The two weights must sum to 1.0. Equal weighting means a lone strong match and a
+# strongly-dominant match each contribute half — tune together if recall/precision
+# of auto-invoke needs rebalancing.
+_CONFIDENCE_RAW_WEIGHT = 0.5
+_CONFIDENCE_MARGIN_WEIGHT = 0.5
+
+
 def _confidence(top: Ranked, rest: list[Ranked]) -> float:
     """Combine raw signal strength with dominance over the runner-up.
 
     - raw    = min(1.0, top.score / 100)
     - margin = top.score / max(runner_up.score, 1)   in [1.0, ∞)
     - margin_w = min(1.0, (margin - 1.0))             1× → 0, 2× → 1.0
-    - confidence = 0.5 * raw + 0.5 * margin_w
+    - confidence = _CONFIDENCE_RAW_WEIGHT * raw + _CONFIDENCE_MARGIN_WEIGHT * margin_w
 
     A single 90-score result with no rivals scores ~0.95. Two near-tied
     80-score results score ~0.40. The 0.30 default floor (env-tunable via
@@ -1747,7 +1755,7 @@ def _confidence(top: Ranked, rest: list[Ranked]) -> float:
         return raw
     margin = top.score / max(rest[0].score, 1.0)
     margin_w = min(1.0, max(0.0, margin - 1.0))
-    return 0.5 * raw + 0.5 * margin_w
+    return _CONFIDENCE_RAW_WEIGHT * raw + _CONFIDENCE_MARGIN_WEIGHT * margin_w
 
 
 # ── Field extraction ───────────────────────────────────────────────────────

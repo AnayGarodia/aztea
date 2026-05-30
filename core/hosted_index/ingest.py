@@ -251,7 +251,13 @@ def _extract_commit(
             patch_text = (diff.diff.decode("utf-8", errors="replace")
                           if hasattr(diff.diff, "decode")
                           else str(diff.diff))
-        except Exception:
+        except Exception as exc:
+            # Skip an undecodable diff but leave a trail — silent drops made it
+            # impossible to tell why a file was missing from an ingest.
+            _LOG.warning(
+                "skipping undecodable diff for %s in commit %s: %s",
+                file_path, commit.hexsha, exc,
+            )
             continue
         if not patch_text or not patch_text.strip():
             continue
