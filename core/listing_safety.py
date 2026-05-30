@@ -125,10 +125,10 @@ _ZERO_WIDTH_RE = re.compile(
 # Cyrillic / Greek / mathematical look-alikes that visually impersonate
 # Latin letters used in the prompt-injection phrases. NFKC does NOT fold
 # these; we apply this map explicitly so 'іgnоre' (Cyrillic 'і' + 'о')
-# resolves to 'ignore' for the phrase matcher. Same table as
-# _HOMOGLYPH_FOLD below — kept duplicated only in source to make the
-# narrow purpose of each obvious to the reader; the real table is
-# _HOMOGLYPH_FOLD and _PHRASE_HOMOGLYPH_FOLD just re-uses it.
+# resolves to 'ignore' for the phrase matcher. This is a SEPARATE table from
+# _HOMOGLYPH_FOLD below (used for endpoint-host anti-spoof); the two are kept
+# in sync by hand. Their Greek rows must match — a gap here previously let a
+# Greek-lowercase host (e.g. 'azteο.ai') bypass the endpoint check.
 _PHRASE_HOMOGLYPH_FOLD_RAW = {
     # Cyrillic
     "а": "a", "А": "A", "е": "e", "Е": "E", "о": "o", "О": "O",
@@ -730,10 +730,15 @@ def scan_python_handler(source: str) -> list[VerificationFinding]:
 # by the SSRF check in core/url_security.py instead.
 _AZTEA_OWN_HOST_SUFFIXES: tuple[str, ...] = ("aztea.ai",)
 
-# Common Cyrillic look-alikes that visually impersonate Latin letters used in
+# Cyrillic AND Greek look-alikes that visually impersonate Latin letters used in
 # our own host name. NFKC does NOT fold these; we apply this map explicitly so
-# `aztеa.ai` (Cyrillic 'е') resolves to `aztea.ai` for comparison purposes.
+# `aztеa.ai` (Cyrillic 'е') or `azteο.ai` (Greek 'ο') resolves to `aztea.ai` for
+# comparison purposes. Greek coverage must stay at parity with
+# _PHRASE_HOMOGLYPH_FOLD_RAW above — an attacker can register an endpoint host
+# with a Greek look-alike (e.g. omicron 'ο' for 'o') to dodge the anti-spoof
+# check, so both folds carry the same Greek rows.
 _HOMOGLYPH_FOLD = str.maketrans({
+    # Cyrillic
     "а": "a", "А": "A",
     "е": "e", "Е": "E",
     "о": "o", "О": "O",
@@ -745,6 +750,12 @@ _HOMOGLYPH_FOLD = str.maketrans({
     "і": "i", "І": "I",
     "ј": "j", "Ј": "J",
     "ԛ": "q", "Ԛ": "Q",
+    # Greek lowercase look-alikes (parity with _PHRASE_HOMOGLYPH_FOLD_RAW)
+    "α": "a", "ο": "o", "ρ": "p", "ν": "v",
+    # Greek capitals that visually = Latin
+    "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H", "Ι": "I",
+    "Κ": "K", "Μ": "M", "Ν": "N", "Ο": "O", "Ρ": "P", "Τ": "T",
+    "Υ": "Y", "Χ": "X",
 })
 
 
