@@ -108,10 +108,7 @@ def _env_enabled(name: str) -> bool:
 
 
 def _env_enabled_any(*names: str) -> bool:
-    for name in names:
-        if _env_enabled(name):
-            return True
-    return False
+    return any(_env_enabled(name) for name in names)
 
 
 def _normalize_verdict(value: Any) -> str:
@@ -622,10 +619,10 @@ def _looks_like_unstructured_crash(payload: dict) -> bool:
         "KeyError: ",
         "IndexError: ",
     )
-    for value in payload.values():
-        if isinstance(value, str) and any(m in value for m in crash_markers):
-            return True
-    return False
+    return any(
+        isinstance(value, str) and any(m in value for m in crash_markers)
+        for value in payload.values()
+    )
 
 
 def _local_quality_fallback(

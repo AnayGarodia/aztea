@@ -16,7 +16,7 @@ import json
 import uuid
 from typing import Any
 
-from core.functional import Err, pipe, validate
+from core.functional import validate
 
 from .db import (
     VALID_STATUSES,

@@ -207,9 +207,9 @@ class AgentServer:
                 if not isinstance(message, dict):
                     continue
                 msg_id = message.get("message_id")
-                if isinstance(msg_id, int) and msg_id in seen_ids:
-                    continue
                 if isinstance(msg_id, int):
+                    if msg_id in seen_ids:
+                        continue
                     seen_ids.add(msg_id)
                 if message.get("type") != "clarification_response":
                     continue

@@ -121,7 +121,7 @@ def _summarize_node(node: dict[str, Any]) -> dict[str, Any]:
 
 def _normalize_tags(raw_tags: Any) -> list[str]:
     """Pure: coerce caller tags to a clean list, falling back to the WCAG defaults."""
-    if raw_tags is None or not isinstance(raw_tags, list) or not raw_tags:
+    if not isinstance(raw_tags, list) or not raw_tags:
         return list(_DEFAULT_TAGS)
     cleaned = [str(t).strip() for t in raw_tags if str(t).strip()]
     return cleaned or list(_DEFAULT_TAGS)

@@ -396,5 +396,5 @@ def bundle_from_payload(payload: dict[str, Any]) -> WorkspaceBundle:
             else None
         ),
         bundle_fingerprint=str(payload.get("fingerprint") or ""),
-        truncated=bool(payload.get("truncated") or False),
+        truncated=bool(payload.get("truncated")),
     )

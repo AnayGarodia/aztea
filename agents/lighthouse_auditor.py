@@ -296,7 +296,7 @@ def _normalize_run_inputs(
     except ValueError as exc:
         return _err("lighthouse_auditor.invalid_url", str(exc))
     raw_categories = payload.get("categories")
-    if raw_categories is None or not isinstance(raw_categories, list) or not raw_categories:
+    if not isinstance(raw_categories, list) or not raw_categories:
         categories = list(_DEFAULT_CATEGORIES)
     else:
         categories = [str(c).strip().lower() for c in raw_categories if str(c).strip()]

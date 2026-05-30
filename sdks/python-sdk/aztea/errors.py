@@ -160,14 +160,16 @@ def _extract_response_body(response: requests.Response) -> Any:
 
 
 def _extract_detail(body: Any) -> Any:
-    if isinstance(body, dict) and "error" in body and "message" in body:
+    if not isinstance(body, dict):
+        return body
+    if "error" in body and "message" in body:
         details = body.get("details")
         if details is None:
             details = body.get("data")
         return details if isinstance(details, dict) else body
-    if isinstance(body, dict) and body.get("error") == "rate_limit_exceeded":
+    if body.get("error") == "rate_limit_exceeded":
         return {"retry_after_seconds": body.get("retry_after_seconds")}
-    if isinstance(body, dict) and "detail" in body:
+    if "detail" in body:
         return body["detail"]
     return body
 

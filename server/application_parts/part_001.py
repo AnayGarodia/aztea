@@ -1129,10 +1129,10 @@ def _is_browser_navigation(request: Request) -> bool:
 def _path_is_spa_owned(path: str) -> bool:
     if not path or path == "/":
         return False
-    for prefix in _SPA_OWNED_PATHS:
-        if path == prefix or path.startswith(prefix + "/"):
-            return True
-    return False
+    return any(
+        path == prefix or path.startswith(prefix + "/")
+        for prefix in _SPA_OWNED_PATHS
+    )
 
 
 @app.middleware("http")

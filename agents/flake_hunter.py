@@ -39,6 +39,7 @@ from agents._contracts import (
     agent_error as _err,
     annotate_success as _annotate,
 )
+from agents._reasoning_scaffold import clamp_int as _clamp_int
 from core.llm.base import CompletionRequest, Message
 from core.llm.errors import BudgetExceededError, LLMError
 from core.llm.fallback import run_with_fallback
@@ -136,12 +137,3 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
          "trace": trace.to_dict()},
         llm_used=True,
     )
-
-
-def _clamp_int(value: Any, default: int, lo: int, hi: int) -> int:
-    """Pure: coerce-or-default into [lo, hi]."""
-    try:
-        n = int(value) if value is not None else default
-    except (TypeError, ValueError):
-        return default
-    return max(lo, min(hi, n))

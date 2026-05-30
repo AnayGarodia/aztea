@@ -25,7 +25,6 @@ import hashlib
 import json
 import os
 import queue
-import sqlite3
 import sys
 import threading
 import uuid

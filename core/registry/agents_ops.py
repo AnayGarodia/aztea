@@ -1501,8 +1501,6 @@ def record_call_endpoint_failure(
     infra failure increments the same counter and reuses the existing
     HEALTH_SUSPENSION_THRESHOLD so auto-suspension fires at parity.
     """
-    from datetime import datetime, timedelta, timezone
-
     ts = (checked_at or datetime.now(timezone.utc).isoformat()).strip()
     normalized_error = (str(error_message or "").strip() or None) and str(
         error_message or ""

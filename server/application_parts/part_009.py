@@ -94,7 +94,7 @@ def _batch_job_trace_item(
     job: dict, caller: core_models.CallerContext, *, include_detail: bool = False
 ) -> dict:
     """Compact per-job trace for caller agents narrating marketplace delegation."""
-    agent = registry.get_agent(str(job.get("agent_id") or ""), include_unapproved=True)
+    agent = registry.get_agent(str(job.get("agent_id") or ""), include_unapproved=True) or {}
     price_cents = int(job.get("caller_charge_cents") or job.get("price_cents") or 0)
     status = str(job.get("status") or "pending")
     receipt_status = "available" if status == "complete" else "pending"
@@ -103,8 +103,8 @@ def _batch_job_trace_item(
     item = {
         "job_id": job.get("job_id"),
         "agent_id": job.get("agent_id"),
-        "agent_name": (agent or {}).get("name"),
-        "agent_slug": (agent or {}).get("slug") or (agent or {}).get("agent_slug"),
+        "agent_name": agent.get("name"),
+        "agent_slug": agent.get("slug") or agent.get("agent_slug"),
         "status": status,
         "charge_cents": price_cents,
         "escrow": (

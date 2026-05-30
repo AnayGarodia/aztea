@@ -110,10 +110,10 @@ def is_path_exempt(path: str) -> bool:
     """Pure: True iff this path is in the documented exempt set."""
     if not path:
         return False
-    for prefix in EXEMPT_PATH_PREFIXES:
-        if path == prefix or path.startswith(prefix + "/"):
-            return True
-    return False
+    return any(
+        path == prefix or path.startswith(prefix + "/")
+        for prefix in EXEMPT_PATH_PREFIXES
+    )
 
 
 def extract_bearer_key(authorization_header: Optional[str]) -> Optional[str]:

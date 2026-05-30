@@ -76,6 +76,7 @@ from agents._contracts import (
     parse_json_payload,
     truncate_with_marker,
 )
+from agents._reasoning_scaffold import clamp_int as _clamp_int
 from core import hosted_index as _hi
 from core.llm.base import CompletionRequest, Message
 from core.llm.errors import BudgetExceededError, LLMError
@@ -248,15 +249,6 @@ def _parse_inputs(
     k_per_hunk = _clamp_int(payload.get("k_per_hunk"), _DEFAULT_K_PER_HUNK, 1, _HARD_MAX_K_PER_HUNK)
     budget_cents = _clamp_int(payload.get("budget_cents"), _DEFAULT_BUDGET_CENTS, 1, _HARD_MAX_BUDGET_CENTS)
     return repo_id.strip(), cleaned_hunks, max_hunks, k_per_hunk, budget_cents
-
-
-def _clamp_int(value: Any, default: int, lo: int, hi: int) -> int:
-    """Pure: coerce-or-default a value into [lo, hi]."""
-    try:
-        n = int(value) if value is not None else default
-    except (TypeError, ValueError):
-        return default
-    return max(lo, min(hi, n))
 
 
 def _review_one_hunk(

@@ -60,7 +60,7 @@ def status_cmd(
                 "username": profile.get("username"),
                 "balance_cents": getattr(wallet, "balance_cents", None),
                 "escrow_cents": getattr(wallet, "escrow_cents", None),
-                "connect_charges_enabled": (connect or {}).get("charges_enabled") if isinstance(connect, dict) else None,
+                "connect_charges_enabled": connect.get("charges_enabled") if isinstance(connect, dict) else None,
                 "recent_jobs": [_job_summary(j) for j in recent_jobs[:limit]],
             }
             if json_mode:
