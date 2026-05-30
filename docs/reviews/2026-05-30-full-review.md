@@ -5,6 +5,39 @@
 > Scope: risk-prioritized (exhaustive on money/auth/security + all fresh v1.2.1 code).
 > Plan: `~/.claude/plans/goofy-whistling-grove.md`. Baseline commit: `085fc45c` (v1.2.1).
 
+## Remediation status (branch `fix/security-review-2026-05-30`, worktree `aztea-review-fixes`)
+
+Fixes are being landed on a separate worktree, each with tests + flake8, smallest-risk first.
+
+| Finding | Status | Commit |
+|---|---|---|
+| **B-S5** OTP non-crypto random | ✅ FIXED (`secrets.randbelow`) | crypto-secure OTPs |
+| **B-S6** Greek-homoglyph endpoint bypass | ✅ FIXED + regression test | homoglyph fold / test |
+| **B-S7** BYOK key copied into os.environ | ✅ FIXED (use original env var) | llm providers commit |
+| **A-C4** LLM providers leak raw exceptions | ✅ FIXED (3 providers) + tests | llm providers commit |
+| **A-C6** _llm_budget data races | ✅ FIXED (locks) + stress tests | llm-budget commit |
+| **A-C8** WalletPage poll leak | ✅ FIXED (effect cleanup) | frontend commit |
+| **B-S4** pipeline DNS-rebind SSRF | ✅ FIXED (outbound_session) + test repoint | ssrf commit |
+| **C3** confidence magic 0.5 | ✅ FIXED (named consts) | chore commit |
+| **C4** silent diff-decode except | ✅ FIXED (log) | chore commit |
+| **A-C7** Twilio SID regex | ❌ REJECTED — `[a-f0-9]{32}` is correct (SIDs are hex) | — |
+| **A-C8** JobDetailPage half | ❌ NOT A BUG — already has cleanup | — |
+| **A-C3** Postgres migration rollback | ⏸️ DEFERRED — needs Postgres; correct fix is SAVEPOINT, untestable on SQLite | — |
+| **B-S1** admin scope escalation | ⏸️ NEEDS DECISION — an existing test asserts user→admin keys are intended; admin routes also gate on IP allowlist. Design call, see below. | — |
+| **A-C1 / A-C2** money settlement | ⏸️ NEEDS DECISION — fixes involve money semantics (partial-settle primitive / ledger sign); want sign-off before touching settlement | — |
+| **B-S2** warm-pool sandbox escape | ⏸️ NEEDS DECISION — flag-gated; fix is inject prelude or disable warm pool for untrusted code | — |
+| **B-S3** API key in EventSource URL | ⏸️ NEEDS DECISION — needs a short-lived stream-token endpoint (backend + frontend), larger change | — |
+| A-C5 / A-C9 / B-S8 / C-rest | ⏳ TODO (lower priority) | — |
+
+**B-S1 nuance discovered during remediation:** `tests/integration/test_wallets_stripe_auth.py:101-106`
+(and `:1437`) deliberately mints a user→admin key via `POST /auth/keys` and asserts 201, then
+uses it against `/ops/*`. The admin ops routes enforce BOTH `_require_scope("admin")` AND
+`_require_admin_ip_allowlist`. So user-minted admin scope may be intended-by-design with the IP
+allowlist as the real perimeter — "fixing" it (rejecting admin scope) breaks that test and is a
+design decision, not a clean patch. **Recommend deciding:** (a) admin scope should never be
+user-mintable (fix route + update that test + require IP allowlist in prod), or (b) it's intended
+and the IP allowlist is the control (then make the allowlist mandatory in prod and document it).
+
 ## How this review was produced
 1. **Deterministic gates** — full pytest suite, flake8, mypy (not in CI), frontend build+vitest, pre-commit invariant greps.
 2. **Multi-agent bug hunt** — 14 risk-ordered finder dimensions, each finding adversarially verified by a 3-lens panel (correctness / security / reproducibility). 176 agents, 8.9M tokens. Produced 54 raw → **32 confirmed** (≥2/3 lenses).
