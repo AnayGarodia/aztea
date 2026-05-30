@@ -95,6 +95,10 @@ class AnthropicProvider:
             raise LLMTimeoutError("anthropic", req.model, str(exc), exc) from exc
         except self._anthropic_mod.AuthenticationError as exc:
             raise LLMAuthError("anthropic", req.model, str(exc), exc) from exc
+        except Exception as exc:
+            # Any other SDK/transport error must surface as an LLMError so
+            # run_with_fallback fails over instead of crashing the chain.
+            raise LLMBadResponseError("anthropic", req.model, str(exc), exc) from exc
 
     def complete(self, req: CompletionRequest) -> LLMResponse:
         """Side-effect: chat completion via the Anthropic Messages API.
@@ -104,17 +108,30 @@ class AnthropicProvider:
         a single, narrow boundary.
         """
         response = self._invoke(req, self._build_kwargs(req))
-        text = (response.content[0].text if response.content else "").strip()
+        try:
+            text = (response.content[0].text if response.content else "").strip()
+            usage = Usage(
+                prompt_tokens=response.usage.input_tokens if response.usage else 0,
+                completion_tokens=response.usage.output_tokens if response.usage else 0,
+            )
+            finish_reason = response.stop_reason or "stop"
+        except Exception as exc:
+            # Malformed response shape (e.g. empty content, missing usage) →
+            # LLMError, not a raw exception that escapes run_with_fallback.
+            raise LLMBadResponseError(
+                "anthropic",
+                req.model,
+                "Provider returned an unexpected response shape.",
+                exc,
+            ) from exc
         if req.json_mode:
+            # _validate_json_mode raises LLMBadResponseError on its own; let it
+            # propagate with its specific message rather than re-wrapping.
             _validate_json_mode(text, req.model)
-        usage = Usage(
-            prompt_tokens=response.usage.input_tokens if response.usage else 0,
-            completion_tokens=response.usage.output_tokens if response.usage else 0,
-        )
         return LLMResponse(
             text=text,
             model=req.model,
             provider="anthropic",
             usage=usage,
-            finish_reason=response.stop_reason or "stop",
+            finish_reason=finish_reason,
         )
