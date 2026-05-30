@@ -176,11 +176,6 @@ def update_status(
         )
 
 
-def deserialize_request(row: dict[str, Any]) -> dict[str, Any]:
-    """Decode the persisted request JSON, returning {} on parse failure."""
-    return _decode_json(row.get("request_json"), {})
-
-
 def deserialize_result(row: dict[str, Any]) -> dict[str, Any]:
     """Decode the persisted result JSON, returning {} when absent or bad."""
     return _decode_json(row.get("result_json"), {})

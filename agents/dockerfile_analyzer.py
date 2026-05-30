@@ -121,7 +121,6 @@ _PINNED_TAG_RE = re.compile(
 # Pattern to detect any FROM instruction (for no-USER-after-FROM check).
 _FROM_RE = re.compile(r"^\s*FROM\b", re.IGNORECASE)
 _USER_RE = re.compile(r"^\s*USER\s+(\S+)", re.IGNORECASE)
-_USER_ROOT_RE = re.compile(r"^\s*USER\s+root\b", re.IGNORECASE)
 _ENV_SECRET_RE = re.compile(
     r"^\s*ENV\s+.*(PASSWORD|SECRET|TOKEN|KEY|API_KEY)\b",
     re.IGNORECASE,

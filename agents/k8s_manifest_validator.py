@@ -8,6 +8,8 @@ import subprocess
 
 import yaml
 
+from agents._contracts import agent_error as _error
+
 MAX_INPUT_BYTES = 200_000
 MAX_RESOURCES = 50
 KUBECTL_TIMEOUT = 15
@@ -17,8 +19,6 @@ _POD_SPEC_KINDS = {"Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"}
 _JOB_KINDS = {"Job"}
 _CRON_KINDS = {"CronJob"}
 _ALL_POD_KINDS = _POD_SPEC_KINDS | _JOB_KINDS | _CRON_KINDS | {"Pod"}
-
-_FINDING_SEVERITIES = ("error", "warning", "info")
 
 
 def run(payload: dict) -> dict:
@@ -452,11 +452,3 @@ def _build_response(
 def _finding(severity: str, rule: str, message: str, path: str) -> dict:
     """Construct a single finding dict."""
     return {"severity": severity, "rule": rule, "message": message, "path": path}
-
-
-def _error(code: str, message: str, details: dict | None = None) -> dict:
-    """Construct a structured error envelope."""
-    err: dict = {"code": code, "message": message}
-    if details:
-        err["details"] = details
-    return {"error": err}

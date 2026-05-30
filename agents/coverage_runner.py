@@ -60,9 +60,6 @@ _TIMEOUT_MAX = 60
 # character that would let the caller inject a second command is rejected here.
 _SHELL_DANGEROUS_RE = re.compile(r"[;&|><$`\\]")
 
-# Artefacts written by `coverage` that must not appear in per-file results.
-_COVERAGE_ARTEFACTS = {"coverage.json", ".coverage"}
-
 # Resource limits for the test-runner child. Belt-and-braces over the wall
 # clock: a runaway test that allocates wildly or writes a huge file hits the
 # kernel ceiling first. RLIMIT_NPROC is intentionally NOT applied here —

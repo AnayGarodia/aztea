@@ -445,7 +445,7 @@ function OutputTab({ testResult, publishResult, error, phase, onShare }) {
 function TestResultCard({ result }) {
   // Listing safety / playground.disabled errors come back as the
   // response body's `error` field.
-  if (result?.error && result.error !== null && typeof result.error === 'string' === false) {
+  if (result?.error && typeof result.error !== 'string') {
     return (
       <div className="buildpage__panel">
         <Card variant="warn">

@@ -302,7 +302,7 @@ export default function AgentsPage() {
                 </section>
               )}
 
-              {filtered.filter(a => !featured.some(f => f.agent_id === a.agent_id)).length > 0 && (
+              {filtered.some(a => !featured.some(f => f.agent_id === a.agent_id)) && (
                 <section>
                   <div className="agents-page__section-header">
                     <span className="agents-page__section-label">All agents</span>

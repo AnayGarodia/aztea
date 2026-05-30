@@ -45,7 +45,6 @@ PBKDF2_LEGACY_ITERATIONS = 100_000
 VALID_KEY_SCOPES = {"caller", "worker", "admin"}
 DEFAULT_KEY_SCOPES = ("caller", "worker")
 _CANONICAL_TIMESTAMP = "1970-01-01T00:00:00+00:00"
-VALID_SUBJECT_STATUSES = {"active", "suspended", "banned"}
 
 # Validation bounds — shared by profile.py and users.py
 MIN_USERNAME_LEN = 3

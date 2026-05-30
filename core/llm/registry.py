@@ -46,8 +46,6 @@ import os
 import re
 from typing import TYPE_CHECKING
 
-from core.functional import Err, Ok, Result
-
 if TYPE_CHECKING:
     from .base import LLMProvider
 
@@ -223,14 +221,6 @@ def resolve(spec: str) -> tuple["LLMProvider", str]:
                 "with OPENAI_COMPAT_BASE_URL."
             )
     return provider, model
-
-
-def resolve_result(spec: str) -> "Result[tuple[LLMProvider, str], str]":
-    """Result-returning variant of ``resolve``; returns ``Err`` instead of raising."""
-    try:
-        return Ok(resolve(spec))
-    except ValueError as exc:
-        return Err(str(exc))
 
 
 # Audit 2026-05-17 bug #5: per-caller LLM key isolation scaffold.

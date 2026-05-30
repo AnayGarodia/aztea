@@ -1044,6 +1044,36 @@ def _compact_latency(value: Any) -> str | None:
     return f"~{int(ms)}ms"
 
 
+def _quality_summary_parts(e: dict) -> list[str]:
+    """Build the human-readable quality summary parts for a registry entry."""
+    quality_parts: list[str] = []
+    if e.get("codex_recommended"):
+        quality_parts.append("Claude-ready")
+    if e.get("stability_tier"):
+        quality_parts.append(str(e["stability_tier"]))
+    if e.get("tooling_kind"):
+        quality_parts.append(str(e["tooling_kind"]).replace("_", " "))
+    latency = _compact_latency(e.get("avg_latency_ms"))
+    if latency:
+        quality_parts.append(latency)
+    return quality_parts
+
+
+def _with_inline_inputs(desc: str, required_list, input_list) -> str:
+    """Append an ' Inputs: required=... optional=...' line to a description.
+
+    Returns the description unchanged when there are no required fields.
+    """
+    if not required_list:
+        return desc
+    inline_inputs = f" Inputs: required={required_list}"
+    if input_list:
+        extras = [f for f in input_list if f not in required_list]
+        if extras:
+            inline_inputs += f", optional={extras[:6]}"
+    return f"{desc}{inline_inputs}"
+
+
 def _query_terms(query: str) -> list[str]:
     terms = [
         term.lower() for term in re.findall(r"[a-zA-Z0-9_.:/#-]{2,}", str(query or ""))
@@ -1867,18 +1897,7 @@ class RegistryBridge:
             ):
                 continue
 
-            quality_parts: list[str] = []
-            if local_entry.get("codex_recommended"):
-                quality_parts.append("Claude-ready")
-            if local_entry.get("stability_tier"):
-                quality_parts.append(str(local_entry["stability_tier"]))
-            if local_entry.get("tooling_kind"):
-                quality_parts.append(
-                    str(local_entry["tooling_kind"]).replace("_", " ")
-                )
-            latency = _compact_latency(local_entry.get("avg_latency_ms"))
-            if latency:
-                quality_parts.append(latency)
+            quality_parts = _quality_summary_parts(local_entry)
 
             input_hint = meta_tools._schema_input_hint(local_entry.get("input_schema"))
             required_list = list(local_entry.get("required_fields") or [])
@@ -1887,13 +1906,7 @@ class RegistryBridge:
             input_list = list(local_entry.get("input_fields") or [])[:12]
 
             description = _word_truncate(str(local_entry.get("description") or ""), 380)
-            if required_list:
-                inline_inputs = f" Inputs: required={required_list}"
-                if input_list:
-                    extras = [f for f in input_list if f not in required_list]
-                    if extras:
-                        inline_inputs += f", optional={extras[:6]}"
-                description = f"{description}{inline_inputs}"
+            description = _with_inline_inputs(description, required_list, input_list)
 
             score = round(float(item.get("blended_score") or 0.0), 4)
             why = list(item.get("match_reasons") or local_entry.get("_why") or [])
@@ -2280,16 +2293,7 @@ class RegistryBridge:
             )
         result_items = []
         for score, entry in matches[:capped_limit]:
-            quality_parts: list[str] = []
-            if entry.get("codex_recommended"):
-                quality_parts.append("Claude-ready")
-            if entry.get("stability_tier"):
-                quality_parts.append(str(entry["stability_tier"]))
-            if entry.get("tooling_kind"):
-                quality_parts.append(str(entry["tooling_kind"]).replace("_", " "))
-            latency = _compact_latency(entry.get("avg_latency_ms"))
-            if latency:
-                quality_parts.append(latency)
+            quality_parts = _quality_summary_parts(entry)
             required_list = list(entry.get("required_fields") or [])
             input_list = list(entry.get("input_fields") or [])[:12]
             input_hint = meta_tools._schema_input_hint(entry.get("input_schema"))
@@ -2297,13 +2301,7 @@ class RegistryBridge:
             # the schema summary inline without a follow-up aztea_describe call.
             # This fixes the 422-on-first-try problem documented in QA.
             base_description = _word_truncate(entry["description"], 380)
-            if required_list:
-                inline_inputs = f" Inputs: required={required_list}"
-                if input_list:
-                    extras = [f for f in input_list if f not in required_list]
-                    if extras:
-                        inline_inputs += f", optional={extras[:6]}"
-                base_description = f"{base_description}{inline_inputs}"
+            base_description = _with_inline_inputs(base_description, required_list, input_list)
             result_items.append(
                 {
                     "slug": entry["slug"],

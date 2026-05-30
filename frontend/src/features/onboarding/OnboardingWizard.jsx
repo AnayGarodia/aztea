@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'motion/react'
-import { ArrowRight, X, Wallet, Bot, Zap, ChevronLeft, Hammer, ListChecks, Coins, Terminal, Wrench } from 'lucide-react'
+import { ArrowRight, X, Wallet, Bot, ChevronLeft, Hammer, ListChecks, Coins, Terminal, Wrench } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { useMarket } from '../../context/MarketContext'
 import './OnboardingWizard.css'

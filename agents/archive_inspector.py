@@ -29,6 +29,8 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
+from agents._contracts import agent_error as _error
+
 MAX_ARCHIVE_BYTES = 50 * 1024 * 1024
 DEFAULT_MAX_ENTRIES = 500
 # 2026-05-18: the bomb detector previously required uncompressed > 100MB
@@ -70,11 +72,6 @@ _FORMAT_TAR_MODE = {
     "tar.bz2": "r:bz2",
     "tar.xz": "r:xz",
 }
-
-
-def _error(code: str, message: str) -> dict:
-    """Return a structured error envelope."""
-    return {"error": {"code": code, "message": message}}
 
 
 def _detect_format(raw: bytes, filename: str) -> str | None:

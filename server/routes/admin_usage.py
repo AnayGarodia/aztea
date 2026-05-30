@@ -563,20 +563,7 @@ def _view_user_activity(window_start: str, limit: int) -> list[dict[str, Any]]:
 
 
 def _view_top_agents(window_start: str, limit: int) -> list[dict[str, Any]]:
-    return _fetchall(
-        """
-        SELECT j.agent_id, COALESCE(a.name, j.agent_id) AS name,
-               COUNT(*) AS calls,
-               SUM(CASE WHEN j.status='complete' THEN 1 ELSE 0 END) AS success
-        FROM jobs j
-        LEFT JOIN agents a ON a.agent_id = j.agent_id
-        WHERE j.created_at >= %s
-        GROUP BY j.agent_id, a.name
-        ORDER BY calls DESC
-        LIMIT %s
-        """,
-        (window_start, limit),
-    )
+    return _digest_top_agents(window_start, limit)
 
 
 def _view_dormant_users(cutoff: str, limit: int) -> list[dict[str, Any]]:

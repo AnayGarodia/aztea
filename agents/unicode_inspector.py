@@ -5,6 +5,8 @@
 
 import unicodedata
 
+from agents._contracts import agent_error as _error
+
 MAX_TEXT_LENGTH = 10_000
 MAX_BATCH_SIZE = 20
 MAX_CHARACTERS_LIST = 500
@@ -198,11 +200,6 @@ def _analyze_text(text: str) -> dict:
     if truncated:
         result["truncated_at"] = MAX_CHARACTERS_LIST
     return result
-
-
-def _error(code: str, message: str) -> dict:
-    """Return a structured error envelope."""
-    return {"error": {"code": code, "message": message}}
 
 
 def _validate_inputs(payload: dict) -> tuple[str | None, list[str] | None, dict | None]:

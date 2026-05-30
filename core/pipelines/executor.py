@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from core import crypto, fastpath, jobs, outbound_session, payments, registry, url_security
-from core.functional import Err, Ok, Result
 from core.registry import origin_context as _origin_context
 from server import pricing_helpers
 
@@ -173,17 +172,6 @@ def validate_definition(definition: dict) -> dict:
             outgoing_ids.add(dep)
     terminal_nodes = [node["id"] for node in nodes if node["id"] not in outgoing_ids]
     return {"nodes": nodes, "ordered_nodes": ordered, "terminal_nodes": terminal_nodes}
-
-
-def validate_definition_result(definition: dict) -> "Result[dict, str]":
-    """Result-returning variant of :func:`validate_definition`.
-
-    Returns ``Ok(normalised_definition)`` or ``Err(message)``.
-    """
-    try:
-        return Ok(validate_definition(definition))
-    except ValueError as exc:
-        return Err(str(exc))
 
 
 def _agent_price_and_distribution(agent: dict, payload: dict) -> tuple[int, dict, dict]:

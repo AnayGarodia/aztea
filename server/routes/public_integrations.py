@@ -95,18 +95,12 @@ def _manifest_response(
     return JSONResponse(content=manifest, headers=headers)
 
 
-def _build_public_openai_chat_manifest(
+def _build_public_manifest(
     active_agents_fn: Callable[[], list[dict[str, Any]]],
+    builder: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
     scrubbed = tool_adapters.scrub_agents_for_public(active_agents_fn())
-    return tool_adapters.build_openai_chat_manifest(scrubbed, audience="public")
-
-
-def _build_public_gemini_manifest(
-    active_agents_fn: Callable[[], list[dict[str, Any]]],
-) -> dict[str, Any]:
-    scrubbed = tool_adapters.scrub_agents_for_public(active_agents_fn())
-    return tool_adapters.build_gemini_manifest(scrubbed, audience="public")
+    return builder(scrubbed, audience="public")
 
 
 def create_router(
@@ -147,7 +141,7 @@ def create_router(
         _validate_version(version)
         manifest, etag = integrations_cache.get_public_manifest(
             "openai_chat",
-            lambda: _build_public_openai_chat_manifest(active_agents_fn),
+            lambda: _build_public_manifest(active_agents_fn, tool_adapters.build_openai_chat_manifest),
         )
         return _manifest_response(request, manifest, etag)
 
@@ -167,7 +161,7 @@ def create_router(
         _validate_version(version)
         manifest, etag = integrations_cache.get_public_manifest(
             "gemini",
-            lambda: _build_public_gemini_manifest(active_agents_fn),
+            lambda: _build_public_manifest(active_agents_fn, tool_adapters.build_gemini_manifest),
         )
         return _manifest_response(request, manifest, etag)
 

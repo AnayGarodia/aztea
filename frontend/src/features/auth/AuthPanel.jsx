@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
-import { authLogin, authGoogle, authRegister, authSignupStart, authSignupVerify, authSignupResend, authForgotPassword, authResetPassword } from '../../api'
+import { authLogin, authGoogle, authRegister, authSignupVerify, authSignupResend, authForgotPassword, authResetPassword } from '../../api'
 import { useAuth } from '../../context/AuthContext'
 import Button from '../../ui/Button'
 import Input from '../../ui/Input'

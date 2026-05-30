@@ -77,7 +77,6 @@ _CONCURRENCY = 6
 # `robots_disallowed` rather than `broken_links`.
 _ROBOTS_TXT_TIMEOUT_S = 5.0
 _MAX_BROKEN_TO_REPORT = 100
-_MAX_REDIRECT_HOPS = 6
 _MAX_HTML_BYTES = 1_500_000
 _USER_AGENT = "Aztea-Broken-Link-Crawler/1.0"
 _REPORT_LIST_CAP = 50

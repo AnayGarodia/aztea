@@ -2230,38 +2230,27 @@ def _retry_after_seconds(r: requests.Response) -> float:
     return 0.0
 
 
-def _get(
-    session: requests.Session, url: str, hdrs: dict, timeout: float, **kwargs: Any
-) -> tuple[bool, dict]:
+def _request_with_retries(do_request):
     import time as _time
 
     for attempt in range(_MAX_RATE_LIMIT_RETRIES + 1):
-        r = session.get(url, headers=hdrs, timeout=timeout, **kwargs)
+        r = do_request()
         if r.status_code != 429 or attempt >= _MAX_RATE_LIMIT_RETRIES:
             return _parse(r)
-        wait = min(
-            _RATE_LIMIT_MAX_WAIT_SECONDS,
-            max(0.25, _retry_after_seconds(r) or (1 + attempt) * 2),
-        )
-        _time.sleep(wait)
-    return _parse(r)  # unreachable; keeps mypy/typing happy
+        _time.sleep(min(_RATE_LIMIT_MAX_WAIT_SECONDS, max(0.25, _retry_after_seconds(r) or (1 + attempt) * 2)))
+    return _parse(r)
+
+
+def _get(
+    session: requests.Session, url: str, hdrs: dict, timeout: float, **kwargs: Any
+) -> tuple[bool, dict]:
+    return _request_with_retries(lambda: session.get(url, headers=hdrs, timeout=timeout, **kwargs))
 
 
 def _post(
     session: requests.Session, url: str, hdrs: dict, timeout: float, body: Any
 ) -> tuple[bool, dict]:
-    import time as _time
-
-    for attempt in range(_MAX_RATE_LIMIT_RETRIES + 1):
-        r = session.post(url, headers=hdrs, timeout=timeout, json=body)
-        if r.status_code != 429 or attempt >= _MAX_RATE_LIMIT_RETRIES:
-            return _parse(r)
-        wait = min(
-            _RATE_LIMIT_MAX_WAIT_SECONDS,
-            max(0.25, _retry_after_seconds(r) or (1 + attempt) * 2),
-        )
-        _time.sleep(wait)
-    return _parse(r)
+    return _request_with_retries(lambda: session.post(url, headers=hdrs, timeout=timeout, json=body))
 
 
 def _parse(r: requests.Response) -> tuple[bool, dict]:
@@ -2712,190 +2701,6 @@ def _session_audit(
     # request timeout otherwise.
     request_timeout = max(float(timeout or 30.0), 60.0) if params.get("verify_all") else float(timeout or 30.0)
     return _get(session, f"{base}/wallets/audit", hdrs, request_timeout, params=params)
-
-
-# Legacy client-side audit aggregation. Kept as a private function ONLY
-# for the unlikely case that a user runs an old aztea-cli against an
-# older server build that doesn't yet expose /wallets/audit. The MCP
-# dispatch above always calls _session_audit (the passthrough); this
-# function is no longer wired in. Slated for deletion once aztea.ai has
-# been on the new endpoint for one release cycle.
-def _session_audit_legacy(
-    session: requests.Session,
-    base: str,
-    hdrs: dict,
-    timeout: float,
-    args: dict,
-) -> tuple[bool, dict]:
-    import hashlib
-    import datetime as _dt
-    period = str(args.get("period") or "1d").strip().lower()
-    if period not in {"1d", "7d", "30d", "90d"}:
-        period = "1d"
-    ok, spend = _get(
-        session,
-        f"{base}/wallet/spend-summary",
-        hdrs,
-        timeout,
-        params={"period": period},
-    )
-    if not ok:
-        return ok, spend
-
-    # Time-window filtering. `since` / `until` parsed as ISO-8601; if either
-    # parses, jobs outside the window are excluded. Errors fall back to the
-    # whole-period view rather than returning 422 — auditors prefer "more
-    # data" to "0 data" when a timestamp is malformed.
-    def _parse_iso(value: Any) -> _dt.datetime | None:
-        if not value:
-            return None
-        try:
-            text = str(value).strip().replace("Z", "+00:00")
-            return _dt.datetime.fromisoformat(text)
-        except (TypeError, ValueError):
-            return None
-
-    since_dt = _parse_iso(args.get("since"))
-    until_dt = _parse_iso(args.get("until"))
-    job_limit = max(1, min(200, int(args.get("limit") or 100)))
-
-    ok2, recent = _get(
-        session,
-        f"{base}/jobs",
-        hdrs,
-        timeout,
-        params={"limit": job_limit, "status": "complete"},
-    )
-    receipts: list[dict] = []
-    if ok2 and isinstance(recent, dict):
-        for job in (recent.get("jobs") or []):
-            if not isinstance(job, dict):
-                continue
-            settled_dt = _parse_iso(job.get("settled_at"))
-            if since_dt is not None and settled_dt is not None and settled_dt < since_dt:
-                continue
-            if until_dt is not None and settled_dt is not None and settled_dt > until_dt:
-                continue
-            receipts.append(
-                {
-                    "job_id": job.get("job_id"),
-                    "agent_id": job.get("agent_id"),
-                    "agent_name": job.get("agent_name"),
-                    "charge_cents": job.get("caller_charge_cents")
-                    or job.get("price_cents"),
-                    "settled_at": job.get("settled_at"),
-                    "output_hash": job.get("output_hash"),
-                    "signed": bool(job.get("output_signature")),
-                    "signature_endpoint": (
-                        f"/jobs/{job.get('job_id')}/signature"
-                        if job.get("output_signature")
-                        else None
-                    ),
-                }
-            )
-
-    receipts.sort(
-        key=lambda r: (str(r.get("settled_at") or ""), str(r.get("job_id") or "")),
-        reverse=True,
-    )
-
-    # Aggregate digest: SHA-256 over a canonical newline-joined string
-    # (job_id|output_hash|signed). This is NOT a Merkle root — the receipts
-    # themselves are still individually signed by their agents — but it
-    # gives auditors a single fingerprint they can cache and detect
-    # tampering with without re-walking every receipt.
-    digest_lines = [
-        f"{r.get('job_id')}|{r.get('output_hash') or ''}|{1 if r.get('signed') else 0}"
-        for r in receipts
-    ]
-    receipts_digest = hashlib.sha256(
-        "\n".join(digest_lines).encode("utf-8")
-    ).hexdigest() if digest_lines else None
-
-    aggregates = {
-        "receipts_total": len(receipts),
-        "receipts_signed": sum(1 for r in receipts if r.get("signed")),
-        "receipts_unsigned": sum(1 for r in receipts if not r.get("signed")),
-        "distinct_agents": len(
-            {r.get("agent_id") for r in receipts if r.get("agent_id")}
-        ),
-        "total_settled_cents": sum(int(r.get("charge_cents") or 0) for r in receipts),
-        "earliest_settled_at": receipts[-1].get("settled_at") if receipts else None,
-        "latest_settled_at": receipts[0].get("settled_at") if receipts else None,
-    }
-
-    response: dict[str, Any] = {
-        "period": period,
-        "since": since_dt.isoformat() if since_dt else None,
-        "until": until_dt.isoformat() if until_dt else None,
-        "spend": spend,
-        "recent_signed_receipts": receipts,
-        "receipts_aggregate": aggregates,
-        "receipts_digest": receipts_digest,
-        "receipts_digest_method": "sha256(job_id|output_hash|signed) joined by newline",
-        "audit_signature_method": "per-job Ed25519 + did:web (call manage_job(action=verify) to confirm any single receipt)",
-        # Self-discovery: every filter / mode this tool supports surfaced in
-        # one place so callers don't have to read docs to find them. Caught
-        # in the 2026-05-08 eval where the auditor scored this surface a C+
-        # because they couldn't tell time-range / bulk-verify / digest were
-        # already supported. Same payload shape regardless of which filters
-        # the caller passed.
-        "available_options": {
-            "period": "1d | 7d | 30d | 90d (default 1d)",
-            "since": "ISO-8601 lower bound on settled_at (e.g. 2026-05-01T00:00:00Z)",
-            "until": "ISO-8601 upper bound on settled_at",
-            "limit": "1..200 receipts (default 100, sorted newest-first)",
-            "verify_all": "true to Ed25519-verify every signed receipt in the window; returns aggregate verified/failed and first failure",
-        },
-    }
-
-    # Optional bulk verification — auditors who want the "I verified every
-    # receipt in this window" assurance pass verify_all=true. We stop on
-    # first failure to surface the bad receipt directly.
-    if bool(args.get("verify_all")):
-        verified = 0
-        failed = 0
-        first_failure: dict | None = None
-        # Per-receipt timeout cap so bulk-verify on a long window can never
-        # hang the audit. Each Ed25519 verification is sub-50ms server-side
-        # over LAN; 1.0s is generous for transient hiccups but bounded.
-        # The 2026-05-08 plan's audit grade-A bar required: bulk verify
-        # must never block. With this cap, the worst case for N receipts
-        # is N × 1.0s plus network overhead.
-        _verify_timeout = min(float(timeout or 1.0), 1.0)
-        for r in receipts:
-            if not r.get("signed"):
-                continue
-            ok_v, vbody = _get(
-                session,
-                f"{base}/jobs/{r.get('job_id')}/signature",
-                hdrs,
-                _verify_timeout,
-            )
-            if ok_v and bool(vbody.get("verified")):
-                verified += 1
-            else:
-                failed += 1
-                if first_failure is None:
-                    first_failure = {
-                        "job_id": r.get("job_id"),
-                        "agent_id": r.get("agent_id"),
-                        "verification_error": vbody.get("verification_error")
-                        or vbody.get("error"),
-                    }
-        response["bulk_verification"] = {
-            "verified": verified,
-            "failed": failed,
-            "first_failure": first_failure,
-            "verdict": "all_verified" if failed == 0 and verified > 0 else (
-                "no_signed_receipts" if verified == 0 and failed == 0 else "verification_failed"
-            ),
-        }
-    else:
-        response["bulk_verification_hint"] = (
-            "Pass verify_all=true to bulk-verify every signed receipt in this window."
-        )
-    return True, response
 
 
 def _list_pipelines(

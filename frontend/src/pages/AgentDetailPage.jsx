@@ -17,7 +17,7 @@ import ResultRenderer from '../features/agents/results/ResultRenderer'
 import TrustGauge from '../features/agents/TrustGauge'
 import { callAgent, createJob, fetchAgentWorkHistory, fetchMyAgents } from '../api'
 import { useMarket } from '../context/MarketContext'
-import { ArrowLeft, ArrowUpRight, AlertTriangle, XCircle, Zap, Clock, BarChart2, Shield, ChevronDown, ChevronUp, BookOpen, Lock } from 'lucide-react'
+import { ArrowLeft, ArrowUpRight, AlertTriangle, XCircle, Zap, BarChart2, ChevronDown, ChevronUp, BookOpen } from 'lucide-react'
 import ModelBadge from '../components/ModelBadge'
 import { BarChart, Bar, ResponsiveContainer, Tooltip as RechartTooltip } from 'recharts'
 import './AgentDetailPage.css'
@@ -125,7 +125,6 @@ export default function AgentDetailPage() {
   const [jobInfo, setJobInfo] = useState(null)
   const [workHistory, setWorkHistory] = useState(null)
   const [workHistoryLoading, setWorkHistoryLoading] = useState(false)
-  const [workHistoryOffset, setWorkHistoryOffset] = useState(0)
   const [workHistoryTotal, setWorkHistoryTotal] = useState(0)
   const [expandedExample, setExpandedExample] = useState(null)
   const [expandedFields, setExpandedFields] = useState(new Set())
@@ -189,7 +188,6 @@ export default function AgentDetailPage() {
         setWorkHistory(prev => [...(prev ?? []), ...(data?.items ?? [])])
       }
       setWorkHistoryTotal(data?.total ?? 0)
-      setWorkHistoryOffset(offset)
     } catch {
       // non-fatal
     } finally {

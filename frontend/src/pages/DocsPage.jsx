@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Menu, X, Search, Sparkles, Send, Puzzle, BookOpen, Plus, Minus, ArrowRight, RotateCcw } from 'lucide-react'
+import { ArrowLeft, Menu, X, Search, Sparkles, Send, Puzzle, BookOpen, Plus, Minus, ArrowRight } from 'lucide-react'
 import { fetchPublicDoc, fetchPublicDocsIndex, askPublicDocs } from '../api'
 import MarkdownDoc from '../ui/MarkdownDoc'
 import Button from '../ui/Button'

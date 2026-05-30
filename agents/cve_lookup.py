@@ -406,31 +406,6 @@ def _nvd_vuln_to_record(vuln_item: dict) -> dict:
     }
 
 
-def _search_nvd_packages(pkg_name: str) -> tuple[list[dict], bool]:
-    """Side-effect: search NVD by keyword. Returns ``(results, reached_nvd)``.
-
-    Why: ``reached_nvd=False`` signals "NVD was unreachable" so the caller
-    can fall back to OSV without misreporting "no CVEs found".
-    """
-    try:
-        resp = requests.get(
-            _NVD_API,
-            params={"keywordSearch": pkg_name, "resultsPerPage": _NVD_KEYWORD_RESULTS_PER_PAGE},
-            timeout=_NVD_TIMEOUT,
-            headers=_nvd_headers(),
-        )
-        if resp.status_code == 429 or resp.status_code >= 500:
-            return [], False
-        if resp.status_code != 200:
-            _LOG.info("NVD non-200 for %s: status=%s", pkg_name, resp.status_code)
-            return [], False
-        data = resp.json()
-    except Exception:
-        _LOG.warning("NVD query failed for %s", pkg_name, exc_info=True)
-        return [], False
-    return [_nvd_vuln_to_record(v) for v in data.get("vulnerabilities", [])], True
-
-
 def _nvd_request_cve(cve_id: str) -> tuple[dict | None, dict | None]:
     """Side-effect: GET one CVE by id. Returns ``(data, error_envelope)`` — exactly one is non-None."""
     try:

@@ -165,10 +165,6 @@ ERROR_CODE_PATTERNS: list[tuple[Callable[[str], bool], str]] = [
         _starts("ratings are locked once a dispute is filed"),
         "dispute.rating_locked",
     ),
-    (
-        _starts("this endpoint requires caller or worker scope"),
-        "auth.insufficient_scope",
-    ),
 ]
 
 

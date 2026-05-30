@@ -15,7 +15,7 @@ import {
   deleteWorkspace,
 } from '../api'
 import { useAuth } from '../context/AuthContext'
-import { fmtDate, fmtUsd } from '../utils/format.js'
+import { fmtDate } from '../utils/format.js'
 import './WorkspacesPage.css'
 
 // ---------------------------------------------------------------------------
