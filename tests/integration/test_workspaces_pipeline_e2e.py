@@ -10,8 +10,7 @@ import json
 import time
 import uuid
 
-from core import payments
-from core.pipelines import executor as pipeline_executor
+from core import outbound_session, payments
 
 from tests.integration.helpers import (
     _auth_headers,
@@ -98,7 +97,7 @@ def test_auto_workspace_recipe_creates_seals_records_outputs(client, monkeypatch
             return _FakeResponse({"final": "summary-built"})
         raise AssertionError(f"unexpected pipeline payload: {payload!r}")
 
-    monkeypatch.setattr(pipeline_executor.requests, "post", fake_post)
+    monkeypatch.setattr(outbound_session.requests, "post", fake_post)
 
     # Create pipeline with auto_workspace=true.
     pipeline = client.post(
@@ -176,7 +175,7 @@ def test_recipe_without_auto_workspace_creates_no_workspace(client, monkeypatch)
     )
 
     monkeypatch.setattr(
-        pipeline_executor.requests, "post",
+        outbound_session.requests, "post",
         lambda *a, **kw: _FakeResponse({"ok": True}),
     )
 

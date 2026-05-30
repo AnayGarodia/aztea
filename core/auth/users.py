@@ -17,7 +17,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import random
 import secrets
 
 from core import db as _db
@@ -1077,7 +1076,7 @@ def create_password_reset_token(email: str) -> str | None:
         return None
 
     user_id = str(row["user_id"])
-    otp = "".join(str(random.randint(0, 9)) for _ in range(_OTP_LENGTH))
+    otp = "".join(str(secrets.randbelow(10)) for _ in range(_OTP_LENGTH))
     token_hash = _otp_hash(otp)
     token_id = str(uuid.uuid4())
     expires_at = (
@@ -1217,7 +1216,7 @@ def issue_signup_verification(
 
     salt = secrets.token_hex(32)
     pw_hash = _hash_password(password, salt, iterations=PBKDF2_ITERATIONS)
-    otp = "".join(str(random.randint(0, 9)) for _ in range(_OTP_LENGTH))
+    otp = "".join(str(secrets.randbelow(10)) for _ in range(_OTP_LENGTH))
     code_hash = _otp_hash(otp)
     token_id = str(uuid.uuid4())
     now = _now()
@@ -1270,7 +1269,7 @@ def reissue_signup_verification_otp(email: str) -> str | None:
     if row is None:
         return None
 
-    otp = "".join(str(random.randint(0, 9)) for _ in range(_OTP_LENGTH))
+    otp = "".join(str(secrets.randbelow(10)) for _ in range(_OTP_LENGTH))
     code_hash = _otp_hash(otp)
     now = _now()
     expires_at = (

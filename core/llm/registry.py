@@ -303,14 +303,15 @@ def _resolve_byok_overlay(
     from .providers.openai_compatible_provider import OpenAICompatibleProvider
 
     overlay_name = f"byok-{caller_api_key_id}-{provider_name}"
-    # Use a synthetic env-var name that points at the real key so the
-    # OpenAI-compatible provider reads the right value on each call
-    # without us having to monkey with global env.
-    os.environ.setdefault(f"_BYOK_{safe_id}_{provider_name.upper()}_API_KEY", api_key)
+    # Point the provider at the ORIGINAL key env var (key_env). It reads the
+    # value once at construction (OpenAICompatibleProvider.__init__), so there
+    # is no need to copy the secret into a second synthetic `_BYOK_*` var —
+    # doing so only widened the key's exposure surface (extra os.environ entry
+    # inherited by child processes, dumpable from /proc) for no benefit.
     base_url = os.environ.get(base_env) or _byok_default_base_url(provider_name)
     provider = OpenAICompatibleProvider(
         name=overlay_name,
-        api_key_env=f"_BYOK_{safe_id}_{provider_name.upper()}_API_KEY",
+        api_key_env=key_env,
         base_url_env=base_env,
         default_base_url=base_url,
     )

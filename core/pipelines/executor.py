@@ -10,9 +10,7 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-import requests
-
-from core import crypto, fastpath, jobs, payments, registry, url_security
+from core import crypto, fastpath, jobs, outbound_session, payments, registry, url_security
 from core.functional import Err, Ok, Result
 from core.registry import origin_context as _origin_context
 from server import pricing_helpers
@@ -268,6 +266,15 @@ def _stream_remote_agent_response(
     seller can verify the exact bytes they receive. Without a secret the
     legacy unsigned path runs (back-compat for agents registered before
     migration 0074).
+
+    Routed through ``outbound_session.post`` (not bare ``requests``) so the
+    POST gets the same DNS-rebinding defense as the sync dispatch path: the
+    hostname is resolved + IP-validated + pinned for the TCP connect. Without
+    this, an agent endpoint that passes ``validate_outbound_url`` at request
+    time could rebind DNS to a private IP before the connect. The pin is set
+    and consumed inside this same call, so it holds even though pipelines run
+    on a spawned worker thread. ``outbound_session.post`` forwards ``**kwargs``
+    unchanged, so the signed ``data=``/unsigned ``json=`` paths both carry over.
     """
     headers: dict[str, str] = {"Content-Type": "application/json"}
     request_body: bytes | None = None
@@ -290,7 +297,7 @@ def _stream_remote_agent_response(
         post_kwargs["data"] = request_body
     else:
         post_kwargs["json"] = payload
-    with requests.post(safe_url, **post_kwargs) as response:
+    with outbound_session.post(safe_url, **post_kwargs) as response:
         if not response.ok:
             raise RuntimeError(f"Agent endpoint returned HTTP {response.status_code}.")
         declared = response.headers.get("Content-Length")

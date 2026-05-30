@@ -4,8 +4,7 @@ import json as _json_mod
 import time
 import uuid
 
-from core import payments
-from core.pipelines import executor as pipeline_executor
+from core import outbound_session, payments
 
 from tests.integration.helpers import (
     _auth_headers,
@@ -76,7 +75,9 @@ def test_pipeline_run_executes_nodes_in_order_and_returns_terminal_output(client
             return _FakeResponse({"summary": "review complete"})
         raise AssertionError(f"Unexpected pipeline call payload: {payload!r}")
 
-    monkeypatch.setattr(pipeline_executor.requests, "post", fake_post)
+    # Pipelines dispatch through outbound_session.post, which delegates to
+    # requests.post when it has been monkeypatched. Patch there.
+    monkeypatch.setattr(outbound_session.requests, "post", fake_post)
 
     pipeline = client.post(
         "/pipelines",

@@ -183,14 +183,18 @@ export default function WalletPage() {
   }, [apiKey, spendPeriod, agents])
 
   useEffect(() => {
+    // Tracked at effect scope so cleanup can always clear it — an unmount before
+    // the 6th tick would otherwise leak the interval (refreshWallet keeps firing
+    // on a dead component).
+    let poll = null
     const payment = searchParams.get('payment')
     if (payment === 'success') {
       setPaymentBanner('success')
       let attempts = 0
-      const poll = setInterval(() => {
+      poll = setInterval(() => {
         refreshWallet?.()
         attempts++
-        if (attempts >= 6) clearInterval(poll)
+        if (attempts >= 6 && poll) clearInterval(poll)
       }, 2000)
       setSearchParams({}, { replace: true })
     } else if (payment === 'cancelled') {
@@ -204,6 +208,7 @@ export default function WalletPage() {
       }
       setSearchParams({}, { replace: true })
     }
+    return () => { if (poll) clearInterval(poll) }
   }, []) // eslint-disable-line
 
   // Reset paging when underlying data changes meaningfully

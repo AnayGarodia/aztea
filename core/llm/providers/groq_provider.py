@@ -4,7 +4,12 @@ import os
 from typing import Any
 
 from ..base import CompletionRequest, LLMResponse, Usage
-from ..errors import LLMAuthError, LLMRateLimitError, LLMTimeoutError
+from ..errors import (
+    LLMAuthError,
+    LLMBadResponseError,
+    LLMRateLimitError,
+    LLMTimeoutError,
+)
 
 
 class GroqProvider:
@@ -52,17 +57,32 @@ class GroqProvider:
             raise LLMTimeoutError("groq", req.model, str(exc), exc) from exc
         except self._groq_mod.AuthenticationError as exc:
             raise LLMAuthError("groq", req.model, str(exc), exc) from exc
+        except Exception as exc:
+            # Any other SDK/transport error must surface as an LLMError so
+            # run_with_fallback fails over instead of crashing the chain.
+            raise LLMBadResponseError("groq", req.model, str(exc), exc) from exc
 
-        text = (completion.choices[0].message.content or "").strip()
-        raw_usage = completion.usage
-        usage = Usage(
-            prompt_tokens=raw_usage.prompt_tokens if raw_usage else 0,
-            completion_tokens=raw_usage.completion_tokens if raw_usage else 0,
-        )
+        try:
+            text = (completion.choices[0].message.content or "").strip()
+            raw_usage = completion.usage
+            usage = Usage(
+                prompt_tokens=raw_usage.prompt_tokens if raw_usage else 0,
+                completion_tokens=raw_usage.completion_tokens if raw_usage else 0,
+            )
+            finish_reason = completion.choices[0].finish_reason or "stop"
+        except Exception as exc:
+            # Malformed response shape (e.g. empty choices) → LLMError, not a
+            # raw IndexError/AttributeError that escapes run_with_fallback.
+            raise LLMBadResponseError(
+                "groq",
+                req.model,
+                "Provider returned an unexpected response shape.",
+                exc,
+            ) from exc
         return LLMResponse(
             text=text,
             model=req.model,
             provider="groq",
             usage=usage,
-            finish_reason=completion.choices[0].finish_reason or "stop",
+            finish_reason=finish_reason,
         )
