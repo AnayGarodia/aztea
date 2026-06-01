@@ -113,6 +113,26 @@ def _is_disallowed_ip(ip_value: ipaddress._BaseAddress) -> bool:
     return False
 
 
+# Sentinel endpoint for polling / async workers (e.g. the SDK AgentServer) that
+# pull jobs from the async /jobs queue and expose NO inbound HTTP endpoint.
+# Aztea must NEVER dial this scheme — it is not a network target. Registration,
+# endpoint health monitoring, and the sync /call proxy all special-case it.
+# The SDK mirrors this literal in aztea/agent.py::_POLLING_WORKER_ENDPOINT (the
+# SDK is a separate package and cannot import core); a contract test keeps the
+# two in sync, since a server-side scheme rename would silently break the SDK.
+POLLING_WORKER_SCHEME = "poll"
+POLLING_WORKER_ENDPOINT = "poll://worker"
+
+
+def is_polling_worker_endpoint(url: str) -> bool:
+    """True when ``url`` is the polling-worker sentinel (no inbound endpoint).
+
+    Polling workers are dispatched via the async job queue, so they have no
+    reachable URL; callers must skip SSRF/liveness checks against them.
+    """
+    return str(url or "").strip().lower().startswith(POLLING_WORKER_SCHEME + "://")
+
+
 def validate_agent_endpoint_url(
     url: str,
     field_name: str = "endpoint_url",
@@ -126,6 +146,12 @@ def validate_agent_endpoint_url(
     test stubs, and one (``httpbin.org``) was caught in production charging
     users for fake responses.
     """
+    # Polling/async workers have no inbound endpoint. Collapse any poll:// input
+    # to a fixed sentinel and skip SSRF/host checks — it is never dialed.
+    # Discarding the user-supplied netloc prevents smuggling an SSRF target
+    # behind the poll:// scheme.
+    if is_polling_worker_endpoint(url):
+        return POLLING_WORKER_ENDPOINT
     normalized = validate_outbound_url(url, field_name, allow_private=allow_private)
     parsed = urlparse(normalized.strip())
     host = (parsed.hostname or "").strip().lower()

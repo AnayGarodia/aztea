@@ -916,25 +916,30 @@ def onboarding_ingest(
             safe_verifier_url = _validate_outbound_url(
                 payload["output_verifier_url"], "output_verifier_url"
             )
-        endpoint_findings = _listing_safety.scan_agent_md_endpoint(safe_endpoint_url)
-        if _listing_safety.has_block(endpoint_findings):
-            block = next(
-                f for f in endpoint_findings
-                if f.level == _listing_safety.LEVEL_BLOCK
+        # Polling/async workers (poll:// sentinel) have no inbound endpoint to
+        # scan or probe — mirror the skip applied on /registry/register so the
+        # manifest path can register them too. (requests would otherwise raise
+        # InvalidSchema on the probe and reject the listing.)
+        if not _url_security.is_polling_worker_endpoint(safe_endpoint_url):
+            endpoint_findings = _listing_safety.scan_agent_md_endpoint(safe_endpoint_url)
+            if _listing_safety.has_block(endpoint_findings):
+                block = next(
+                    f for f in endpoint_findings
+                    if f.level == _listing_safety.LEVEL_BLOCK
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=error_codes.make_error(
+                        "listing.safety_block", block.message,
+                        {"code": block.code, "detail": block.detail},
+                    ),
+                )
+            _run_listing_safety_probe(
+                safe_endpoint_url,
+                input_schema=payload.get("input_schema"),
+                output_schema=payload.get("output_schema"),
+                output_examples=payload.get("output_examples"),
             )
-            raise HTTPException(
-                status_code=400,
-                detail=error_codes.make_error(
-                    "listing.safety_block", block.message,
-                    {"code": block.code, "detail": block.detail},
-                ),
-            )
-        _run_listing_safety_probe(
-            safe_endpoint_url,
-            input_schema=payload.get("input_schema"),
-            output_schema=payload.get("output_schema"),
-            output_examples=payload.get("output_examples"),
-        )
         initial_review_status = (
             "probation" if caller["type"] != "master" else None
         )

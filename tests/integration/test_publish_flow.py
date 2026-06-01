@@ -569,3 +569,205 @@ def test_graduate_does_not_touch_master_listings(isolated_db):
         registry.get_agent(master_id, include_unapproved=True)["review_status"]
         == "approved"
     )
+
+
+# ---------------------------------------------------------------------------
+# Polling / async workers (SDK AgentServer) have NO inbound HTTP endpoint —
+# they pull jobs from the async /jobs queue. They register via the poll://
+# sentinel, which skips the endpoint reachability/liveness probe. This is the
+# path general agents (a CMO, a research agent) list through; a fake
+# http://localhost endpoint used to fail registration with
+# registry.endpoint_unreachable. The sync /call proxy rejects them with a
+# clear async-only pointer instead of dialing the sentinel.
+# ---------------------------------------------------------------------------
+
+
+def test_polling_worker_registers_without_endpoint_probe(client):
+    """A poll:// worker registers without a reachable endpoint."""
+    resp = client.post(
+        "/registry/register",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={
+            "name": "poll-worker-registers",
+            "description": "A long-running polling worker with no inbound HTTP endpoint.",
+            "endpoint_url": "poll://worker",
+            "price_per_call_usd": 0.0,
+            "tags": ["integration-test"],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "title": "Task", "description": "Open-ended task."}
+                },
+            },
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    assert "poll://worker" in resp.text
+
+
+def test_polling_worker_endpoint_cannot_smuggle_ssrf_target(client):
+    """Any netloc behind poll:// is discarded — collapsed to the sentinel."""
+    resp = client.post(
+        "/registry/register",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={
+            "name": "poll-worker-ssrf",
+            "description": "Attempts to smuggle an internal host behind the poll scheme.",
+            "endpoint_url": "poll://169.254.169.254/latest/meta-data",
+            "price_per_call_usd": 0.0,
+            "tags": ["integration-test"],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "title": "Task", "description": "Open-ended task."}
+                },
+            },
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    assert "169.254.169.254" not in resp.text  # smuggled host dropped
+    assert "poll://worker" in resp.text
+
+
+def test_sync_call_on_polling_worker_returns_async_only(client):
+    """Synchronous /call on a polling worker fails fast with agent.async_only."""
+    reg = client.post(
+        "/registry/register",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={
+            "name": "poll-worker-synccall",
+            "description": "A long-running polling worker with no inbound HTTP endpoint.",
+            "endpoint_url": "poll://worker",
+            "price_per_call_usd": 0.0,
+            "tags": ["integration-test"],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "title": "Task", "description": "Open-ended task."}
+                },
+            },
+        },
+    )
+    assert reg.status_code == 201, reg.text
+    agent_id = reg.json()["agent_id"]
+    call = client.post(
+        f"/registry/agents/{agent_id}/call",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={"task": "hello"},
+    )
+    assert call.status_code == 409, call.text
+    assert call.json()["error"] == "agent.async_only"
+
+
+def test_polling_worker_is_callable_via_async_jobs(client):
+    """A poll:// worker stays hireable through POST /jobs — the queue it polls.
+
+    Regression guard for the bug where the sync-call guard lived in the shared
+    _assert_agent_callable and rejected async job creation too, making poll://
+    workers registerable but uncallable.
+    """
+    reg = client.post(
+        "/registry/register",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={
+            "name": "poll-worker-asyncjob",
+            "description": "A long-running polling worker with no inbound HTTP endpoint.",
+            "endpoint_url": "poll://worker",
+            "price_per_call_usd": 0.0,
+            "tags": ["integration-test"],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "title": "Task", "description": "Open-ended task."}
+                },
+            },
+        },
+    )
+    assert reg.status_code == 201, reg.text
+    agent_id = reg.json()["agent_id"]
+    job = client.post(
+        "/jobs",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={"agent_id": agent_id, "input_payload": {"task": "hello"}},
+    )
+    assert job.status_code == 201, job.text  # async path must stay open
+    created = job.json()
+    # Prove the job is actually claimable (the queue AgentServer polls), not just
+    # a created row — that is the real "registerable AND callable" contract.
+    fetched = client.get(
+        f"/jobs/{created['job_id']}", headers=_auth_headers(TEST_MASTER_KEY)
+    )
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json().get("status") in {"pending", "queued"}, fetched.text
+
+
+def test_polling_worker_endpoint_case_insensitive(client):
+    """POLL:// and leading-whitespace variants register and collapse to poll://worker."""
+    for idx, raw in enumerate(("POLL://worker", " poll://worker")):
+        resp = client.post(
+            "/registry/register",
+            headers=_auth_headers(TEST_MASTER_KEY),
+            json={
+                "name": f"poll-case-variant-{idx}",
+                "description": "Polling worker registered via a case/whitespace scheme variant.",
+                "endpoint_url": raw,
+                "price_per_call_usd": 0.0,
+                "tags": ["integration-test"],
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "task": {"type": "string", "title": "Task", "description": "Open-ended task."}
+                    },
+                },
+            },
+        )
+        assert resp.status_code == 201, f"{raw!r}: {resp.text}"
+        assert "poll://worker" in resp.text
+
+
+def test_polling_worker_nonmaster_registers_in_probation(client):
+    """A non-master poll:// worker still enters probation but skips the probe.
+
+    The production path for general agents ("a CMO, a research agent") is a
+    non-master scoped key, which the master-key tests don't exercise.
+    """
+    user = _register_user()
+    resp = client.post(
+        "/registry/register",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={
+            "name": "poll-worker-probation",
+            "description": "A non-master polling worker with no inbound HTTP endpoint.",
+            "endpoint_url": "poll://worker",
+            "price_per_call_usd": 0.0,
+            "tags": ["integration-test"],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "title": "Task", "description": "Open-ended task."}
+                },
+            },
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    assert "probation" in resp.text  # non-master listings land in probation
+
+
+def test_polling_worker_registers_via_onboarding_ingest(client):
+    """The poll:// probe-skip is mirrored on the /onboarding/ingest manifest path."""
+    user = _register_user()
+    manifest = _manifest(name="Poll Manifest Agent", endpoint_url="poll://worker")
+    ingested = client.post(
+        "/onboarding/ingest",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={"manifest_content": manifest},
+    )
+    assert ingested.status_code == 201, ingested.text
+
+
+def test_polling_worker_sentinel_constant_matches_sdk_and_server():
+    """Cross-process contract: a server-side scheme rename must not silently
+    desync the SDK (which can't import core)."""
+    from aztea.agent import _POLLING_WORKER_ENDPOINT
+    from core.url_security import POLLING_WORKER_ENDPOINT
+    assert _POLLING_WORKER_ENDPOINT == POLLING_WORKER_ENDPOINT

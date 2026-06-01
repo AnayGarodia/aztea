@@ -393,16 +393,32 @@ def test_r8_list_agents_augments_missing_curated_builtins():
 # ---------------------------------------------------------------------------
 
 
-def test_r9_session_audit_verify_all_caps_per_receipt_timeout():
-    """Bulk verify on a long window must never block the audit. The fix
-    caps each verify call's timeout at 1.0s so the worst case for N
-    receipts is N × 1s + network overhead.
+def test_r9_session_audit_verify_all_is_bounded_server_side():
+    """Bulk verify on a long window must never block the audit (eval finding R9).
+
+    Originally enforced client-side: ``_session_audit_legacy`` looped per
+    receipt with a 1.0s per-call timeout cap (``_verify_timeout``). The 1.6.x
+    refactor moved verification SERVER-SIDE — the SDK now delegates
+    ``verify_all`` to ``/wallets/audit``, which Ed25519-verifies in-process
+    (sub-50ms each, single HTTP call instead of N) over a window bounded by
+    ``limit``. This asserts that bounded, server-delegated design, which
+    preserves the original "bulk verify can't block the audit" guarantee.
     """
-    # 1.6.2 moved meta_tools out of scripts/ and into the SDK package.
-    # Old path remained referenced here; rebind to the canonical home.
-    src = Path("sdks/python-sdk/aztea/mcp/meta_tools.py").read_text()
-    assert "_verify_timeout" in src and "min(float(timeout or 1.0), 1.0)" in src, (
-        "verify_all loop must cap per-call timeout (eval finding R9)."
+    # Client side: _session_audit delegates verify_all to the server audit
+    # endpoint — no unbounded per-receipt client loop.
+    sdk_src = Path("sdks/python-sdk/aztea/mcp/meta_tools.py").read_text()
+    assert "wallets/audit" in sdk_src and "verify_all" in sdk_src, (
+        "_session_audit must delegate verify_all to the server /wallets/audit "
+        "endpoint rather than looping per-receipt on the client (eval finding R9)."
+    )
+
+    # Server side: the bulk-verify loop runs in-process over the limit-bounded
+    # receipt window (``zip(receipts, ...)``), so worst-case work is O(limit),
+    # never unbounded.
+    server_src = Path("server/application_parts/part_011.py").read_text()
+    assert "if verify_all:" in server_src and "zip(receipts" in server_src, (
+        "server /wallets/audit must bulk-verify in-process over the "
+        "limit-bounded receipt window (eval finding R9)."
     )
 
 
