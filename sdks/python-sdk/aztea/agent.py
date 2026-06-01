@@ -14,6 +14,13 @@ _HEARTBEAT_INTERVAL = 20
 _POLL_INTERVAL = 2
 _LEASE_SECONDS = 300
 
+# Sentinel endpoint for a polling worker that has NO inbound HTTP endpoint — it
+# pulls jobs from the async /jobs queue. The server recognises the poll:// scheme
+# and skips the registration reachability/liveness probe (it is never dialed).
+# Must equal core.url_security.POLLING_WORKER_ENDPOINT on the server (the SDK is a
+# separate package and can't import core); a contract test asserts they match.
+_POLLING_WORKER_ENDPOINT = "poll://worker"
+
 
 def verify_callback_signature(body: bytes, signature_header: str, secret: str) -> bool:
     expected = "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
@@ -89,7 +96,15 @@ class AgentServer:
         self.input_schema = input_schema or {}
         self.output_schema = output_schema or {}
         self.tags = tags or []
-        self._endpoint_url = endpoint_url or f"http://localhost:{port}"
+        # A polling worker has no inbound endpoint — it claims jobs from the
+        # async queue. Register the poll:// sentinel so the server skips its
+        # endpoint reachability probe (registering a fake http://localhost URL
+        # made registration fail with registry.endpoint_unreachable). Callers
+        # that genuinely host an HTTP endpoint can still pass endpoint_url.
+        # NOTE: `port` is retained for backwards compatibility but is unused for
+        # polling workers (they expose no inbound port); it no longer builds a
+        # default localhost URL.
+        self._endpoint_url = endpoint_url or _POLLING_WORKER_ENDPOINT
         self._handler_func: Callable[[dict[str, Any]], dict[str, Any]] | None = None
         self._agent_id: str | None = None
 

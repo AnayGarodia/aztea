@@ -2124,6 +2124,22 @@ def registry_call(
     if not _caller_can_access_agent(caller, agent):
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     _assert_agent_callable(agent_id, agent)
+    # Polling/async workers have no synchronous endpoint to proxy to — they are
+    # served only via the async job queue. Reject the sync /call here (NOT in the
+    # shared _assert_agent_callable, which the async /jobs, /jobs/batch, and
+    # /jobs/compare paths also call) so poll:// workers stay hireable through
+    # POST /jobs while sync /call fails fast with a clear pointer.
+    if _url_security.is_polling_worker_endpoint(str(agent.get("endpoint_url") or "")):
+        raise HTTPException(
+            status_code=409,
+            detail=error_codes.make_error(
+                error_codes.AGENT_ASYNC_ONLY,
+                f"Agent '{agent_id}' is an async worker with no synchronous endpoint. "
+                "Create a job via POST /jobs (or use the SDK's client.hire) instead "
+                "of the synchronous /call endpoint.",
+                {"agent_id": agent_id},
+            ),
+        )
     builtin_agent_id = _resolve_builtin_agent_id(agent)
     hosted_skill_row: dict | None = None
     if builtin_agent_id is None and _hosted_skills.is_skill_endpoint(

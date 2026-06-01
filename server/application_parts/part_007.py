@@ -204,30 +204,36 @@ def registry_register(
     body.name = _normalize_agent_name(body.name)
     try:
         safe_endpoint_url = _validate_agent_endpoint_url(request, body.endpoint_url)
-        # Defence-in-depth: refuse anyone trying to register against an
-        # Aztea-owned host as their endpoint. SSRF check above already blocks
-        # private IPs; this catches the "list a clone of a built-in" footgun.
-        endpoint_findings = _listing_safety.scan_agent_md_endpoint(safe_endpoint_url)
-        if _listing_safety.has_block(endpoint_findings):
-            block = next(
-                f for f in endpoint_findings
-                if f.level == _listing_safety.LEVEL_BLOCK
+        # Polling/async workers (SDK AgentServer) have no inbound endpoint —
+        # they pull jobs from the async /jobs queue. The endpoint scan, liveness
+        # probe, and adversarial listing-safety probe all assume a dialable URL,
+        # so skip them; there is nothing to reach. The async path still gates
+        # behaviour at call time (claim/heartbeat/complete + settlement).
+        if not _url_security.is_polling_worker_endpoint(safe_endpoint_url):
+            # Defence-in-depth: refuse anyone trying to register against an
+            # Aztea-owned host as their endpoint. SSRF check above already blocks
+            # private IPs; this catches the "list a clone of a built-in" footgun.
+            endpoint_findings = _listing_safety.scan_agent_md_endpoint(safe_endpoint_url)
+            if _listing_safety.has_block(endpoint_findings):
+                block = next(
+                    f for f in endpoint_findings
+                    if f.level == _listing_safety.LEVEL_BLOCK
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=error_codes.make_error(
+                        "listing.safety_block", block.message,
+                        {"code": block.code, "detail": block.detail},
+                    ),
+                )
+            if not os.environ.get("AZTEA_SKIP_REGISTER_ENDPOINT_PROBE"):
+                _probe_register_endpoint_or_400(safe_endpoint_url)
+            _run_listing_safety_probe(
+                safe_endpoint_url,
+                input_schema=body.input_schema,
+                output_schema=body.output_schema,
+                output_examples=body.output_examples,
             )
-            raise HTTPException(
-                status_code=400,
-                detail=error_codes.make_error(
-                    "listing.safety_block", block.message,
-                    {"code": block.code, "detail": block.detail},
-                ),
-            )
-        if not os.environ.get("AZTEA_SKIP_REGISTER_ENDPOINT_PROBE"):
-            _probe_register_endpoint_or_400(safe_endpoint_url)
-        _run_listing_safety_probe(
-            safe_endpoint_url,
-            input_schema=body.input_schema,
-            output_schema=body.output_schema,
-            output_examples=body.output_examples,
-        )
         safe_healthcheck_url = None
         if body.healthcheck_url:
             safe_healthcheck_url = _validate_outbound_url(

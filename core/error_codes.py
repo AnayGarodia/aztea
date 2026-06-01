@@ -19,6 +19,7 @@ INVALID_INPUT = "request.invalid_input"
 DISPUTE_WINDOW_CLOSED = "dispute.window_closed"
 AGENT_SUSPENDED = "agent.suspended"
 AGENT_SUNSET = "agent.sunset"  # 410 Gone — agent removed from public catalog
+AGENT_ASYNC_ONLY = "agent.async_only"  # 409 — polling worker; call via async POST /jobs, not sync /call
 AGENT_UPSTREAM_TIMEOUT = "agent.upstream_timeout"  # 504 — pool exhausted/proc slow
 AGENT_INVALID_INPUT = "agent.invalid_input"  # 422 — agent rejected the payload shape
 JOB_ALREADY_RATED = "job.already_rated"  # 409 — caller has already rated this job
