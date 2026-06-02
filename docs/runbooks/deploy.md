@@ -22,7 +22,8 @@ The full operational reference: production deploy, nginx, env vars, packaging, S
   - **Embedding warmup:** currently **off** (`AZTEA_WARM_EMBEDDINGS` unset), so the first search per worker after a deploy lazy-loads the ~80 MB model and takes ~40s; later searches are sub-second. It was disabled on 2026-05-09 because on t3.micro both workers raced to load the model on startup and one always lost to OOM (crashloop, 15+ "Started server process"/min). On the current ~8 GB box that OOM risk is gone — setting `AZTEA_WARM_EMBEDDINGS=1` to remove the first-search latency is now safe; restart `aztea` and watch `journalctl -u aztea` for a single clean startup per worker.
 - **Elixir process:** `/home/aztea/elixir-release/bin/aztea start` (beam.smp)
 - **Database:** PostgreSQL 16 (`aztea_prod`) — `DATABASE_URL=postgresql://aztea:...@localhost/aztea_prod` in `.env`
-- **Reverse proxy:** Caddy at `/etc/caddy/Caddyfile` is a thin reverse proxy to uvicorn on `127.0.0.1:8000`. It does NOT serve static files. **FastAPI owns SPA fallback** via the catch-all `@app.get("/{full_path:path}")` in `server/application_parts/part_013.py`: maps existing `frontend/dist/*` files to themselves, returns `index.html` for everything else, and 404s anything matching `_SPA_API_PREFIXES`.
+- **Reverse proxy:** Caddy at `/etc/caddy/Caddyfile` reverse-proxies the catch-all to uvicorn on `127.0.0.1:8000`, **but serves the immutable hashed Vite bundles (`/assets/*`) directly from `/home/aztea/app/frontend/dist`** via a `handle /assets/* { file_server }` block placed before the catch-all (2026-06-02). This keeps the ~13 asset requests per page load off the 2-worker uvicorn pool — under concurrent load uvicorn was intermittently stalling and a page load fans out enough asset requests to hang the whole pool. The `caddy` user already has read+traverse on the dist tree; assets get `Cache-Control: public, max-age=31536000, immutable` + `X-Content-Type-Options: nosniff` (filenames are content-hashed, so immutable is safe). **`index.html` and every other path still proxy to uvicorn** — **FastAPI owns SPA fallback** via the catch-all `@app.get("/{full_path:path}")` in `server/application_parts/part_014.py`: maps existing `frontend/dist/*` files to themselves, returns `index.html` for everything else, and 404s anything matching `_SPA_API_PREFIXES`. The `/assets/*` Caddy block shadows that path for assets only; the fallback still handles `index.html`, images, and SPA routes.
+  - **Reload gotcha (2026-06-02):** `sudo systemctl reload caddy` failed on this box with `status=226/NAMESPACE` (`PrivateTmp` mount-namespace setup error on `/tmp`) — it does NOT apply the new config and leaves the *old* process running. Use the admin-API hot reload instead: `sudo caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile` (zero-downtime, bypasses systemd). Always `caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile` first.
 - **SSL:** Managed by Caddy (automatic HTTPS via certbot or ACME). The "Recommended nginx config" section below is an alternative reference for deployments that use nginx instead of Caddy.
 
 ### Multi-worker correctness (2026-05-28)
@@ -229,6 +230,22 @@ aztea.ai {
             header_up Connection {http.request.header.Connection}
             header_up Upgrade    {http.request.header.Upgrade}
         }
+    }
+
+    # Immutable hashed Vite bundles — served from disk so they never consume
+    # a uvicorn worker. Must come BEFORE the catch-all `handle { reverse_proxy }`
+    # (handle blocks are exclusive, evaluated in written order). Content-hashed
+    # filenames make the immutable cache safe. index.html + SPA routes still
+    # fall through to uvicorn.
+    handle /assets/* {
+        root * /home/aztea/app/frontend/dist
+        header Cache-Control "public, max-age=31536000, immutable"
+        header X-Content-Type-Options nosniff
+        file_server
+    }
+
+    handle {
+        reverse_proxy localhost:8000
     }
 }
 ```
