@@ -1,0 +1,90 @@
+/* Web playground (/web). Uses theme tokens with safe fallbacks so it renders
+   acceptably whether or not the design-system variables are present. */
+.web-pg {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 28px 16px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.web-pg__hero h1 {
+  font-size: 1.7rem;
+  line-height: 1.2;
+  margin: 0 0 8px;
+}
+.web-pg__muted {
+  color: var(--text-muted, #8a8a8a);
+  font-size: 0.9rem;
+  margin: 6px 0 0;
+}
+.web-pg__input-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+.web-pg__input-row > :first-child {
+  flex: 1;
+}
+.web-pg__demos {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.web-pg__results {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.web-pg__result-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.web-pg__row-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.web-pg__code {
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+  padding: 12px 14px;
+  border-radius: 8px;
+  overflow: auto;
+  max-height: 460px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.web-pg__links {
+  margin: 0;
+  padding-left: 18px;
+  max-height: 460px;
+  overflow: auto;
+}
+.web-pg__links a {
+  word-break: break-all;
+}
+.web-pg__meta {
+  display: grid;
+  gap: 5px;
+  margin: 12px 0;
+  font-size: 0.82rem;
+}
+.web-pg__meta div {
+  display: flex;
+  gap: 8px;
+}
+.web-pg__meta dt {
+  color: var(--text-muted, #8a8a8a);
+  min-width: 72px;
+}
+.web-pg__meta code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  word-break: break-all;
+}

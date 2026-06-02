@@ -31,6 +31,17 @@ DEPENDENCY_AUDITOR_AGENT_ID = "11fab82a-426e-513e-abf3-528d99ef2b87"
 DB_SANDBOX_AGENT_ID = "be4d6c18-629d-5b1c-8c46-f82c00db4995"
 VISUAL_REGRESSION_AGENT_ID = "20a74467-d633-5016-b210-adf769b2df9c"
 BROWSER_AGENT_ID = "c3a1b2d4-e5f6-5a7b-8c9d-0e1f2a3b4c5d"
+# 2026-06-01 — site_navigator: goal-directed navigation over the accessibility
+# tree (not screenshots), returning structured data + a reusable site map. The
+# Phase 0 magnet of the agent-readable-web build; Phase 1 layers the shared
+# signed site-map commons on top. uuid5(builtin namespace, 'aztea.builtin.site_navigator').
+SITE_NAVIGATOR_AGENT_ID = "7b9e59b1-fba2-583c-b53b-86a710a888a5"
+# 2026-06-01 — web_actor: the escrowed write-web (Phase 4). A SEPARATE agent from
+# the read-only site_navigator so a coerced read path can never spend money.
+# Fail-closed (kill switches default off) and NEVER auto-curated — it is dispatch-
+# wired but intentionally absent from CURATED_PUBLIC, so it is not listed, seeded,
+# or auto-hired until the focused write-web money-PR graduates it.
+WEB_ACTOR_AGENT_ID = "5698b91c-3d9e-54db-be81-5b3805f0a49b"
 MULTI_LANGUAGE_EXECUTOR_AGENT_ID = "d4b2c3e5-f6a7-5b8c-9d0e-1f2a3b4c5d6e"
 SECRET_SCANNER_AGENT_ID = "1021c65c-d2bf-54ff-823a-897f9deb1029"
 LIGHTHOUSE_AUDITOR_AGENT_ID = "6047127b-e49a-51c0-81d7-7934c0be424d"
@@ -95,6 +106,8 @@ BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     DB_SANDBOX_AGENT_ID: "internal://db_sandbox",
     VISUAL_REGRESSION_AGENT_ID: "internal://visual_regression",
     BROWSER_AGENT_ID: "internal://browser_agent",
+    SITE_NAVIGATOR_AGENT_ID: "internal://site_navigator",
+    WEB_ACTOR_AGENT_ID: "internal://web_actor",
     MULTI_LANGUAGE_EXECUTOR_AGENT_ID: "internal://multi_language_executor",
     SECRET_SCANNER_AGENT_ID: "internal://secret_scanner",
     LIGHTHOUSE_AUDITOR_AGENT_ID: "internal://lighthouse_auditor",
@@ -273,6 +286,7 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         LIVE_SANDBOX_AGENT_ID,
         DB_SANDBOX_AGENT_ID,
         BROWSER_AGENT_ID,
+        SITE_NAVIGATOR_AGENT_ID,
         LIGHTHOUSE_AUDITOR_AGENT_ID,
         ACCESSIBILITY_AUDITOR_AGENT_ID,
     }

@@ -58,8 +58,9 @@ are set. See [OSS vs hosted](docs/oss-vs-hosted.md).
 
 ## What Is Built In
 
-The current curated public catalog has **10 built-in specialists** after the
-2026-05-26 platform-pivot cull. Each one is kept because it demonstrates a
+The current curated public catalog has **11 built-in specialists** — the 10 kept
+after the 2026-05-26 platform-pivot cull, plus `site_navigator`, the
+agent-readable-web magnet added 2026-06-01. Each one is kept because it demonstrates a
 platform primitive a third-party builder will want to compose on top of —
 subprocess isolation, live external data, or a specialist headless runtime.
 

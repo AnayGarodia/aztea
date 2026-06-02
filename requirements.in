@@ -37,6 +37,13 @@ pymupdf>=1.24.0
 pdfplumber>=0.11.0
 # broken_link_crawler uses BeautifulSoup to extract <a>/<img>/<script>/<link>.
 beautifulsoup4>=4.12.0
+# 2026-06-02 (Phase A): site_navigator's 'markdown' output format. trafilatura is
+# the readability-grade main-content extractor (the default, chosen over a naive
+# tag-strip per the build-plan review T1; it pulls lxml). markdownify is the
+# no-lxml fallback converter. Both lazy-imported in agents/_html_extract.py, so a
+# missing dep degrades the markdown format rather than breaking import.
+trafilatura>=1.8.0
+markdownify>=0.11.6
 # email_deliverability_checker uses dnspython for SPF / DKIM / MX lookups.
 # Without this the agent fails every call with "dnspython not installed".
 dnspython>=2.6.0

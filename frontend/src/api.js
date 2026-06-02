@@ -273,6 +273,25 @@ async function request(path, {
   }
 }
 
+// ── Web playground (public, anonymous; /scrape + /web/verify) ───────────────────
+
+// POST /scrape — anonymous. Returns 200 with {success, data} | {success:false,error};
+// 503 when the web API is disabled. throwOnError:false so the page renders inline.
+export async function scrapeWeb(url, formats = ['markdown']) {
+  const { ok, status, body } = await request('/scrape', {
+    method: 'POST', body: { url, formats }, throwOnError: false,
+  })
+  return { ok, status, body }
+}
+
+// POST /web/verify — verify a signed observation receipt without re-crawling.
+export async function verifyWebReceipt(receipt) {
+  const { body } = await request('/web/verify', {
+    method: 'POST', body: { receipt }, throwOnError: true,
+  })
+  return body // {valid, checks?, claim, note?, error?}
+}
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 export async function authRegister(username, email, password, role = 'both') {

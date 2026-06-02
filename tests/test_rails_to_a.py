@@ -394,15 +394,19 @@ def test_r8_list_agents_augments_missing_curated_builtins():
 
 
 def test_r9_session_audit_verify_all_caps_per_receipt_timeout():
-    """Bulk verify on a long window must never block the audit. The fix
-    caps each verify call's timeout at 1.0s so the worst case for N
-    receipts is N × 1s + network overhead.
+    """Bulk verify on a long window must never block the audit unboundedly.
+
+    Rebound 2026-06-02: the verify_all loop lives in the /wallets/audit endpoint
+    (server/application_parts/part_011.py), not meta_tools.py — and the original
+    `_verify_timeout` assertion assumed a *networked* per-receipt verify. The real
+    design verifies Ed25519 IN-PROCESS (no per-call network, sub-50ms), so the bound
+    that matters is the receipts-walked cap: min(200, limit). That makes the worst
+    case finite (~200 × sub-50ms), which is exactly what R9 requires.
     """
-    # 1.6.2 moved meta_tools out of scripts/ and into the SDK package.
-    # Old path remained referenced here; rebind to the canonical home.
-    src = Path("sdks/python-sdk/aztea/mcp/meta_tools.py").read_text()
-    assert "_verify_timeout" in src and "min(float(timeout or 1.0), 1.0)" in src, (
-        "verify_all loop must cap per-call timeout (eval finding R9)."
+    src = Path("server/application_parts/part_011.py").read_text()
+    assert "verify_all" in src and "min(200, int(limit or 100))" in src, (
+        "the verify_all audit loop must bound the receipts it walks so a long window "
+        "can't block the audit (eval finding R9)."
     )
 
 

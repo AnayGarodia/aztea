@@ -64,7 +64,8 @@ def _patch_get(resp: _FakeResp):
 # ---------------------------------------------------------------------------
 
 
-def test_T1_4_http_redirect_to_private_ip_is_blocked():
+def test_T1_4_http_redirect_to_private_ip_is_blocked(monkeypatch):
+    monkeypatch.delenv("ALLOW_PRIVATE_OUTBOUND_URLS", raising=False)  # force SSRF enforcement (dev .env sets it on)
     # Final URL after redirect points at a private host. The current code
     # does not re-check, so this test exposes the SSRF bypass.
     resp = _FakeResp(

@@ -5,6 +5,49 @@ All notable changes to Aztea are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and Aztea follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-06-02
+
+The agent-readable-web feature: `site_navigator` becomes a Firecrawl-class web
+product (read the web, compile sites into APIs, prove provenance), plus the
+write-web's safe foundation. Everything new ships behind default-OFF flags, so
+this release is behavior-equivalent until an operator opts in.
+
+### Added
+
+- **HTTP-first + API discovery (Phase A, flag-gated).** `site_navigator` tries a
+  plain SSRF-safe HTTP fetch and a signed API-spec replay before launching
+  Chromium, and can return clean trafilatura markdown / HTML / links (goal
+  optional). API specs bind an immutable signed scheme/host/port and are reused
+  across authors only after a same-registrable-domain + signature check; replay
+  routes through the existing DNS-rebind IP-pinning. Flags `AZTEA_HTTP_FIRST`,
+  `AZTEA_API_DISCOVERY` (default off).
+- **`/map`, `/crawl`, schema-validated `/extract` (Phase B).** Bounded BFS crawl
+  with a per-call page cap and a total wall-clock budget.
+- **Pluggable proxy/stealth fetch backend (Phase C).** Env-selected; off by default.
+- **Public Firecrawl-shaped API + playground (Phase D).** `POST /scrape /map
+  /crawl /extract` and a public, offline `POST /web/verify`; a React playground
+  at `/web`. Gated by `AZTEA_WEB_API_ENABLED` (default off).
+- **Signed proof-of-observation receipts.** Provenance, not truth; verifiable
+  offline. The verdict's `signer_did` is checked against the agent's real
+  did:web, so a caller cannot sign with their own key yet claim another identity.
+- **Write-web foundation (Phase E).** `web_actor` interact-then-reveal (E1: safe,
+  no money, bounded), typed action mandates with allowed-domain enforcement,
+  escrow split math, and the fail-FORWARD `web_actions` state machine. The
+  commit/escrow paths are default-OFF scaffold; the live ledger movement is a
+  separate, `/cso`-gated money-PR.
+- **Shared-map royalty obligation recording (Phase F).** Records the payable
+  idempotently; moves no money (the funded credit is the money-PR).
+
+### Fixed
+
+- SSRF "blocks-private-by-default" tests now enforce the guard regardless of the
+  dev `.env` `ALLOW_PRIVATE_OUTBOUND_URLS=1` (the enforcement fixture was scoped
+  only to `tests/security/`).
+- Registration verifier test mock now echoes the required `payload_hash` binding
+  (2026-05-22 anti-replay hardening).
+- Curated catalog count 10 -> 11 (`site_navigator` added) across the snapshot
+  test and docs.
+
 ## [1.3.0] - 2026-05-29
 
 Marketplace hardening release on top of v1.2.1's auto-hire ranker overhaul.

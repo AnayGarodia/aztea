@@ -1,4 +1,4 @@
--- 0068_users_profile_visible_earnings.sql
+-- 0073_users_profile_visible_earnings.sql
 -- Opt-in flag controlling whether a builder's earnings appear on their public
 -- profile page (`/builders/<username>`). Default 0 — earnings are private
 -- unless the builder explicitly opts in. The profile page reads this column;

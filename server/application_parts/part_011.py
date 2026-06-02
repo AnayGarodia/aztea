@@ -2529,3 +2529,15 @@ app.include_router(
         optional_api_key=_optional_api_key,
     )
 )
+
+
+# Public Firecrawl-shaped web API (POST /scrape /map /crawl /extract) + the public
+# receipt-verify endpoint (POST /web/verify). The fetch endpoints enforce the
+# AZTEA_WEB_API_ENABLED kill-switch (503 until set); /web/verify is always on (no
+# outbound, no money). Router lives in server/routes/web_api.py.
+app.include_router(
+    _web_api_routes.create_router(
+        limiter=limiter,
+        optional_api_key=_optional_api_key,
+    )
+)

@@ -80,6 +80,8 @@ from slowapi.util import get_remote_address
 from agents import accessibility_auditor as agent_accessibility_auditor
 from agents import broken_link_crawler as agent_broken_link_crawler
 from agents import browser_agent as agent_browser_agent
+from agents import site_navigator as agent_site_navigator
+from agents import web_actor as agent_web_actor
 from agents import cve_lookup as agent_cve_lookup
 from agents import db_sandbox as agent_db_sandbox
 from agents import dependency_auditor as agent_dependency_auditor
@@ -208,6 +210,7 @@ from server.routes import admin_usage as _admin_usage_routes
 from server.routes import playground as _playground_routes
 from server.routes import public_integrations as _public_integrations_routes
 from server.routes import system as _system_routes
+from server.routes import web_api as _web_api_routes
 
 _LOG_LEVEL_NAME = (os.environ.get("LOG_LEVEL", "INFO") or "INFO").strip().upper()
 _LOG_LEVEL = getattr(logging, _LOG_LEVEL_NAME, logging.INFO)
@@ -330,6 +333,8 @@ _DEPENDENCY_AUDITOR_AGENT_ID = _builtin_constants.DEPENDENCY_AUDITOR_AGENT_ID
 _DB_SANDBOX_AGENT_ID = _builtin_constants.DB_SANDBOX_AGENT_ID
 _VISUAL_REGRESSION_AGENT_ID = _builtin_constants.VISUAL_REGRESSION_AGENT_ID
 _BROWSER_AGENT_ID = _builtin_constants.BROWSER_AGENT_ID
+_SITE_NAVIGATOR_AGENT_ID = _builtin_constants.SITE_NAVIGATOR_AGENT_ID
+_WEB_ACTOR_AGENT_ID = _builtin_constants.WEB_ACTOR_AGENT_ID
 _MULTI_LANGUAGE_EXECUTOR_AGENT_ID = _builtin_constants.MULTI_LANGUAGE_EXECUTOR_AGENT_ID
 _SECRET_SCANNER_AGENT_ID = _builtin_constants.SECRET_SCANNER_AGENT_ID
 _LIGHTHOUSE_AUDITOR_AGENT_ID = _builtin_constants.LIGHTHOUSE_AUDITOR_AGENT_ID

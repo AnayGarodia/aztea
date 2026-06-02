@@ -37,6 +37,7 @@ const IntegrationsPage = lazy(() => import('./pages/IntegrationsPage'))
 // Wave 2 (2026-05-26): public builder profile page at /builders/:username.
 const BuilderProfilePage = lazy(() => import('./pages/BuilderProfile'))
 const BuildPage = lazy(() => import('./pages/BuildPage'))
+const WebPlaygroundPage = lazy(() => import('./pages/WebPlaygroundPage'))
 
 function PublicMarketApp({ children }) {
   const { apiKey, booting } = useAuth()
@@ -178,6 +179,7 @@ export default function App() {
                 <Route path="/agents" element={<PublicMarketApp><AgentsPage /></PublicMarketApp>} />
                 <Route path="/agents/:id" element={<PublicMarketApp><AgentDetailPage /></PublicMarketApp>} />
                 <Route path="/build" element={<PublicMarketApp><BuildPage /></PublicMarketApp>} />
+                <Route path="/web" element={<PublicMarketApp><WebPlaygroundPage /></PublicMarketApp>} />
                 <Route
                   path="/legal/accept"
                   element={

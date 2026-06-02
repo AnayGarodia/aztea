@@ -149,6 +149,29 @@ def _pin_hostname_to_ip(hostname: str, ip: str) -> Iterator[None]:
     finally:
         _pinned_resolutions.reset(token)
 
+
+@contextlib.contextmanager
+def pinned_ip_for_url(url: str) -> Iterator[None]:
+    """Public DNS-rebinding defense reusable by ANY socket-based client.
+
+    Both ``requests`` and ``httpx`` (sync) resolve through ``socket.getaddrinfo``,
+    so the same context-var pin protects either. Resolves the URL's host, validates
+    the IP against ``url_security`` policy, and pins that IP for the duration of the
+    block so a TTL=0 rebind to a private IP at connect time cannot land. No-op when
+    the host is an IP literal or ``ALLOW_PRIVATE_OUTBOUND_URLS`` is set. Raises
+    ``ValueError`` on a rebind attempt (host resolves to a disallowed IP). Callers
+    should still call ``url_security.validate_outbound_url(url)`` first — this closes
+    the resolve→connect TOCTOU gap that validation alone leaves open.
+    """
+    hostname = urlparse(url).hostname or ""
+    pinned_ip = _resolve_and_validate_ip(hostname)
+    if pinned_ip is not None and hostname:
+        with _pin_hostname_to_ip(hostname, pinned_ip):
+            yield
+    else:
+        yield
+
+
 # Why named: separates pool/adapter knobs from runtime call sites. Tuned for
 # a buyer-agent fan-out workload (e.g. 64-job manage_workflow hire_batch
 # against one host). Each remote host gets its own adapter so saturation on
