@@ -29,11 +29,10 @@ from tests.integration.support import (
 # 2026-05-26 (Wave 3): POST /skills was reopened to non-master callers —
 # they can publish but land in ``review_status='probation'`` with price
 # capped and auto-invoke rank-penalised until track record graduates them.
-# POST /skills/validate remains master-only (it's an internal preview tool;
-# the public publish path runs the same scanner so there's no parity gap).
-# Parity tests run as master to exercise the full scanner-equivalence
-# coverage; the non-master probation publish path is covered in
-# test_publish_flow.py.
+# POST /skills/validate is public too — the publish wizard's preview step
+# depends on it and it runs the same scanner as /skills. Parity tests run as
+# master to exercise the full scanner-equivalence coverage; the non-master
+# probation publish path is covered in test_publish_flow.py.
 # ---------------------------------------------------------------------------
 
 
@@ -95,9 +94,9 @@ def test_skill_validate_passes_clean_content(client):
 
 # ---------------------------------------------------------------------------
 # POST /skills (publish): reopened to non-master callers 2026-05-26 (Wave 3).
-# Non-master publishes land in probation. /skills/validate is still
-# master-only — the public path runs the same scanner so there's no
-# preview gap to close.
+# Non-master publishes land in probation. /skills/validate is public too —
+# the publish wizard's preview step depends on it, and it runs the same
+# scanner as the real publish path so it leaks nothing /skills doesn't.
 # ---------------------------------------------------------------------------
 
 
@@ -115,16 +114,18 @@ def test_skill_post_non_master_lands_in_probation(client):
     assert body.get("review_status") == "probation", body
 
 
-def test_skill_validate_non_master_is_403(client):
+def test_skill_validate_non_master_previews(client):
+    """Non-master callers can preview a SKILL.md — the publish wizard's
+    step-1 preview depends on /skills/validate, and /skills is already public
+    for them, so validate must not gate them out."""
     user = _register_user()
     resp = client.post(
         "/skills/validate",
         headers=_auth_headers(user["raw_api_key"]),
         json={"skill_md": _SKILL_CLEAN},
     )
-    assert resp.status_code == 403, resp.text
-    envelope = resp.json().get("detail", resp.json())
-    assert envelope.get("error") == "skills.public_publish_disabled"
+    assert resp.status_code == 200, resp.text
+    assert resp.json().get("valid") is True
 
 
 # ---------------------------------------------------------------------------

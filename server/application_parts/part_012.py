@@ -24,28 +24,15 @@ def skills_validate(
 ) -> dict:
     """Dry-run a SKILL.md against the safety scanner + parser.
 
-    Master-only. POST /skills was reopened to public callers on 2026-05-26
-    (Wave 3) — non-master publishes land in probation with the same static
-    scan + LLM judge run on the real publish path. /skills/validate stays
-    master-only because the public path already covers the scanner-equivalence
-    contract; the preview is internal tooling.
+    Public (worker scope), mirroring POST /skills. Both were reopened to
+    non-master callers in the 2026-05-26 Wave 3 pivot: the publish wizard's
+    preview step depends on this route, so gating it master-only locked
+    non-master publishers out of the UI at step 1 even though they're allowed
+    to publish. The preview is not an information-leak oracle — /skills is
+    public and returns the same block findings, so validate exposes nothing
+    the real publish path doesn't already surface.
     """
     _require_scope(caller, "worker")
-    if caller["type"] != "master":
-        raise HTTPException(
-            status_code=403,
-            detail=error_codes.make_error(
-                "skills.public_publish_disabled",
-                "SKILL.md validation is no longer publicly available.",
-                {
-                    "hint": (
-                        "Publish a .py handler or an agent.md manifest with "
-                        "`aztea publish` instead. See "
-                        "https://aztea.ai/docs/publishing."
-                    ),
-                },
-            ),
-        )
     raw_md = str((body or {}).get("skill_md") or "")
     if not raw_md.strip():
         raise HTTPException(status_code=400, detail="skill_md is required.")
