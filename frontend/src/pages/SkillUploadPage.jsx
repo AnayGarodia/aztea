@@ -8,7 +8,7 @@ import { useAuth } from '../context/AuthContext'
 import { validateSkillMd, createSkill, fetchAgents } from '../api'
 import {
   CheckCircle, AlertTriangle, Upload, ArrowRight, ArrowLeft,
-  Zap, TrendingUp, ExternalLink, FileText, Coins, Globe
+  Zap, TrendingUp, ExternalLink, FileText, Globe
 } from 'lucide-react'
 import './SkillUploadPage.css'
 
@@ -28,39 +28,6 @@ function StepBar({ step }) {
           {i < labels.length - 1 && <div className="sup__step-line" />}
         </div>
       ))}
-    </div>
-  )
-}
-
-function EarningsCalculator({ price, callsPerMonth }) {
-  const monthly = price * callsPerMonth * 0.9
-  const scenarios = [
-    { label: '100 calls/mo', calls: 100 },
-    { label: '1k calls/mo',  calls: 1000 },
-    { label: '10k calls/mo', calls: 10000 },
-  ]
-  const maxEarnings = price * 10000 * 0.9
-  return (
-    <div className="sup__calc">
-      <p className="sup__calc-headline">
-        At <strong>${price.toFixed(2)}/call</strong> you keep <strong>${monthly.toFixed(0)}/month</strong> at {callsPerMonth.toLocaleString()} calls.
-      </p>
-      <div className="sup__calc-bars">
-        {scenarios.map(({ label, calls }) => {
-          const earn = price * calls * 0.9
-          const pct = maxEarnings > 0 ? Math.min((earn / maxEarnings) * 100, 100) : 0
-          return (
-            <div key={label} className="sup__calc-row">
-              <span className="sup__calc-label">{label}</span>
-              <div className="sup__calc-bar-wrap">
-                <div className="sup__calc-bar" style={{ transform: `scaleX(${pct / 100})` }} />
-              </div>
-              <span className="sup__calc-earn">${earn >= 1000 ? `${(earn / 1000).toFixed(1)}k` : earn.toFixed(0)}</span>
-            </div>
-          )
-        })}
-      </div>
-      <p className="sup__calc-note">Platform keeps 10%. No charge on failed calls.</p>
     </div>
   )
 }
@@ -92,7 +59,6 @@ export default function SkillUploadPage() {
   const [preview, setPreview] = useState(null)
   const [uploadError, setUploadError] = useState('')
   const [price, setPrice] = useState(0.05)
-  const [callsPreview, setCallsPreview] = useState(1000)
   const [agents, setAgents] = useState([])
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
@@ -321,24 +287,6 @@ export default function SkillUploadPage() {
                     <span>$5.00</span>
                   </div>
 
-                  <div className="sup__divider" />
-
-                  <p className="sup__calls-label">
-                    Estimate at{' '}
-                    <select
-                      className="sup__calls-select"
-                      value={callsPreview}
-                      onChange={e => setCallsPreview(Number(e.target.value))}
-                    >
-                      <option value={100}>100</option>
-                      <option value={500}>500</option>
-                      <option value={1000}>1,000</option>
-                      <option value={5000}>5,000</option>
-                      <option value={10000}>10,000</option>
-                    </select>
-                    {' '}calls/month
-                  </p>
-                  <EarningsCalculator price={price} callsPerMonth={callsPreview} />
                   <ComparableAgents agents={agents} />
                 </Card.Body>
                 <Card.Footer style={{ justifyContent: 'space-between' }}>
@@ -385,14 +333,9 @@ export default function SkillUploadPage() {
                     <div className="sup__confirm-row">
                       <span className="sup__confirm-key">Review</span>
                       <span className="sup__confirm-val sup__confirm-val--live">
-                        <span className="sup__live-dot" /> Auto-approved. Live immediately.
+                        <span className="sup__live-dot" /> Live immediately. New listings start on probation — ranked lower until they build a track record.
                       </span>
                     </div>
-                  </div>
-
-                  <div className="sup__confirm-earnings">
-                    <Coins size={15} />
-                    <span>At 1,000 calls/month you'd earn <strong>${(price * 1000 * 0.9).toFixed(0)}</strong>. At 10,000 you'd earn <strong>${(price * 10000 * 0.9).toFixed(0)}</strong>.</span>
                   </div>
 
                   {submitError && <p className="sup__error" ref={errorRef} style={{ marginTop: 16 }}>{submitError}</p>}
@@ -435,6 +378,14 @@ export default function SkillUploadPage() {
                   <div className="sup__success-row">
                     <span className="sup__success-key">Your cut</span>
                     <code className="sup__success-val-mono sup__success-val--earn">${(Number(result.price_per_call_usd) * 0.9).toFixed(3)}/call</code>
+                  </div>
+                  <div className="sup__success-row">
+                    <span className="sup__success-key">Status</span>
+                    <span className="sup__success-val">
+                      {result.review_status === 'probation'
+                        ? 'On probation — live and callable now, ranked lower until it builds a track record'
+                        : 'Approved — fully ranked'}
+                    </span>
                   </div>
                 </div>
 

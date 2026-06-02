@@ -317,94 +317,6 @@
   margin: 2px 0 0;
 }
 
-.sup__divider {
-  height: 1px;
-  background: var(--border);
-  margin: 20px 0;
-}
-
-.sup__calls-label {
-  font-size: 0.875rem;
-  color: var(--text-secondary);
-  margin: 0 0 14px;
-}
-
-.sup__calls-select {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  color: var(--text-primary);
-  font-size: 0.875rem;
-  padding: 2px 6px;
-  font-family: var(--font-sans);
-  cursor: pointer;
-}
-
-/* Earnings calculator */
-.sup__calc {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.sup__calc-headline {
-  font-size: 0.9375rem;
-  color: var(--text-primary);
-  margin: 0;
-  line-height: 1.5;
-}
-
-.sup__calc-headline strong { color: var(--accent); }
-
-.sup__calc-bars {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.sup__calc-row {
-  display: grid;
-  grid-template-columns: 100px 1fr 60px;
-  align-items: center;
-  gap: 10px;
-}
-
-.sup__calc-label {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  font-weight: 500;
-}
-
-.sup__calc-bar-wrap {
-  height: 8px;
-  background: var(--surface-3, var(--surface-2));
-  border-radius: 999px;
-  overflow: hidden;
-}
-
-.sup__calc-bar {
-  height: 100%;
-  width: 100%;
-  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #22c55e));
-  border-radius: 999px;
-  transform-origin: left;
-  transition: transform 0.4s ease;
-}
-
-.sup__calc-earn {
-  font-size: 0.8125rem;
-  font-weight: 700;
-  color: var(--text-primary);
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  text-align: right;
-}
-
-.sup__calc-note {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  margin: 0;
-}
-
 /* Comparable agents */
 .sup__comps {
   margin-top: 20px;
@@ -504,22 +416,6 @@
   50% { box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); }
 }
 
-.sup__confirm-earnings {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin-top: 18px;
-  padding: 12px 14px;
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
-  border-radius: var(--r-md);
-  font-size: 0.8125rem;
-  color: var(--text-secondary);
-  line-height: 1.5;
-}
-.sup__confirm-earnings strong { color: var(--accent); }
-.sup__confirm-earnings svg { color: var(--accent); flex-shrink: 0; }
-
 /* Success state */
 .sup__success {
   display: flex;
@@ -603,6 +499,12 @@
 }
 
 .sup__success-val--earn { color: var(--accent); font-weight: 700; }
+
+.sup__success-val {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
 
 .sup__success-actions {
   display: flex;
@@ -722,5 +624,4 @@ details[open] .sup__advanced-summary::before { content: '▼ '; }
   .sup__scroll { padding: 20px 16px; }
   .sup__step-label { display: none; }
   .sup__confirm-row { grid-template-columns: 1fr; gap: 4px; }
-  .sup__calc-row { grid-template-columns: 80px 1fr 52px; }
 }
