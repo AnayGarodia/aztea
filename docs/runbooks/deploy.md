@@ -292,6 +292,43 @@ invalidates both directions; restart both services after rotation.
 **Rollback** is one env-var flip (`AZTEA_ELIXIR_EVENTS=0`) + restart uvicorn.
 Caddy / nginx config can stay; the proxied path just stops being used.
 
+## Self-improving hosted skills (`AZTEA_SELF_IMPROVEMENT`)
+
+Migration 0077. When on, the job sweeper distils a hosted skill's recent
+failures (low-rated `output_examples` + caller-filed dispute text + judge
+reasoning) into short corrective "learnings", the skill owner accepts/rejects
+them in **My Agents**, and accepted learnings are injected as a delimited DATA
+block at execution time (`core/skill_executor.py`). The stored `system_prompt`
+is never mutated — reversal is the owner rejecting, or deleting the skill. A
+Level-1 `trust_trend` (improving / flat / declining) also lights up and adds a
+small, bounded ranking nudge in auto-hire + search.
+
+This is a **hosted-only** feature. Leave it off in OSS: the distiller spends
+platform LLM credits, and `tests/test_oss_mode_isolation.py` assumes no
+credit-spending background work runs by default.
+
+**Why default-off (do not flip globally yet):** v1 is a demand probe. The
+metric that justifies the feature is **owner acceptance rate of proposed
+learnings** — turn it on, watch that rate and the ranking delta, and only then
+consider making it the default.
+
+**Cold deploy procedure:**
+
+1. Land the code with `AZTEA_SELF_IMPROVEMENT` UNSET — verify behavior is
+   identical to before (no distill log lines, owner learnings routes return 404).
+2. Confirm at least one LLM provider key is set (the distiller uses
+   `run_with_fallback`; with no provider it soft-fails to a no-op).
+3. Flip `AZTEA_SELF_IMPROVEMENT=1` on the Python service; restart uvicorn.
+4. Within `AZTEA_SELF_IMPROVEMENT_INTERVAL_S` (default 24h) watch journalctl for
+   `learning_distillation.swept` — `learnings_proposed > 0` means owners now
+   have proposals waiting in My Agents. Force an earlier first run by lowering
+   the interval temporarily.
+5. Track owner accept-rate before considering wider rollout.
+
+**Rollback** is one env-var flip (`AZTEA_SELF_IMPROVEMENT=0`) + restart uvicorn.
+Already-active learnings stop being injected immediately (the executor reads the
+flag at call time); the `skill_learnings` rows remain for when it is re-enabled.
+
 ## Useful server commands
 
 ```bash
@@ -357,6 +394,18 @@ AZTEA_ENABLE_LIVE_QUALITY_JUDGE=1
 # AZTEA_PROBATION_MIN_QUALITY=3.5
 # AZTEA_PROBATION_MIN_AGE_HOURS=24
 # AZTEA_PROBATION_SWEEP_INTERVAL_S=300
+
+# Self-improving hosted skills (migration 0077). OFF by default and intended
+# to stay off in OSS — the distiller spends platform LLM credits and the
+# injected learnings block changes skill behavior. With the flag unset the
+# sweep never runs, no block is injected, the trust_trend ranking nudge is
+# inert, and the owner routes 404 (byte-identical to pre-0077). Turn on for
+# hosted aztea.ai only after validating owner accept-rate. See the rollout
+# note below.
+# AZTEA_SELF_IMPROVEMENT=1
+# AZTEA_SELF_IMPROVEMENT_INTERVAL_S=86400       # distill cadence (default 24h)
+# AZTEA_SELF_IMPROVEMENT_MAX_SKILLS_PER_RUN=25  # per-sweep LLM-cost cap
+# AZTEA_SELF_IMPROVEMENT_MAX_PENDING=10         # skip skills with this many un-reviewed proposals
 
 # Email (if unset, all email silently no-ops)
 SMTP_HOST=

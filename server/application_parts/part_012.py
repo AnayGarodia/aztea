@@ -452,6 +452,15 @@ def skills_delete(
         _LOG.exception(
             "Failed to delist agent %s during skill delete.", row["agent_id"]
         )
+    # App-level cleanup of this skill's learnings (no DB cascade on skill_id —
+    # see migration 0077). Best-effort: a learnings cleanup failure must not
+    # block the skill delete the owner asked for.
+    try:
+        _skill_learnings.archive_learnings_for_skill(skill_id)
+    except Exception:
+        _LOG.exception(
+            "Failed to archive learnings during delete of skill %s.", skill_id
+        )
     _hosted_skills.delete_hosted_skill(skill_id)
     return {"deleted": True, "skill_id": skill_id}
 

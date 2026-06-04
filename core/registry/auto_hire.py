@@ -42,6 +42,7 @@ from typing import Any, Callable
 
 from core import db as _db
 from core import feature_flags
+from core import trust_trend as _trust_trend
 
 logger = logging.getLogger(__name__)
 
@@ -1032,7 +1033,12 @@ def _score_string_signals(c: CandidateAgent, intent_lower: str, tokens: set[str]
 
 
 def _score_quality_signals(c: CandidateAgent) -> tuple[float, list[str]]:
-    """Pure: success-rate + trust + recommended bonuses for agents with a track record."""
+    """success-rate + trust + trend + recommended bonuses for agents with a track record.
+
+    Reads AZTEA_SELF_IMPROVEMENT (the only impurity): the directional trend
+    nudge is opt-in so the ranking change is reversible and testable in
+    isolation. With the flag off this behaves exactly as before.
+    """
     score = 0.0
     reasons: list[str] = []
     call_count = int(c.raw.get("call_count", c.raw.get("total_calls", 0)) or 0)
@@ -1040,6 +1046,15 @@ def _score_quality_signals(c: CandidateAgent) -> tuple[float, list[str]]:
     if call_count >= _QUALITY_TRACK_RECORD_CALLS:
         score += min(_QUALITY_SUCCESS_BONUS_CAP, c.success_rate * 10)
         score += min(_QUALITY_TRUST_BONUS_CAP, c.trust_score / _TRUST_BONUS_DIVISOR)
+        # Bounded directional nudge (±_TREND_RANK_BONUS, well under the trust
+        # bonus cap) so a recently-improving agent edges out a declining peer on
+        # otherwise-equal signals. Gated + reversible.
+        if feature_flags.self_improvement_enabled():
+            trend = c.raw.get("trust_trend")
+            delta = _trust_trend.trend_rank_delta(trend)
+            if delta:
+                score += delta
+                reasons.append(f"trust trend {trend}: {delta:+.1f}")
     # Cold-start prior: agents with no call/rating history have an
     # uninformative trust_score (50.0 default). Without this penalty, a
     # fresh agent with strong text match can sit above an established

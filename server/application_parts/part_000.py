@@ -153,6 +153,8 @@ from core import observability as _observability
 from core import outbound_session as _outbound_session
 from core import rate_limit as _rate_limit
 from core import skill_executor as _skill_executor
+from core import skill_improvement as _skill_improvement
+from core import skill_learnings as _skill_learnings
 from core import skill_parser as _skill_parser
 from core import url_security as _url_security
 from core import watchers as _watchers
@@ -207,6 +209,7 @@ from server.error_handlers import (
 from server.routes import admin_usage as _admin_usage_routes
 from server.routes import playground as _playground_routes
 from server.routes import public_integrations as _public_integrations_routes
+from server.routes import skill_learnings as _skill_learnings_routes
 from server.routes import system as _system_routes
 
 _LOG_LEVEL_NAME = (os.environ.get("LOG_LEVEL", "INFO") or "INFO").strip().upper()

@@ -502,6 +502,22 @@ export async function deleteSkill(key, skillId) {
   return body
 }
 
+// Self-improvement: proposed "learnings" awaiting the owner's accept/reject.
+// Returns { skill_id, learnings: [...] }. 404 when AZTEA_SELF_IMPROVEMENT is off.
+export async function fetchSkillLearnings(key, skillId, status = 'proposed') {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : ''
+  const { body } = await request(`/skills/${skillId}/learnings${qs}`, { key })
+  return body
+}
+
+export async function decideSkillLearning(key, skillId, learningId, decision) {
+  const { body } = await request(
+    `/skills/${skillId}/learnings/${learningId}/decision`,
+    { method: 'POST', key, body: { decision } },
+  )
+  return body
+}
+
 // ── Registry ──────────────────────────────────────────────────────────────────
 
 export async function fetchAgents(key, tag, { rankBy = 'trust', ownerId } = {}) {

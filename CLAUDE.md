@@ -197,7 +197,7 @@ elixir/                          Phoenix/OTP sidecar — Step 1 of strangle-fig 
 
 migrations/
   0001_initial.sql               Canonical schema — all CREATE TABLE / INDEX
-  0002–0031_*.sql                Incremental additions (applied once via schema_migrations table)
+  0002–0077_*.sql                Incremental additions (applied once via schema_migrations table)
 
 sdks/
   python-sdk/                    AzteaClient (hire), AgentServer (@handler + polling loop)
@@ -335,6 +335,21 @@ Source: `server/routes/admin_usage.py` (factory `create_router(...)` wired at th
 **Retention.** `auto_hire_decisions` keeps 90 days of raw rows; older rows are aggregated to `auto_hire_decisions_daily` (migration 0051) keyed on `(day, reason, auto_invoked)`. The rollup table is kept indefinitely. The sweep runs at most once per 24h from inside `_jobs_sweeper_loop` (`server/application_parts/part_006.py::_maybe_run_decision_retention`); the work is in `core/observability.py::run_decision_retention`.
 
 **MCP error code capture.** `mcp_invocation_log.error_code` (migration 0048) is populated when an MCP dispatch raises an `HTTPException` whose `detail` carries a structured `error.code`. Helper: `_extract_mcp_error_code` in `part_000.py`. Required for the `failures` view to be useful.
+
+### Self-improving hosted skills (learnings memory)
+
+Hosted SKILL.md skills accumulate "learnings" — short corrective bullets distilled from their own recent failures and injected at execution time. Hermes-style memory, not prompt rewriting: the stored `system_prompt` is never mutated, so reversal is a status flip. **Gated by `AZTEA_SELF_IMPROVEMENT` (default OFF, hosted-only).** When off, the whole feature is inert (no sweep, no injection, routes 404, ranking unchanged) — OSS stays byte-identical.
+
+- **Table** `skill_learnings` (migration 0077): `learning_id`, `skill_id`, `agent_id`, `owner_id`, `text`, `status` (`proposed`|`active`|`archived`), `source_signal`, `source_job_ids`, `confidence`, timestamps. Status transitions ARE the version history (no hard deletes in the normal flow). `skill_id` has NO DB-level FK — `hosted_skills` already cascades from `agents`, so cleanup is app-side (the `DELETE /skills` route archives via `skill_learnings.archive_learnings_for_skill`). Migration 0077 also adds the `hosted_skills.last_distill_at` watermark.
+- **Store** is `core/skill_learnings.py` (dedup vs proposed/active, pending cap, owner-scoped rowcount-guarded transitions, capped `active_learnings_block`).
+- **Distiller** `core/skill_improvement.py::run_learning_distillation` runs once/24h off `_jobs_sweeper_loop` (`part_006.py::_maybe_run_learning_distillation`). Signals: low-rated jobs (authoritative rating from `job_quality_ratings`, joined to the already-scrubbed `output_examples` ring buffer by `job_id` — the example's own `rating` field is never populated at record time) + caller-filed dispute `reason`/`evidence` + judge `reasoning`. It does NOT read `caller_ratings.comment` — that table is the agent rating the *caller*, not buyer feedback, and `job_quality_ratings` has no comment column. Sensitive skills are skipped entirely via `core/privacy.is_example_sensitive_agent`, fed the AUTHORITATIVE flags (`pii_safe`/`outputs_not_stored` from the `agents` row, `category`/`examples_sensitive` from frontmatter) — NOT frontmatter alone. Caller free-text (dispute prose) and the distilled bullet are run through `core/privacy.scrub_freetext` (value-based secret/email scrub) since field-name redaction can't touch a token buried in prose. `run_with_fallback` soft-fails to a no-op.
+- **Injection:** `core/skill_executor.py::_build_completion_request` reads the active block (flag-gated, soft-fail) and passes it into `build_messages`, which stays pure (the block is a parameter, wrapped as DATA inside the hardened prefix/suffix). Zero-learnings output is byte-identical to pre-0077 (regression-tested).
+- **Owner routes** in `server/routes/skill_learnings.py` (`create_router`, wired in `part_011`): `GET /skills/{id}/learnings?status=` and `POST /skills/{id}/learnings/{lid}/decision`. Worker-scope + owner-match. Frontend panel: `frontend/src/features/builder/SkillLearningsPanel.jsx` on **My Agents**.
+- **Privacy primitives** (`is_example_sensitive_agent`, `redact_sensitive`, the sensitive-ID set) were extracted from `part_003.py` to `core/privacy.py` so `core/` reuses them without importing `server/`. `part_003` re-imports them under their historical private names.
+
+**Level-1 `trust_trend`.** `core/trust_trend.py` computes improving/flat/declining from `job_quality_ratings` (last-N vs prior-N avg; needs ~13+ ratings or it reads `unknown`). Attached to every enriched agent record by `reputation.enrich_agent_records` (display, always on). A small bounded ranking nudge (`trend_rank_delta` in `auto_hire._score_quality_signals`, `trend_blend_delta` in the `agents_ops` search blend) is **gated behind `AZTEA_SELF_IMPROVEMENT`** so the hot-path ranking change is opt-in.
+
+Rollout + env knobs: `docs/runbooks/deploy.md` → "Self-improving hosted skills".
 
 ### Workspaces
 
