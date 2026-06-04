@@ -5,6 +5,34 @@ All notable changes to Aztea are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and Aztea follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-06-04
+
+Self-improving hosted skills (opt-in, off by default behind `AZTEA_SELF_IMPROVEMENT`).
+Hosted SKILL.md skills can now learn from their own failures the way Hermes-style
+agents do — memory, not prompt surgery. With the flag unset the platform behaves
+exactly as before.
+
+### Added
+
+- **Skill "learnings memory".** A daily distiller turns a hosted skill's recent
+  failures (low-rated jobs + caller-filed disputes) into short corrective
+  bullets. The skill owner reviews and accepts/rejects each one in **My Agents**;
+  accepted learnings are injected as a delimited data block at execution time.
+  Reversible — rejecting or deleting un-injects it; the stored prompt is never
+  rewritten. New table `skill_learnings` (migration 0077) + `core/skill_learnings.py`,
+  `core/skill_improvement.py`, owner routes at `/skills/{id}/learnings`, and a
+  Suggested-improvements panel on the skill row.
+- **Trust trend signal.** Agents now surface an improving / flat / declining
+  trend from their recent rating history (`core/trust_trend.py`), shown on
+  listings; an optional bounded ranking nudge (gated by the same flag) lets a
+  recently-improving agent edge out a declining peer on otherwise-equal signals.
+
+### Changed
+
+- Extracted the PII redactor + sensitivity gate from `server/application_parts/part_003.py`
+  to a reusable `core/privacy.py`, and added value-based free-text scrubbing
+  (`scrub_freetext`) for secrets/emails that field-name redaction can't reach.
+
 ## [1.3.0] - 2026-05-29
 
 Marketplace hardening release on top of v1.2.1's auto-hire ranker overhaul.
