@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+# Aztea toolbelt installer — gstack-style one-command setup.
+#
+# Installs the Aztea CLI, registers the MCP server in your coding agent(s),
+# and (on Claude Code) wires the deference hooks so the agent actually reaches
+# for specialist agents instead of fumbling live-data / exec / audit tasks.
+#
+# Usage:
+#   ./setup [--client claude|cursor|vscode|windsurf|codex|all]
+#           [--pretool-block] [--no-pretool-hook] [--no-prompt-hook]
+#           [--no-rule] [--no-hook]
+#           [--from-pypi] [--use-pipx] [--non-interactive] [--dry-run] [-h]
+#
+# Env:
+#   AZTEA_API_KEY    if set, skips interactive `aztea login`
+#   AZTEA_BASE_URL   self-hosted endpoint (default https://aztea.ai)
+#
+# Re-runnable and idempotent: every underlying write is marker/key-idempotent,
+# `pip install -e` re-runs cleanly, and login is skipped when a key resolves.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ALL_CLIENTS="claude cursor vscode windsurf codex"
+
+CLIENT="claude"
+PRETOOL_BLOCK=0
+WITH_PRETOOL_HOOK=1
+WITH_PROMPT_HOOK=1
+WITH_RULE=1
+WITH_POSTTOOL_HOOK=1
+FROM_PYPI=0
+USE_PIPX=0
+NON_INTERACTIVE=0
+DRY_RUN=0
+BASE_URL="${AZTEA_BASE_URL:-https://aztea.ai}"
+
+usage() {
+  cat <<'EOF'
+Aztea toolbelt installer — gstack-style one-command setup.
+
+Installs the Aztea CLI, registers the MCP server in your coding agent(s), and
+(on Claude Code) wires the deference hooks so the agent reaches for specialist
+agents instead of fumbling live-data / exec / audit tasks.
+
+Usage:
+  ./setup [--client claude|cursor|vscode|windsurf|codex|all]
+          [--pretool-block] [--no-pretool-hook] [--no-prompt-hook]
+          [--no-rule] [--no-hook]
+          [--from-pypi] [--use-pipx] [--non-interactive] [--dry-run] [-h]
+
+Env:
+  AZTEA_API_KEY    if set, skips interactive `aztea login`
+  AZTEA_BASE_URL   self-hosted endpoint (default https://aztea.ai)
+
+Re-runnable and idempotent.
+EOF
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --client)            CLIENT="${2:-}"; shift 2;;
+    --client=*)          CLIENT="${1#*=}"; shift;;
+    --pretool-block)     PRETOOL_BLOCK=1; shift;;
+    --no-pretool-hook)   WITH_PRETOOL_HOOK=0; shift;;
+    --no-prompt-hook)    WITH_PROMPT_HOOK=0; shift;;
+    --no-rule)           WITH_RULE=0; shift;;
+    --no-hook)           WITH_POSTTOOL_HOOK=0; shift;;
+    --from-pypi)         FROM_PYPI=1; shift;;
+    --use-pipx)          USE_PIPX=1; shift;;
+    --non-interactive)   NON_INTERACTIVE=1; shift;;
+    --dry-run)           DRY_RUN=1; shift;;
+    -h|--help)           usage; exit 0;;
+    *) echo "Unknown option: $1" >&2; usage; exit 2;;
+  esac
+done
+
+# Validate the client choice up front so we fail fast, not mid-install.
+if [ "$CLIENT" != "all" ]; then
+  case " $ALL_CLIENTS " in
+    *" $CLIENT "*) ;;
+    *) echo "Unknown client: '$CLIENT' (want: $ALL_CLIENTS | all)" >&2; exit 2;;
+  esac
+fi
+
+# Echo a command, then run it unless --dry-run. Redact the API key in the echo
+# so it never lands in terminal scrollback or CI logs (it's still passed intact
+# to the child process).
+run() {
+  local shown="$*"
+  if [ -n "${AZTEA_API_KEY:-}" ]; then
+    shown="${shown//$AZTEA_API_KEY/***}"
+  fi
+  echo "  + $shown"
+  if [ "$DRY_RUN" -eq 0 ]; then "$@"; fi
+}
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || { echo "  ✗ missing required tool: $1" >&2; exit 1; }
+}
+
+prereqs() {
+  echo "→ Checking prerequisites"
+  need python3
+  if [ "$USE_PIPX" -eq 1 ]; then
+    need pipx
+  else
+    python3 -m pip --version >/dev/null 2>&1 || {
+      echo "  ✗ pip not available for $(command -v python3). Install pip or pass --use-pipx." >&2
+      exit 1
+    }
+  fi
+}
+
+install_cli() {
+  echo "→ Installing the aztea CLI"
+  local sdk="$SCRIPT_DIR/sdks/python-sdk"
+  if [ "$FROM_PYPI" -eq 0 ] && [ -f "$sdk/pyproject.toml" ]; then
+    if [ "$USE_PIPX" -eq 1 ]; then run pipx install --force "$sdk"
+    else run python3 -m pip install -e "$sdk"; fi
+  else
+    if [ "$USE_PIPX" -eq 1 ]; then run pipx install --force aztea
+    else run python3 -m pip install --upgrade aztea; fi
+  fi
+}
+
+check_cli_on_path() {
+  # Must run BEFORE any `aztea` invocation: a --user/pipx install can land the
+  # console script in a dir that's not on PATH, and under `set -e` the next
+  # `aztea` call would abort with 127 before the friendly warning could print.
+  [ "$DRY_RUN" -eq 1 ] && return 0
+  command -v aztea >/dev/null 2>&1 && return 0
+  echo "  ✗ 'aztea' isn't on PATH after install." >&2
+  echo "    It likely went to a user bin dir (e.g. ~/.local/bin or a pipx path)." >&2
+  echo "    Add that directory to PATH (or activate the venv it installed into)," >&2
+  echo "    then re-run ./setup." >&2
+  exit 1
+}
+
+ensure_auth() {
+  echo "→ Checking authentication"
+  if [ -n "${AZTEA_API_KEY:-}" ]; then echo "  using AZTEA_API_KEY from env"; return; fi
+  if [ "$DRY_RUN" -eq 1 ]; then echo "  + aztea login   (skipped in --dry-run)"; return; fi
+  if aztea whoami >/dev/null 2>&1; then echo "  already signed in"; return; fi
+  if [ "$NON_INTERACTIVE" -eq 1 ]; then
+    echo "  ✗ no API key and --non-interactive set. Set AZTEA_API_KEY or run 'aztea login'." >&2
+    exit 1
+  fi
+  run aztea login
+}
+
+register_client() {
+  local client="$1"
+  local args=(mcp install --client "$client" --json)
+  [ -n "${AZTEA_API_KEY:-}" ]        && args+=(--api-key "$AZTEA_API_KEY")
+  [ "$BASE_URL" != "https://aztea.ai" ] && args+=(--base-url "$BASE_URL")
+  [ "$WITH_RULE" -eq 0 ]             && args+=(--no-with-rule)
+  [ "$WITH_POSTTOOL_HOOK" -eq 0 ]    && args+=(--no-with-hook)
+  [ "$WITH_PRETOOL_HOOK" -eq 0 ]     && args+=(--no-pretool-hook)
+  [ "$WITH_PROMPT_HOOK" -eq 0 ]      && args+=(--no-prompt-hook)
+  [ "$PRETOOL_BLOCK" -eq 1 ]         && args+=(--pretool-block)
+  run aztea "${args[@]}"
+}
+
+verify_client() {
+  local client="$1"
+  if [ "$DRY_RUN" -eq 1 ]; then echo "  + aztea mcp doctor --client $client --json"; return; fi
+  if aztea mcp doctor --client "$client" --json >/dev/null 2>&1; then
+    echo "  ✓ $client healthy"
+  else
+    echo "  ⚠ $client doctor reported issues — run: aztea mcp doctor --client $client"
+  fi
+}
+
+next_steps() {
+  echo ""
+  echo "✓ Aztea setup complete."
+  # PATH is already guaranteed here: check_cli_on_path exits earlier if missing.
+  echo "  Next: quit and relaunch your editor, then try:"
+  echo "        \"look up CVE-2021-44228 and check whether my dependencies are affected\""
+  echo "  Reverse anytime: aztea mcp uninstall --client <client>"
+}
+
+main() {
+  prereqs
+  install_cli
+  check_cli_on_path
+  ensure_auth
+  local clients="$CLIENT"
+  [ "$CLIENT" = "all" ] && clients="$ALL_CLIENTS"
+  local failed=""
+  for client in $clients; do
+    echo "→ Registering Aztea in: $client"
+    # Tolerant loop: one client's install failure (e.g. a JSONC settings.json)
+    # must not abort the rest under `set -e`. The `if` also disables -e inside
+    # register_client so a non-zero `aztea mcp install` is captured, not fatal.
+    if register_client "$client"; then
+      verify_client "$client"
+    else
+      echo "  ⚠ $client registration failed — continuing with the others."
+      failed="$failed $client"
+    fi
+  done
+  next_steps
+  # Plain `[ -n "$failed" ] && echo` would return 1 when $failed is empty and,
+  # as main's last statement under `set -e`, exit the whole script non-zero.
+  if [ -n "$failed" ]; then
+    echo "  ⚠ Failed clients:$failed — fix the cause and re-run: ./setup --client <name>"
+  fi
+}
+
+main
