@@ -232,7 +232,7 @@ _FLAG_HINTS_PER_COMMAND: dict[str, dict[str, str]] = {
         "--yes":       "Skip confirmation",
     },
     "/init": {
-        "--client":         "claude | cursor",
+        "--client":         "claude | cursor | vscode | windsurf | codex",
         "--no-mcp":         "Skip MCP registration",
         "--no-claude-md":   "Skip CLAUDE.md snippet",
     },

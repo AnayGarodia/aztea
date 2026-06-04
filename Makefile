@@ -1,7 +1,12 @@
-.PHONY: dev test test-venv docker migrate demo lint evals smoke alerts launch-check oss-check check-runtime-deps lockfile lockfile-verify
+.PHONY: dev setup test test-venv docker migrate demo lint evals smoke alerts launch-check oss-check check-runtime-deps lockfile lockfile-verify
 
 dev:
 	uvicorn server:app --reload
+
+# One-command toolbelt install: CLI + MCP registration + Claude deference hooks.
+# Pass-through args: make setup ARGS="--client all --pretool-block"
+setup:
+	@./setup $(ARGS)
 
 # Prefer project venv when present (avoids Anaconda/numpy segfaults and version skew).
 test-venv:
