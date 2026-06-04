@@ -28,9 +28,14 @@ def skills_validate(
     non-master callers in the 2026-05-26 Wave 3 pivot: the publish wizard's
     preview step depends on this route, so gating it master-only locked
     non-master publishers out of the UI at step 1 even though they're allowed
-    to publish. The preview is not an information-leak oracle — /skills is
-    public and returns the same block findings, so validate exposes nothing
-    the real publish path doesn't already surface.
+    to publish.
+
+    Scope note: this preview runs ONLY the static scanner. The real POST /skills
+    additionally runs the LLM security judge and the exact-copy fingerprint dup
+    check, so a SKILL.md that previews ``valid: true`` here can still be refused
+    at publish with a judge ``listing.safety_block`` or a ``listing.duplicate``.
+    The preview is deliberately the cheap static layer (no LLM spend, no DB dup
+    lookup) — it is not an information-leak oracle for those heavier gates.
     """
     _require_scope(caller, "worker")
     raw_md = str((body or {}).get("skill_md") or "")
@@ -103,6 +108,7 @@ _SKILL_DEFAULT_OUTPUT_SCHEMA = {
 @limiter.limit("10/minute")
 def skills_create(
     request: Request,
+    background_tasks: BackgroundTasks,
     body: dict = Body(...),
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> dict:
@@ -160,21 +166,25 @@ def skills_create(
     # BLOCK. This bounds LLM spend: payloads we've already refused don't
     # pay for an LLM call. /api/playground/test deliberately runs ONLY the
     # static scanner — the publish path is where the judge earns its keep.
-    safety_findings = _listing_safety.scan_skill_md(raw_md)
-    if not _listing_safety.has_block(safety_findings):
-        try:
-            from core.listing_safety_judge import judge_skill_md as _judge_skill_md
-            safety_findings.extend(_judge_skill_md(raw_md))
-        except Exception:  # noqa: BLE001 — judge failure must never block publish
-            _LOG.warning("listing_safety_judge: judge_skill_md raised", exc_info=True)
-    if _listing_safety.has_block(safety_findings):
-        first_block = next(
-            f for f in safety_findings if f.level == _listing_safety.LEVEL_BLOCK
+    # Inline deterministic gate: static scan + security judge + exact-copy
+    # fingerprint dup. The advisory pass (cosine near-dup, thin-wrapper, council)
+    # runs after the response via background_tasks so the worker isn't held.
+    inline = _listing_verification.verify_listing_inline(
+        _listing_verification.KIND_SKILL_MD, raw=raw_md, owner_id=caller["owner_id"],
+    )
+    first_block = inline.first_block()
+    if first_block is not None:
+        # Exact-copy dup gets its own error code (distinct remediation); the
+        # static/judge security blocks keep the test-pinned listing.safety_block.
+        outer_code = (
+            "listing.duplicate"
+            if first_block.code == _listing_dedup.CODE_DUPLICATE
+            else "listing.safety_block"
         )
         raise HTTPException(
             status_code=400,
             detail=error_codes.make_error(
-                "listing.safety_block",
+                outer_code,
                 first_block.message,
                 {"code": first_block.code, "detail": first_block.detail},
             ),
@@ -330,6 +340,23 @@ def skills_create(
                 "UPDATE agents SET endpoint_url = %s WHERE agent_id = %s AND owner_id = %s",
                 (final_endpoint, agent_id, caller["owner_id"]),
             )
+
+    # Advisory verification (fingerprint record, cosine near-dup, skill dry-run,
+    # council) runs AFTER the response is sent. It only refines the probation
+    # note — it never changes whether the skill is live, so the publisher isn't
+    # made to wait on the LLM council (C2 of the 2026-06-03 review).
+    background_tasks.add_task(
+        _listing_verification.run_and_annotate,
+        agent_id,
+        _listing_verification.KIND_SKILL_MD,
+        raw=raw_md,
+        name=candidate_name,
+        description=description,
+        tags=list(base.get("tags") or []),
+        input_schema=_SKILL_DEFAULT_INPUT_SCHEMA,
+        output_schema=_SKILL_DEFAULT_OUTPUT_SCHEMA,
+        skill_row=skill_row,
+    )
 
     try:
         _owner_email = _get_owner_email(caller["owner_id"])

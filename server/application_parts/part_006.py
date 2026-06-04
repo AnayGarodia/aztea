@@ -879,6 +879,7 @@ def onboarding_validate(
 @limiter.limit("10/minute")
 def onboarding_ingest(
     request: Request,
+    background_tasks: BackgroundTasks,
     body: OnboardingValidateRequest,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.OnboardingIngestResponse:
@@ -973,6 +974,22 @@ def onboarding_ingest(
         agent_id,
         include_unapproved=True,
     )
+    # Advisory verification (cosine near-dup + council) after the response. The
+    # repeat-probe only runs for a dialable, probed endpoint.
+    if _feature_flags.listing_verify_async_enabled():
+        _endpoint_probed = _endpoint_is_probeable(safe_endpoint_url)
+        background_tasks.add_task(
+            _listing_verification.run_and_annotate,
+            agent_id,
+            _listing_verification.KIND_EXTERNAL,
+            name=payload["name"],
+            description=payload["description"],
+            tags=list(payload.get("tags") or []),
+            input_schema=payload.get("input_schema"),
+            output_schema=payload.get("output_schema"),
+            endpoint_url=safe_endpoint_url,
+            http_post=http.post if _endpoint_probed else None,
+        )
     # Plan B Phase 1 (2026-05-27): surface the HMAC signing secret EXACTLY
     # ONCE for any agent that has an outbound endpoint. /onboarding/ingest
     # is one of the two paths that produces a real http(s):// endpoint.

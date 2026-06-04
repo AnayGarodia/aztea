@@ -171,6 +171,7 @@ def _refuse_if_owner_has_too_many_rejections(owner_id: str) -> None:
 @limiter.limit("20/minute")
 def registry_register(
     request: Request,
+    background_tasks: BackgroundTasks,
     body: AgentRegisterRequest,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.RegistryRegisterResponse:
@@ -321,6 +322,23 @@ def registry_register(
             agent_id,
             include_unapproved=True,
         )
+        # Advisory verification (cosine near-dup + council) runs after the
+        # response. The repeat-probe only runs when the endpoint was actually
+        # reachable this request — otherwise we'd POST to an unprobed/polling URL.
+        if _feature_flags.listing_verify_async_enabled():
+            _endpoint_probed = _endpoint_is_probeable(safe_endpoint_url)
+            background_tasks.add_task(
+                _listing_verification.run_and_annotate,
+                agent_id,
+                _listing_verification.KIND_EXTERNAL,
+                name=body.name,
+                description=body.description,
+                tags=list(body.tags or []),
+                input_schema=body.input_schema,
+                output_schema=body.output_schema,
+                endpoint_url=safe_endpoint_url,
+                http_post=http.post if _endpoint_probed else None,
+            )
     except ValueError as e:
         raise HTTPException(
             status_code=400,
