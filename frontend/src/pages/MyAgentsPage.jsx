@@ -29,6 +29,7 @@ import './MyAgentsPage.css'
 import { fmtUsd as fmtCentsUsd } from '../utils/format.js'
 import { usePageMeta } from '../seo/usePageMeta'
 import CsvExportButton from '../features/builder/CsvExportButton'
+import SkillLearningsPanel from '../features/builder/SkillLearningsPanel'
 
 // fmtCents wraps canonical fmtUsd; fmtUsdPrecise shows up to 4 decimal places for small per-call prices
 const fmtCents = (cents) => (typeof cents !== 'number' ? '$0.00' : fmtCentsUsd(cents))
@@ -352,6 +353,11 @@ function AgentRow({ agent, earnings, onNavigate, onRefresh, apiKey }) {
   }
   const endpointUrl = String(agent?.endpoint_url || '')
   const isAztteaHosted = endpointUrl.startsWith('internal://') || endpointUrl.startsWith('skill://')
+  // Hosted SKILL.md agents carry a skill://{skill_id} endpoint — the learnings
+  // panel keys off that id. Non-skill agents have no self-improvement surface.
+  const skillId = endpointUrl.startsWith('skill://')
+    ? endpointUrl.slice('skill://'.length)
+    : null
 
   return (
     <motion.div
@@ -572,6 +578,10 @@ function AgentRow({ agent, earnings, onNavigate, onRefresh, apiKey }) {
                   </button>
                 )}
               </div>
+
+              {/* Self-improvement: proposed learnings for hosted skills only.
+                  Renders nothing when the feature is off or there are none. */}
+              {skillId && <SkillLearningsPanel apiKey={apiKey} skillId={skillId} />}
             </div>
           </motion.div>
         )}

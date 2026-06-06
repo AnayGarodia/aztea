@@ -42,6 +42,7 @@ import numpy as np
 
 from core import embeddings
 from core import feature_flags as _feature_flags
+from core import trust_trend as _trust_trend
 
 from . import catalog_broadcast
 from .call_history import append_call_ring_sample
@@ -2791,7 +2792,17 @@ def _blend_score(
     candidate: dict, *, inverse_price: float, price_query_mode: str | None,
     embeddings_enabled: bool,
 ) -> float:
-    """Pure: combine lexical/semantic/trust/price/intent into a single ranked score."""
+    """Combine lexical/semantic/trust/price/intent/trend into a single ranked score.
+
+    Reads AZTEA_SELF_IMPROVEMENT (the only impurity): the tiny directional trend
+    term is opt-in so this hot path is unchanged when the flag is off.
+    """
+    # Tiny, gated directional nudge on the normalized blend. Applied uniformly
+    # across all three branches below so flat/unknown agents (delta 0) are
+    # untouched and the relative ordering only shifts for improving vs declining.
+    trend_bonus = 0.0
+    if _feature_flags.self_improvement_enabled():
+        trend_bonus = _trust_trend.trend_blend_delta(candidate["agent"].get("trust_trend"))
     if price_query_mode is not None:
         price_intent_score = (
             1.0 - inverse_price if price_query_mode == "most_expensive" else inverse_price
@@ -2803,6 +2814,7 @@ def _blend_score(
             + _PRICE_MODE_SEMANTIC_WEIGHT * semantic_component
             + _PRICE_MODE_TRUST_WEIGHT * candidate["trust"]
             + _PRICE_MODE_INTENT_WEIGHT * max(0.0, min(1.0, candidate["intent_bonus"]))
+            + trend_bonus
         )
     if embeddings_enabled:
         return (
@@ -2811,6 +2823,7 @@ def _blend_score(
             + TRUST_SCORE_WEIGHT_HYBRID * candidate["trust"]
             + INVERSE_PRICE_WEIGHT_HYBRID * inverse_price
             + candidate["intent_bonus"]
+            + trend_bonus
         )
     # Embeddings disabled: lexical match becomes the primary routing signal so
     # trust/price don't dominate weak text search.
@@ -2821,6 +2834,7 @@ def _blend_score(
         + (remaining_weight * (TRUST_SCORE_WEIGHT_HYBRID / total_remaining)) * candidate["trust"]
         + (remaining_weight * (INVERSE_PRICE_WEIGHT_HYBRID / total_remaining)) * inverse_price
         + candidate["intent_bonus"]
+        + trend_bonus
     )
 
 

@@ -358,6 +358,47 @@ def agent_generation_max_per_day() -> int:
     return flag_int("AZTEA_AGENT_GENERATION_MAX_PER_DAY", default=20)
 
 
+# ---------------------------------------------------------------------------
+# Self-improving hosted skills (learnings memory). Hosted-only; all reads at
+# call time so an operator can flip / tune without restarting uvicorn.
+# Introduced 2026-06 (migration 0077). Default OFF in OSS — the distiller
+# spends platform LLM credits and the injected block changes skill behavior,
+# so it must be opt-in. With the flag off, the sweep never runs, no block is
+# injected, and the owner routes are gated — byte-identical to pre-0077.
+# ---------------------------------------------------------------------------
+
+
+def self_improvement_enabled() -> bool:
+    """Master switch for skill learnings (distillation + injection + routes)."""
+    return flag("AZTEA_SELF_IMPROVEMENT", default=False)
+
+
+def self_improvement_distill_interval_seconds() -> float:
+    """Minimum spacing between distillation passes from the job sweeper.
+
+    The sweeper ticks every ~2s; distillation is an LLM cost, so we throttle
+    hard. Default 24h, mirroring the decision-retention sweep cadence.
+    """
+    return flag_float("AZTEA_SELF_IMPROVEMENT_INTERVAL_S", default=86_400.0)
+
+
+def self_improvement_max_skills_per_run() -> int:
+    """Upper bound on hosted skills distilled in a single sweep pass.
+
+    Bounds per-run LLM cost as the catalog grows; remaining skills are picked
+    up on the next pass (their watermark hasn't advanced). Default 25.
+    """
+    return flag_int("AZTEA_SELF_IMPROVEMENT_MAX_SKILLS_PER_RUN", default=25)
+
+
+def self_improvement_max_pending_proposals() -> int:
+    """Skip distilling a skill that already has this many 'proposed' learnings
+    awaiting an owner decision — avoids piling up un-reviewed proposals.
+    Default 10.
+    """
+    return flag_int("AZTEA_SELF_IMPROVEMENT_MAX_PENDING", default=10)
+
+
 def stripe_enabled() -> bool:
     """True iff Stripe topup/withdraw/Connect routes are wired up.
 

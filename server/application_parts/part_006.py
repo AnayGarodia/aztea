@@ -469,6 +469,33 @@ def _maybe_run_endpoint_health_sweep() -> None:
         )
 
 
+# Self-improving hosted skills (migration 0077): distil learnings at the same
+# throttled cadence as the other daily sweeps. Gated by AZTEA_SELF_IMPROVEMENT;
+# the interval is env-tunable. run_learning_distillation never raises.
+_learning_distillation_last_run_at: float = 0.0
+
+
+def _maybe_run_learning_distillation() -> None:
+    """Side-effect: propose hosted-skill learnings at most once per interval.
+
+    Why: distillation spends platform LLM credits, so it is flag-gated and hard
+    throttled (default 24h). When the flag is off this is a cheap early return.
+    """
+    global _learning_distillation_last_run_at
+    if not _feature_flags.self_improvement_enabled():
+        return
+    interval = _feature_flags.self_improvement_distill_interval_seconds()
+    now = time.monotonic()
+    if now - _learning_distillation_last_run_at < interval:
+        return
+    _learning_distillation_last_run_at = now
+    summary = _skill_improvement.run_learning_distillation()
+    if summary.get("learnings_proposed"):
+        logging_utils.log_event(
+            _LOG, logging.INFO, "learning_distillation.swept", summary,
+        )
+
+
 def _jobs_sweeper_loop(stop_event: threading.Event) -> None:
     _set_sweeper_state(running=True, started_at=_utc_now_iso())
     while not stop_event.wait(_SWEEPER_INTERVAL_SECONDS):
@@ -485,6 +512,7 @@ def _jobs_sweeper_loop(stop_event: threading.Event) -> None:
             _maybe_run_stability_monitor()
             _maybe_run_hosted_execution_log_retention()
             _maybe_run_endpoint_health_sweep()
+            _maybe_run_learning_distillation()
             _run_workspaces_sweeper_pass(summary)
             _run_sandbox_sweeper_pass(summary)
             _set_sweeper_state(
