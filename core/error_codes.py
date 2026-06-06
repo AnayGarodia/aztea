@@ -22,6 +22,11 @@ AGENT_SUNSET = "agent.sunset"  # 410 Gone — agent removed from public catalog
 AGENT_ASYNC_ONLY = "agent.async_only"  # 409 — polling worker; call via async POST /jobs, not sync /call
 AGENT_UPSTREAM_TIMEOUT = "agent.upstream_timeout"  # 504 — pool exhausted/proc slow
 AGENT_INVALID_INPUT = "agent.invalid_input"  # 422 — agent rejected the payload shape
+# Listing-verification refusals (publish path). See core/listing_verification.py.
+LISTING_SAFETY_BLOCK = "listing.safety_block"  # 400 — static scan / security judge block
+LISTING_DUPLICATE = "listing.duplicate"  # 400 — byte-identical copy of another owner's listing
+LISTING_PROBE_UNREACHABLE = "listing.probe_unreachable"  # 400 — endpoint answered no probe
+LISTING_UNRELIABLE_SCHEMA = "listing.unreliable.schema"  # 400 — probe response violates output_schema
 JOB_ALREADY_RATED = "job.already_rated"  # 409 — caller has already rated this job
 DISPUTE_CLAWBACK_INSUFFICIENT_BALANCE = "dispute.clawback_insufficient_balance"
 DISPUTE_SETTLEMENT_INSUFFICIENT_BALANCE = "dispute.settlement_insufficient_balance"

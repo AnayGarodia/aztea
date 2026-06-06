@@ -1046,12 +1046,6 @@ def _probe_register_endpoint_or_400(url: str) -> None:
 # case register latency bounded.
 _LISTING_SAFETY_PROBE_TIMEOUT = 3.0
 
-# Hard cap on the response body we read from a probe. A malicious endpoint
-# could otherwise stream a multi-GB response and OOM the worker. 256 KiB is
-# more than enough to expose any leak we look for; anything bigger is
-# truncated.
-_LISTING_SAFETY_PROBE_MAX_BYTES = 256 * 1024
-
 # UA rotation pool. We pick one per registration so a publisher endpoint
 # that fingerprints "python-requests/x.y" no longer trivially identifies a
 # probe — the UA looks like a real human-driven HTTP client. We keep this
@@ -1067,39 +1061,8 @@ _PROBE_USER_AGENTS: tuple[str, ...] = (
 )
 
 
-def _read_probe_body(resp) -> object:
-    """Read up to ``_LISTING_SAFETY_PROBE_MAX_BYTES`` of body, prefer JSON.
-
-    Returns a dict / list when the body is valid JSON, otherwise a string.
-    Body is hard-capped — anything beyond the cap is silently truncated.
-    """
-    try:
-        # ``resp.iter_content`` is the documented way to bound read size on
-        # a requests.Response. We accumulate up to the cap and stop.
-        chunks: list[bytes] = []
-        total = 0
-        for chunk in resp.iter_content(chunk_size=8192, decode_unicode=False):
-            if not chunk:
-                continue
-            chunks.append(chunk)
-            total += len(chunk)
-            if total >= _LISTING_SAFETY_PROBE_MAX_BYTES:
-                break
-        raw = b"".join(chunks)[:_LISTING_SAFETY_PROBE_MAX_BYTES]
-    except Exception:  # noqa: BLE001
-        # ``iter_content`` raises if streaming isn't supported (e.g. mocked
-        # responses in tests). Fall back to the eager .text attribute.
-        try:
-            raw = resp.text.encode("utf-8", errors="replace")[:_LISTING_SAFETY_PROBE_MAX_BYTES]
-        except Exception:  # noqa: BLE001
-            return ""
-    try:
-        return json.loads(raw)
-    except (ValueError, TypeError):
-        try:
-            return raw.decode("utf-8", errors="replace")
-        except Exception:  # noqa: BLE001
-            return ""
+# The probe body-reader lives once in core.listing_probe_core.read_probe_body —
+# the server injects it into run_probe_suite (DRY: one bounded-read implementation).
 
 
 def _revalidate_endpoint_before_call(
@@ -1181,126 +1144,29 @@ def _run_listing_safety_probe(
     ):
         return
 
-    # Per-registration nonce. uuid4 hex (32 chars) — short enough not to
-    # bloat the probe payload, long enough that an endpoint can't bake a
-    # lookup table for it.
-    probe_nonce = uuid.uuid4().hex
-    chosen_ua = _PROBE_USER_AGENTS[
-        int.from_bytes(probe_nonce[:4].encode(), "big") % len(_PROBE_USER_AGENTS)
-    ]
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": chosen_ua,
-        "Authorization": f"Bearer aztea-probe-{probe_nonce}",
-        "X-Aztea-Probe": probe_nonce,
-    }
-    # Synthetic job_id so an endpoint that requires one (legitimate
-    # implementations often do) doesn't reject the probe as malformed.
-    job_id_for_probe = f"probe-{probe_nonce}"
-
-    findings: list = []
-    payloads: list[dict] = []
-    synthetic = _listing_safety.synthesize_input_from_schema(input_schema)
-    if synthetic:
-        payloads.append(synthetic)
-    payloads.extend(_listing_safety.adversarial_probes(nonce=probe_nonce))
-
-    successful_probes = 0
-    for payload in payloads:
-        envelope = {"job_id": job_id_for_probe, "input_payload": dict(payload)}
-        try:
-            resp = http.post(
-                url,
-                json=envelope,
-                timeout=_LISTING_SAFETY_PROBE_TIMEOUT,
-                allow_redirects=False,
-                headers=headers,
-                stream=True,
-            )
-        except Exception:  # noqa: BLE001 — transport error
-            _LOG.debug(
-                "listing safety probe POST failed (non-fatal)", exc_info=True
-            )
-            continue
-        status = getattr(resp, "status_code", 0)
-        # 5xx counts as a transport failure for "did the endpoint respond
-        # sanely?" purposes. 4xx is still a real response that we can
-        # inspect — many endpoints return a structured 4xx for the
-        # adversarial probes by design.
-        if 500 <= status < 600:
-            _LOG.debug("listing safety probe got 5xx (%s) — counting as unreachable", status)
-            continue
-        successful_probes += 1
-        body = _read_probe_body(resp)
-        # ``resp.headers`` may be a CaseInsensitiveDict or a plain dict.
-        # Normalise to a plain str→str dict for the scanner.
-        try:
-            response_headers = {str(k): str(v) for k, v in dict(resp.headers).items()}
-        except Exception:  # noqa: BLE001
-            response_headers = None
-        is_synthetic = payload is (payloads[0] if synthetic else object())
-        findings.extend(
-            _listing_safety.evaluate_probe_response(
-                body,
-                output_schema=output_schema if is_synthetic else None,
-                response_headers=response_headers,
-            )
-        )
-
-    # Plan B Phase 3a (2026-05-27): output-example replay. Sellers declare
-    # output_examples (input -> output pairs) at registration to communicate
-    # the contract. Before this pass, Aztea persisted those examples but
-    # never verified them — a seller could publish a CodeReview agent
-    # whose endpoint returns weather forecasts and still get approved.
-    # Replay each declared example: POST the input, compare the actual
-    # response shape to the declared output. WARN on mismatch (publish
-    # still proceeds; the reviewer sees the gap explicitly).
-    if isinstance(output_examples, list) and output_examples:
-        # Cap to first 3 examples — keeps probe latency bounded even when
-        # the seller declared many examples; the first three are the most
-        # buyer-facing on the agent detail page anyway.
-        for example in output_examples[:3]:
-            if not isinstance(example, dict):
-                continue
-            example_input = example.get("input")
-            declared_output = example.get("output")
-            if not isinstance(example_input, dict) or not isinstance(declared_output, dict):
-                continue
-            envelope = {"job_id": f"probe-example-{probe_nonce}", "input_payload": dict(example_input)}
-            try:
-                resp = http.post(
-                    url,
-                    json=envelope,
-                    timeout=_LISTING_SAFETY_PROBE_TIMEOUT,
-                    allow_redirects=False,
-                    headers=headers,
-                    stream=True,
-                )
-            except Exception:  # noqa: BLE001
-                _LOG.debug("output-example replay POST failed (non-fatal)", exc_info=True)
-                continue
-            status = getattr(resp, "status_code", 0)
-            if 500 <= status < 600:
-                continue
-            # 2026-05-27 audit fix: the probe is intentionally unsigned (no
-            # endpoint_signing_secret exists yet — register_agent hasn't
-            # run). A seller using the official wrapper template will
-            # correctly reject this with 401/403. That's NOT a contract
-            # failure — it's evidence the seller is verifying signatures
-            # properly. Skip the shape check in that case.
-            if status in (401, 403):
-                continue
-            actual_body = _read_probe_body(resp)
-            findings.extend(
-                _listing_safety.evaluate_output_example_replay(
-                    example_input=example_input,
-                    declared_output=declared_output,
-                    actual_output=actual_body,
-                )
-            )
+    # The probe transport lives in core.listing_probe_core (extracted 2026-06-03 so
+    # core/ doesn't import server/). This wrapper owns only the two registration
+    # policies: raise on a BLOCK finding, and reject an endpoint that answered no
+    # probe at all. http.post + _read_probe_body are injected.
+    schema_validator = (
+        _listing_reliability.validate_response_against_schema
+        if _feature_flags.RELIABILITY_SCHEMA_BLOCK
+        else None
+    )
+    result = _listing_probe_core.run_probe_suite(
+        url,
+        input_schema=input_schema,
+        output_schema=output_schema,
+        output_examples=output_examples,
+        http_post=http.post,
+        read_body=_listing_probe_core.read_probe_body,
+        timeout=_LISTING_SAFETY_PROBE_TIMEOUT,
+        user_agents=_PROBE_USER_AGENTS,
+        schema_validator=schema_validator,
+    )
 
     block = next(
-        (f for f in findings if f.level == _listing_safety.LEVEL_BLOCK),
+        (f for f in result.findings if f.level == _listing_safety.LEVEL_BLOCK),
         None,
     )
     if block is not None:
@@ -1318,7 +1184,7 @@ def _run_listing_safety_probe(
     # with ``AZTEA_PROBE_REQUIRE_SUCCESS=0`` if they need to publish
     # against a known-flaky endpoint for staging purposes.
     require_success = os.environ.get("AZTEA_PROBE_REQUIRE_SUCCESS", "1").strip() != "0"
-    if require_success and successful_probes == 0 and payloads:
+    if require_success and result.successful_probes == 0 and result.payloads_attempted:
         raise HTTPException(
             status_code=400,
             detail=error_codes.make_error(
@@ -1328,9 +1194,23 @@ def _run_listing_safety_probe(
                     "(network error, timeout, or 5xx). Publish only succeeds "
                     "against an endpoint that returns at least one non-5xx response."
                 ),
-                {"probes_attempted": len(payloads)},
+                {"probes_attempted": result.payloads_attempted},
             ),
         )
+
+
+def _endpoint_is_probeable(safe_endpoint_url: str) -> bool:
+    """True when the endpoint was reachable + probed this request.
+
+    Used to decide whether the async advisory pass may issue repeat-probes:
+    a polling-worker sentinel has no inbound URL, and when the inline probe was
+    skipped we have no evidence the URL is dialable. Shared by the
+    /registry/register and /onboarding/ingest routes (DRY).
+    """
+    return (
+        not _url_security.is_polling_worker_endpoint(safe_endpoint_url)
+        and not os.environ.get("AZTEA_SKIP_REGISTER_ENDPOINT_PROBE")
+    )
 
 
 def _create_job_event_hook(

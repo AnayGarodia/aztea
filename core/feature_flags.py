@@ -165,6 +165,20 @@ def search_llm_rerank_enabled() -> bool:
 # Off by default: settle immediately and allow clawback via disputes.
 REQUIRE_VERIFICATION: bool = flag("AZTEA_REQUIRE_VERIFICATION", default=False)
 
+# Block a publish when an external endpoint's probe response violates its
+# declared output_schema (listing.unreliable.schema). Default off: the
+# capability ships behind a flag so it can be enabled in prod after an audit of
+# existing endpoints, without changing the behaviour of the probe test suite.
+RELIABILITY_SCHEMA_BLOCK: bool = flag("AZTEA_RELIABILITY_SCHEMA_BLOCK", default=False)
+
+
+def listing_verify_async_enabled() -> bool:
+    """Run the advisory verification pass (cosine dedup, thin-wrapper, council)
+    after a publish. Default on; flip off to skip the background work entirely
+    (e.g. a deploy without an LLM where the council adds latency for no signal).
+    """
+    return flag("AZTEA_LISTING_VERIFY_ASYNC", default=True)
+
 
 # ---------------------------------------------------------------------------
 # Auto-invoke (aztea_do) — read at call time so thresholds can be tuned

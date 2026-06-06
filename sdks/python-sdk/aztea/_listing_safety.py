@@ -1,11 +1,20 @@
 """
 listing_safety.py — Pre-flight checks for new agent listings.
 
-VENDORED COPY of core/listing_safety.py — kept here so external
+VENDORED SUBSET of core/listing_safety.py — kept here so external
 pip-installed users of the `aztea` SDK can run `aztea publish` without
-needing the full server checkout. Keep in sync with the canonical copy
-at core/listing_safety.py; the test suite verifies they match byte-for-byte
-(see test_oss_audit_units.py).
+needing the full server checkout. This is intentionally a SUBSET, not a
+byte-for-byte copy: the CLI only runs the pure, dependency-free string
+scanners (SKILL.md / Python-handler / agent.md content scans + the Jaccard
+clone pre-warning). The heavier server-only gates — embedding cosine
+dedup, reliability probing, and the LLM council — cannot run in a
+pip-installed SDK (no embeddings model, no DB, no provider keys) and live
+only in core/. The server re-runs the full gate on every publish, so the
+CLI copy is a fast pre-flight, not the source of truth.
+
+Parity of the shared string-scan surface (the functions that DO exist in
+both) is enforced by tests/integration/test_listing_safety_parity.py. Keep
+those functions in sync with core/listing_safety.py when you touch either.
 
 # OWNS: deterministic content scans (SKILL.md, Python handler, agent.md) and
 #   the synthetic + adversarial endpoint probe used at listing time.

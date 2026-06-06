@@ -70,7 +70,7 @@ elif _ENVIRONMENT == "production":
     )
 
 import groq as _groq
-from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
+from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -147,7 +147,11 @@ from core import feature_flags as _feature_flags
 from core import job_events as _job_events
 from core.jobs import disputable
 from core import hosted_skills as _hosted_skills
+from core import listing_dedup as _listing_dedup
+from core import listing_probe_core as _listing_probe_core
+from core import listing_reliability as _listing_reliability
 from core import listing_safety as _listing_safety
+from core import listing_verification as _listing_verification
 from core import models as core_models
 from core import observability as _observability
 from core import outbound_session as _outbound_session

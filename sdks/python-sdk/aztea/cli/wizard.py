@@ -339,6 +339,22 @@ _REMEDIATION: dict[str, str] = {
         "Your endpoint URL points at an Aztea-owned host. Third-party agents "
         "must run on a host you control."
     ),
+    "listing.duplicate": (
+        "This listing's content is byte-identical to an agent already on Aztea. "
+        "We don't host exact copies. If you own the original, update it instead "
+        "of re-publishing; otherwise add your own distinct logic before listing."
+    ),
+    "listing.unreliable.schema": (
+        "Your endpoint's response didn't match the output_schema you declared. "
+        "Buyers parse results against that schema, so a mismatch breaks every "
+        "integration. Fix the response shape or correct the declared schema, "
+        "then re-publish."
+    ),
+    "listing.probe_unreachable": (
+        "Your endpoint didn't answer any of our registration probes (timeout, "
+        "network error, or 5xx). Confirm it's deployed and reachable over HTTPS "
+        "and returns a non-5xx response to a POST, then re-publish."
+    ),
 }
 
 

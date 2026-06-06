@@ -205,6 +205,25 @@ def _create_agent_embeddings_table(conn: _db.DbConnection) -> None:
         """)
 
 
+def _create_listing_fingerprints_table(conn: _db.DbConnection) -> None:
+    """Exact-content fingerprints for the duplicate hard-block (migration 0077).
+
+    Mirrored here in the SQLite init path the same way agent_embeddings is, so
+    init_db() builds the table even on the CREATE-TABLE-IF-NOT-EXISTS route.
+    """
+    conn.execute("""
+            CREATE TABLE IF NOT EXISTS listing_fingerprints (
+                agent_id    TEXT PRIMARY KEY REFERENCES agents(agent_id) ON DELETE CASCADE,
+                fingerprint TEXT NOT NULL,
+                created_at  TEXT NOT NULL
+            )
+        """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_listing_fingerprints_fp "
+        "ON listing_fingerprints(fingerprint)"
+    )
+
+
 def _ensure_agents_indexes(conn: _db.DbConnection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_name ON agents(name)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_created ON agents(created_at)")
@@ -822,6 +841,7 @@ def init_db() -> None:
         elif _needs_agents_migration(conn):
             _migrate_agents_table(conn)
         _create_agent_embeddings_table(conn)
+        _create_listing_fingerprints_table(conn)
         _ensure_agents_indexes(conn)
         _ensure_agent_identity_columns(conn)
         _ensure_kind_column(conn)
