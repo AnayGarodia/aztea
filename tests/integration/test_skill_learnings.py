@@ -370,7 +370,7 @@ def test_distiller_scrubs_pii_in_persisted_bullet(client, monkeypatch):
         ),
     )
     si.run_learning_distillation()
-    joined = " ".join(l["text"] for l in sl.list_learnings(skill_id, "proposed"))
+    joined = " ".join(lr["text"] for lr in sl.list_learnings(skill_id, "proposed"))
     assert joined  # a bullet was proposed
     assert "user@evil.com" not in joined
     assert "sk-LEAKEDKEY1234567890" not in joined
