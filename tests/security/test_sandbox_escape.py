@@ -456,3 +456,46 @@ def test_static_filter_catches_subprocess_import():
 def test_static_filter_catches_os_system_literal():
     result = _run("import os\nos.system('id')")
     assert (result.get("error") or {}).get("code") == "python_executor.blocked_unsafe_code"
+
+
+# ---------------------------------------------------------------------------
+# 10. B-S2 regression (2026-05-30 review): the removed warm-pool path ran
+#     user code in-process WITHOUT the audit-hook prelude. The flag that
+#     selected it must never again pick an unsandboxed path — with the env
+#     set, escapes must be blocked exactly like the subprocess path.
+# ---------------------------------------------------------------------------
+
+
+def test_warm_pool_flag_cannot_select_unsandboxed_path(monkeypatch):
+    """AZTEA_PYTHON_WARM_POOL=1 must not weaken the sandbox (B-S2)."""
+    monkeypatch.setenv("AZTEA_PYTHON_WARM_POOL", "1")
+    _assert_blocked(
+        _run("print(open('/etc/passwd').read())"),
+        hint="warm-pool flag set; /etc/passwd read must still be sandboxed",
+    )
+
+
+def test_warm_pool_flag_blocks_runtime_obfuscation(monkeypatch):
+    """The exact bypass class from the review: runtime-constructed open().
+
+    The old pool path had no audit hook, so getattr-style obfuscation that
+    defeats the regex pre-filter executed unsandboxed. The audit hook in the
+    subprocess path must catch it regardless of the flag.
+    """
+    monkeypatch.setenv("AZTEA_PYTHON_WARM_POOL", "1")
+    code = (
+        "f = getattr(__import__('io'), 'open')\n"
+        "print(f('/etc/passwd').read())\n"
+    )
+    _assert_blocked(_run(code), hint="obfuscated open() under warm-pool flag")
+
+
+def test_warm_pool_module_has_no_pool_executor():
+    """Structural guard: no in-process exec path may exist in the module."""
+    import agents.python_executor as px
+
+    for name in ("_exec_in_pool", "_run_via_warm_pool", "_get_warm_pool"):
+        assert not hasattr(px, name), (
+            f"{name} re-appeared in python_executor — in-process execution "
+            "of user code was removed for B-S2 and must not return"
+        )

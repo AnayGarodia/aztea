@@ -172,13 +172,32 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
             "output_schema": {
                 "type": "object",
                 "properties": {
-                    "results": {"type": "array", "items": {"type": "object"}},
+                    "results": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": (
+                            "Per-CVE rows. Each carries exploit_available "
+                            "backed by the CISA KEV catalog (exploit_source="
+                            "'cisa_kev') or a description-keyword heuristic "
+                            "('keyword_heuristic'), a kev {listed, "
+                            "date_added} block, and affected_range as a "
+                            "PEP 440 specifier (e.g. '>=2.0,<4.17.21')."
+                        ),
+                    },
                     "billing_units_actual": {
                         "type": "integer",
-                        "description": "Number of successful CVE lookups (for per-CVE billing in direct ID mode)",
+                        "description": "Number of successful CVE lookups (for per-CVE billing in direct ID mode); duplicate ids are deduped and billed once",
                     },
                     "total_vulnerable": {"type": "integer"},
                     "summary": {"type": "string"},
+                    "exploit_intel_degraded": {
+                        "type": "boolean",
+                        "description": "True when the CISA KEV feed was unreachable this call — exploit_available then reflects only the keyword heuristic",
+                    },
+                    "nvd_key_configured": {
+                        "type": "boolean",
+                        "description": "Whether the server has an NVD API key (120 req/s tier) vs the public 5 req/s tier",
+                    },
                 },
             },
             "variable_pricing": {

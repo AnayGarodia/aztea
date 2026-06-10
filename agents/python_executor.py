@@ -13,14 +13,15 @@ Output: {
   "exit_code": int,
   "timed_out": bool,
   "execution_time_ms": int,
-  "explanation": str,       # if explain=true
-  "variables_captured": {}  # top-level variable values if execution succeeded
+  "explanation": str,        # if explain=true
+  "explanation_status": str, # ok | disabled | skipped_timeout | skipped_no_output | provider_failed
+  "code_submitted": str,     # echoed (truncated) only when timed_out, for debugging hangs
+  "variables_captured": {}   # top-level variable values if execution succeeded
 }
 """
 
 import json
 import logging
-import multiprocessing as mp
 import os
 import re
 import ast
@@ -29,13 +30,11 @@ import sys
 import tempfile
 import textwrap
 import time
-from multiprocessing.pool import Pool
 from typing import Any
-from agents._contracts import agent_error as _err
+from agents._contracts import agent_error as _err, truncate_with_marker
 
 _LOG = logging.getLogger(__name__)
 
-from core import feature_flags as _feature_flags
 from core.executor_sandbox import build_subprocess_env
 from core.llm import CompletionRequest, Message, run_with_fallback
 
@@ -83,13 +82,34 @@ _MAX_PROCESSES = int(os.environ.get("AZTEA_PYTHON_MAX_PROCESSES", "64") or "64")
 _MAX_FILE_SIZE_BYTES = (
     int(os.environ.get("AZTEA_PYTHON_MAX_FILE_SIZE_MB", "32") or "32") * 1024 * 1024
 )
-_MAX_CAPTURE_VALUE_CHARS = 1000
+# Echo cap for `code_submitted` on timeouts — enough to see what hung
+# without re-shipping the full 16k submission back over the wire.
+_CODE_ECHO_CHARS = 2000
 # Static analyzer's allocation cap — intentionally LOWER than _MAX_MEMORY_MB
 # so obvious bombs are caught before the subprocess is spawned. RLIMIT_AS at
 # _MAX_MEMORY_MB is the hard backstop for anything that slips through.
-# 32 MB is the right floor: any literal sequence > 32 MB in submitted code
-# has no plausible legitimate use inside the sandbox.
-_STATIC_ALLOCATION_LIMIT_BYTES = 32 * 1024 * 1024
+# 32 MB is the right default floor: any literal sequence > 32 MB in submitted
+# code has no plausible legitimate use inside the sandbox. Operator-tunable
+# (env, NOT payload — callers must never be able to weaken the guard).
+# Floor 8 MB so the guard can't be set so low it rejects ordinary buffers;
+# ceiling 1 GB so it can't exceed any plausible worker's RLIMIT_AS backstop.
+_STATIC_ALLOC_LIMIT_MIN_MB = 8
+_STATIC_ALLOC_LIMIT_MAX_MB = 1024
+_STATIC_ALLOC_LIMIT_DEFAULT_MB = 32
+_STATIC_ALLOCATION_LIMIT_BYTES = (
+    max(
+        _STATIC_ALLOC_LIMIT_MIN_MB,
+        min(
+            int(
+                os.environ.get("AZTEA_PYTHON_STATIC_ALLOC_LIMIT_MB", str(_STATIC_ALLOC_LIMIT_DEFAULT_MB))
+                or str(_STATIC_ALLOC_LIMIT_DEFAULT_MB)
+            ),
+            _STATIC_ALLOC_LIMIT_MAX_MB,
+        ),
+    )
+    * 1024
+    * 1024
+)
 
 _EXPLAIN_SYSTEM = """\
 You are a Python expert explaining a code snippet and its execution result to a developer.
@@ -375,104 +395,6 @@ _BLOCKED_PATTERNS = [
     r"\bos\.forkpty\b",
 ]
 
-_WARM_POOL_SIZE = max(
-    1, min(int(os.environ.get("AZTEA_PYTHON_WARM_POOL_SIZE", "2") or "2"), 8)
-)
-_WARM_POOL: Pool | None = None
-
-
-
-import types as _types
-
-_RUNTIME_INTERNAL_TYPES: tuple[type, ...] = (
-    _types.ModuleType,
-    _types.FunctionType,
-    _types.BuiltinFunctionType,
-    _types.BuiltinMethodType,
-    _types.MethodType,
-    type,
-)
-
-
-def _capture_one(value: Any) -> Any:
-    """Pure: shape one value for inclusion in ``variables_captured``.
-
-    Why: serialising raw 40MB buffers via ``repr`` spikes memory; we cap
-    long strings/bytes up front and json-roundtrip everything else so the
-    response is always JSON-serialisable.
-    """
-    if isinstance(value, str):
-        return (
-            value if len(value) <= _MAX_CAPTURE_VALUE_CHARS
-            else f"<str length={len(value)} omitted>"
-        )
-    if isinstance(value, (bytes, bytearray)):
-        length = len(value)
-        if length > _MAX_CAPTURE_VALUE_CHARS:
-            return f"<{type(value).__name__} length={length} omitted>"
-        return repr(value)
-    try:
-        encoded = json.dumps(value)
-    except (TypeError, ValueError):
-        return repr(value)[:_MAX_CAPTURE_VALUE_CHARS]
-    if len(encoded) > _MAX_CAPTURE_VALUE_CHARS:
-        return f"<{type(value).__name__} json_length={len(encoded)} omitted>"
-    return value
-
-
-def _capture_variables(namespace: dict[str, Any]) -> dict[str, Any]:
-    """Pure: project the post-exec namespace into JSON-serialisable response data.
-
-    Why: drops module references, built-ins, and oversized values so the
-    response never leaks runtime internals or balloons the wire payload.
-    """
-    captured: dict[str, Any] = {}
-    for key, value in list(namespace.items()):
-        if key.startswith("_"):
-            continue
-        if isinstance(value, _RUNTIME_INTERNAL_TYPES):
-            continue
-        captured[key] = _capture_one(value)
-    return captured
-
-
-def _exec_in_pool(code: str, stdin_data: str) -> dict[str, Any]:
-    import contextlib
-    import io
-
-    namespace: dict[str, Any] = {"__name__": "__main__"}
-    stdout_buffer = io.StringIO()
-    stderr_buffer = io.StringIO()
-    fake_stdin = io.StringIO(stdin_data)
-    start = time.time()
-    old_stdin = sys.stdin
-    exit_code = 0
-    timed_out = False
-    try:
-        sys.stdin = fake_stdin
-        with (
-            contextlib.redirect_stdout(stdout_buffer),
-            contextlib.redirect_stderr(stderr_buffer),
-        ):
-            exec(compile(code, "<aztea-python-executor>", "exec"), namespace, namespace)
-    except SystemExit as exc:
-        exit_code = int(exc.code) if isinstance(exc.code, int) else 1
-    except Exception as exc:
-        exit_code = 1
-        print(f"{type(exc).__name__}: {exc}", file=stderr_buffer)
-    finally:
-        sys.stdin = old_stdin
-    elapsed_ms = int((time.time() - start) * 1000)
-    return {
-        "stdout": stdout_buffer.getvalue(),
-        "stderr": stderr_buffer.getvalue(),
-        "exit_code": exit_code,
-        "timed_out": timed_out,
-        "execution_time_ms": elapsed_ms,
-        "variables_captured": _capture_variables(namespace) if exit_code == 0 else {},
-    }
-
-
 def _is_safe(code: str) -> bool:
     for pattern in _BLOCKED_PATTERNS:
         if re.search(pattern, code):
@@ -602,32 +524,6 @@ def _has_obvious_memory_bomb(code: str) -> bool:
             if count * multiplier > _STATIC_ALLOCATION_LIMIT_BYTES:
                 return True
     return False
-
-
-def _get_warm_pool() -> Pool:
-    global _WARM_POOL
-    if _WARM_POOL is None:
-        method = "fork" if "fork" in mp.get_all_start_methods() else "spawn"
-        ctx = mp.get_context(method)
-        _WARM_POOL = ctx.Pool(processes=_WARM_POOL_SIZE, initializer=_init_pool_worker)
-    return _WARM_POOL
-
-
-def _reset_warm_pool() -> None:
-    global _WARM_POOL
-    if _WARM_POOL is not None:
-        _WARM_POOL.terminate()
-        _WARM_POOL.join()
-        _WARM_POOL = None
-
-
-def _init_pool_worker() -> None:
-    # Worker processes execute untrusted user code via ``exec``. Strip the
-    # parent environment down to the small sandbox baseline before any job runs.
-    sandbox_env = build_subprocess_env()
-    os.environ.clear()
-    os.environ.update(sandbox_env)
-    _apply_memory_limit()
 
 
 def _try_setrlimit(resource: Any, kind: int, soft: int, hard: int) -> None:
@@ -796,39 +692,31 @@ def _validate_run_inputs(payload: dict) -> dict | tuple[str, str, int]:
     return code, stdin_data, timeout
 
 
-def _run_via_warm_pool(code: str, stdin_data: str, timeout: int) -> dict[str, Any]:
-    """Side-effect: run user code via the persistent multiprocessing pool."""
-    try:
-        pool = _get_warm_pool()
-        async_result = pool.apply_async(_exec_in_pool, (code, stdin_data))
-        return async_result.get(timeout=timeout)
-    except mp.TimeoutError:
-        _reset_warm_pool()
-        return {
-            "stdout": "",
-            "stderr": f"Execution timed out after {timeout} seconds.",
-            "exit_code": _TIMEOUT_EXIT_CODE,
-            "timed_out": True,
-            "execution_time_ms": timeout * 1000,
-            "variables_captured": {},
-        }
-    except Exception as exc:
-        _reset_warm_pool()
-        return {
-            "stdout": "",
-            "stderr": f"Execution error: {exc}",
-            "exit_code": 1,
-            "timed_out": False,
-            "execution_time_ms": 0,
-            "variables_captured": {},
-        }
+# The warm-pool execution path was removed 2026-06-10: it ran user code
+# in-process via exec() WITHOUT the audit-hook prelude (2026-05-30 review
+# B-S2, confirmed Critical sandbox escape). Every execution now goes through
+# the single audited subprocess path. The flag below only drives a one-time
+# operator warning so a stale env setting is not silently meaningless.
+_WARM_POOL_FLAG_ENV = "AZTEA_PYTHON_WARM_POOL"
+_warm_pool_warning_emitted = False
 
 
-def _execute_user_code(code: str, stdin_data: str, timeout: int) -> dict[str, Any]:
-    """Side-effect: dispatch execution via warm pool when enabled, fresh subprocess otherwise."""
-    if _feature_flags.PYTHON_WARM_POOL:
-        return _run_via_warm_pool(code, stdin_data, timeout)
-    return _run_in_subprocess(code, stdin_data, timeout)
+def _warn_if_warm_pool_requested() -> None:
+    """Side-effect: log once when the removed warm-pool flag is still set.
+
+    Why: operators who opted into the old flag should learn it is now a
+    no-op (the path it selected was an unsandboxed escape) rather than
+    believing they still run a faster pool.
+    """
+    global _warm_pool_warning_emitted
+    if _warm_pool_warning_emitted or not os.environ.get(_WARM_POOL_FLAG_ENV):
+        return
+    _warm_pool_warning_emitted = True
+    _LOG.warning(
+        "%s is set but the warm pool was removed (unsandboxed execution path, "
+        "2026-05-30 review B-S2); all code runs in the audited subprocess sandbox.",
+        _WARM_POOL_FLAG_ENV,
+    )
 
 
 def _build_explanation_prompt(code: str, stdout: str, stderr: str, exit_code: int) -> tuple[str, bool]:
@@ -849,8 +737,13 @@ def _build_explanation_prompt(code: str, stdout: str, stderr: str, exit_code: in
 
 def _generate_explanation(
     code: str, stdout: str, stderr: str, exit_code: int,
-) -> tuple[str, bool]:
-    """Side-effect: call the explainer LLM. Returns ``(text, was_sanitized)``."""
+) -> tuple[str, bool, str]:
+    """Side-effect: call the explainer LLM. Returns ``(text, was_sanitized, status)``.
+
+    Why the status: an empty explanation used to conflate "caller disabled
+    it" with "every LLM provider failed" — callers had no signal that the
+    explanation was attempted and lost.
+    """
     prompt, sanitized = _build_explanation_prompt(code, stdout, stderr, exit_code)
     req = CompletionRequest(
         model="",
@@ -863,10 +756,10 @@ def _generate_explanation(
     )
     try:
         raw = run_with_fallback(req)
-        return raw.text.strip(), sanitized
+        return raw.text.strip(), sanitized, "ok"
     except Exception:
         _LOG.warning("LLM explanation failed for python execution", exc_info=True)
-        return "", sanitized
+        return "", sanitized, "provider_failed"
 
 
 def run(payload: dict) -> dict:
@@ -881,13 +774,20 @@ def run(payload: dict) -> dict:
         return parsed
     code, stdin_data, timeout = parsed
     explain = bool(payload.get("explain", True))
-    raw = _execute_user_code(code, stdin_data, timeout)
+    _warn_if_warm_pool_requested()
+    raw = _run_in_subprocess(code, stdin_data, timeout)
     stdout = raw["stdout"][:_MAX_OUTPUT_CHARS]
     stderr = raw["stderr"][:_MAX_STDERR_RESPONSE_CHARS]
     explanation = ""
     explanation_sanitized = False
-    if explain and not raw["timed_out"] and (stdout or stderr or raw["exit_code"] != 0):
-        explanation, explanation_sanitized = _generate_explanation(
+    if not explain:
+        explanation_status = "disabled"
+    elif raw["timed_out"]:
+        explanation_status = "skipped_timeout"
+    elif not (stdout or stderr or raw["exit_code"] != 0):
+        explanation_status = "skipped_no_output"
+    else:
+        explanation, explanation_sanitized, explanation_status = _generate_explanation(
             code, stdout, stderr, raw["exit_code"],
         )
     # `llm_used` reflects whether ANY LLM was invoked in producing this
@@ -895,15 +795,21 @@ def run(payload: dict) -> dict:
     # the explainer is optional. Previously llm_used was always false at
     # this level but explanation_llm_used was true, contradicting each other.
     explanation_used_llm = bool(explanation)
-    return {
+    result = {
         "stdout": stdout,
         "stderr": stderr,
         "exit_code": raw["exit_code"],
         "timed_out": raw["timed_out"],
         "execution_time_ms": raw["execution_time_ms"],
         "explanation": explanation,
+        "explanation_status": explanation_status,
         "explanation_sanitized": explanation_sanitized,
         "explanation_llm_used": explanation_used_llm,
         "variables_captured": raw["variables_captured"],
         "llm_used": explanation_used_llm,
     }
+    if raw["timed_out"]:
+        # Without the echo, a timed-out submission is unrecoverable for the
+        # caller — stderr says only "timed out" and the code itself is gone.
+        result["code_submitted"] = truncate_with_marker(code, _CODE_ECHO_CHARS)
+    return result

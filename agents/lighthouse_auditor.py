@@ -7,6 +7,7 @@ Input:
     "categories": ["performance", "accessibility",
                    "best-practices", "seo", "pwa"],  # optional, default first 4
     "strategy": "mobile" | "desktop",            # optional, default "mobile"
+    "throttling": "simulate"|"provided"|"devtools",  # optional; default derives from strategy
     "max_wait_seconds": 90                        # optional, default 90, hard-cap 180
   }
 
@@ -181,8 +182,15 @@ def _resolve_chrome_path() -> str | None:
     return None
 
 
+# --throttling-method values lighthouse accepts. "" (unset) derives the
+# method from the strategy, preserving the agent's historical behavior:
+# mobile simulates 4G, desktop uses the connection as-is ("provided").
+_VALID_THROTTLING = ("", "simulate", "provided", "devtools")
+
+
 def _build_cmd(
-    url: str, categories: list[str], strategy: str, output_path: str
+    url: str, categories: list[str], strategy: str, output_path: str,
+    throttling: str,
 ) -> list[str]:
     # 2026-05-18: extra chrome flags reduce hang-on-cold-start on the prod
     # host. ``--ignore-certificate-errors`` lets us audit sites with stale or
@@ -200,6 +208,8 @@ def _build_cmd(
         "--disable-default-apps "
         "--disable-background-networking"
     )
+    if not throttling:
+        throttling = "simulate" if strategy == "mobile" else "provided"
     return [
         _resolve_lighthouse_bin() or "lighthouse",
         url,
@@ -208,11 +218,37 @@ def _build_cmd(
         f"--output-path={output_path}",
         f"--only-categories={','.join(categories)}",
         f"--form-factor={strategy}",
-        "--throttling-method=simulate" if strategy == "mobile" else "--throttling-method=provided",
+        f"--throttling-method={throttling}",
         f"--chrome-flags={chrome_flags}",
         # JSON only; we don't need the HTML report.
         f"--max-wait-for-load={_LIGHTHOUSE_MAX_WAIT_MS}",
     ]
+
+
+def _coerce_savings(value: Any) -> int:
+    """Pure: best-effort numeric → non-negative int; garbage becomes 0."""
+    try:
+        return max(0, int(round(float(value))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _opportunity_savings_ms(audit: dict, details: dict) -> int:
+    """Pure: estimated ms saved by one opportunity audit.
+
+    Newer Lighthouse (12+) drops numericValue on some opportunities and
+    ships per-metric estimates under ``metricSavings`` instead — take the
+    largest of those when the classic keys are absent.
+    """
+    classic = _coerce_savings(
+        audit.get("numericValue") or details.get("overallSavingsMs")
+    )
+    if classic > 0:
+        return classic
+    metric_savings = audit.get("metricSavings")
+    if isinstance(metric_savings, dict) and metric_savings:
+        return max(_coerce_savings(v) for v in metric_savings.values())
+    return 0
 
 
 def _extract_top_opportunities(audits: dict) -> list[dict]:
@@ -220,25 +256,24 @@ def _extract_top_opportunities(audits: dict) -> list[dict]:
     for audit_id, audit in audits.items():
         if not isinstance(audit, dict):
             continue
-        details = audit.get("details") or {}
-        if details.get("type") != "opportunity":
+        details = audit.get("details")
+        if not isinstance(details, dict) or details.get("type") != "opportunity":
             continue
-        savings = audit.get("numericValue") or details.get("overallSavingsMs") or 0
-        try:
-            savings_ms = int(round(float(savings)))
-        except (TypeError, ValueError):
-            savings_ms = 0
-        if savings_ms <= 0:
+        savings_ms = _opportunity_savings_ms(audit, details)
+        savings_bytes = _coerce_savings(details.get("overallSavingsBytes"))
+        if savings_ms <= 0 and savings_bytes <= 0:
             continue
         opps.append(
             {
                 "id": audit_id,
                 "title": str(audit.get("title") or audit_id),
                 "savings_ms": savings_ms,
+                "savings_bytes": savings_bytes,
                 "description": str(audit.get("description") or "")[:400],
             }
         )
-    opps.sort(key=lambda item: item["savings_ms"], reverse=True)
+    # ms first; bytes break ties for byte-only wins (e.g. image formats).
+    opps.sort(key=lambda item: (item["savings_ms"], item["savings_bytes"]), reverse=True)
     return opps[:_MAX_OPPORTUNITIES]
 
 
@@ -312,11 +347,18 @@ def _normalize_run_inputs(
             "lighthouse_auditor.invalid_strategy",
             "strategy must be 'mobile' or 'desktop'",
         )
+    throttling = str(payload.get("throttling") or "").strip().lower()
+    if throttling not in _VALID_THROTTLING:
+        return _err(
+            "lighthouse_auditor.invalid_throttling",
+            "throttling must be one of: simulate, provided, devtools "
+            "(omit to derive from strategy)",
+        )
     try:
         timeout_s = int(payload.get("max_wait_seconds") or _DEFAULT_TIMEOUT)
     except (TypeError, ValueError):
         timeout_s = _DEFAULT_TIMEOUT
-    return url, categories, strategy, max(_MIN_TIMEOUT, min(timeout_s, _MAX_TIMEOUT))
+    return url, categories, strategy, throttling, max(_MIN_TIMEOUT, min(timeout_s, _MAX_TIMEOUT))
 
 
 def _report_has_content(out_path: str) -> bool:
@@ -334,10 +376,11 @@ def _report_has_content(out_path: str) -> bool:
 
 
 def _execute_lighthouse(
-    url: str, categories: list[str], strategy: str, timeout_s: int, out_path: str,
+    url: str, categories: list[str], strategy: str, throttling: str,
+    timeout_s: int, out_path: str,
 ) -> dict | None:
     """Side-effect: subprocess invoke; returns error envelope on failure or ``None`` on success."""
-    cmd = _build_cmd(url, categories, strategy, out_path)
+    cmd = _build_cmd(url, categories, strategy, out_path, throttling)
     env = os.environ.copy()
     chrome_path = _resolve_chrome_path()
     if chrome_path:
@@ -389,7 +432,7 @@ def _execute_lighthouse(
 
 
 def _run_lighthouse_cli(
-    url: str, categories: list[str], strategy: str, timeout_s: int,
+    url: str, categories: list[str], strategy: str, throttling: str, timeout_s: int,
 ) -> dict[str, Any]:
     """Side-effect: orchestrate one Lighthouse run; returns the report dict or error envelope."""
     if not _resolve_lighthouse_bin():
@@ -402,7 +445,7 @@ def _run_lighthouse_cli(
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
         out_path = tmp.name
     try:
-        err = _execute_lighthouse(url, categories, strategy, timeout_s, out_path)
+        err = _execute_lighthouse(url, categories, strategy, throttling, timeout_s, out_path)
         if err is not None:
             return err
         try:
@@ -471,8 +514,8 @@ def run(payload: dict) -> dict:
     parsed = _normalize_run_inputs(payload)
     if isinstance(parsed, dict):
         return parsed
-    url, categories, strategy, timeout_s = parsed
-    report = _run_lighthouse_cli(url, categories, strategy, timeout_s)
+    url, categories, strategy, throttling, timeout_s = parsed
+    report = _run_lighthouse_cli(url, categories, strategy, throttling, timeout_s)
     if "error" in report:
         return report  # error envelope
     # 2026-05-18: lighthouse can return a JSON report whose top-level

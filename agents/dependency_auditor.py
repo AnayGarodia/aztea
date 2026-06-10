@@ -40,7 +40,6 @@ INVARIANTS:
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -49,6 +48,11 @@ from urllib.parse import quote
 
 import requests
 from agents._contracts import agent_error as _err
+from agents._manifest_parsing import (
+    detect_ecosystem as _detect_ecosystem,
+    parse_npm_manifest as _parse_npm_manifest,
+    parse_pypi_manifest as _parse_pypi_manifest,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -86,17 +90,16 @@ _OSV_SUMMARY_MAX_CHARS = 600
 _PYPI_LICENSE_CLASSIFIER_PREFIX = "License ::"
 _PYPI_LICENSE_CLASSIFIER_OSI = "License :: OSI Approved ::"
 
-_COPYLEFT = {"gpl", "agpl", "lgpl", "eupl", "cddl", "mpl", "osl"}
+# Weak copyleft is checked BEFORE strong: "lgpl" contains "gpl" as a
+# substring, so order is what keeps LGPL out of the "high" bucket.
+_WEAK_COPYLEFT = ("lgpl", "mpl", "epl", "cddl")
+_STRONG_COPYLEFT = ("agpl", "gpl", "sspl", "eupl", "osl")
 _RESTRICTIVE_LICENSE_HINTS = ("unknown", "proprietary", "see license")
+# Risk levels ordered for SPDX-expression combination (index = severity).
+_RISK_ORDER = ("none", "low", "medium", "high")
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 _VER_SPLIT_RE = re.compile(r"[.\-]")
 _OSV_SCORE_TAIL_RE = re.compile(r"\b(\d+(?:\.\d+)?)$")
-_PYPI_REQ_LINE_RE = re.compile(
-    r"([A-Za-z0-9_\-\.]+)(?:\[[A-Za-z0-9_,\-\.]+\])?"
-    r"\s*([>=<!~]=?\s*[\w\.\*]+(?:\s*,\s*[>=<!~]=?\s*[\w\.\*]+)*)?"
-)
-_PYPI_VER_OP_RE = re.compile(r"[>=<!~^]+\s*")
-_NPM_VER_DIGITS_RE = re.compile(r"[^0-9\.]")
 
 
 def _ver_tuple(v: str) -> tuple[int, ...]:
@@ -104,83 +107,6 @@ def _ver_tuple(v: str) -> tuple[int, ...]:
         return tuple(int(x) for x in _VER_SPLIT_RE.split(v.strip())[:3])
     except (ValueError, TypeError):
         return (0, 0, 0)
-
-
-def _detect_ecosystem(manifest: str) -> str:
-    return "npm" if manifest.strip().startswith("{") else "pypi"
-
-
-def _parse_pypi_manifest(
-    manifest: str,
-) -> tuple[list[tuple[str, str]], list[dict]]:
-    """Parse requirements.txt-style lines into ``(packages, warnings)``.
-
-    Why: previously we silently dropped lines that didn't fully-match the
-    regex (e.g. ``-e git+https://...``); users had no idea their input
-    wasn't fully processed. Now any non-empty, non-comment line that fails
-    the regex is reported as an ``unparseable`` warning. Pure: no I/O.
-    """
-    packages: list[tuple[str, str]] = []
-    warnings: list[dict] = []
-    for raw_line in manifest.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        m = _PYPI_REQ_LINE_RE.fullmatch(line)
-        if not m:
-            warnings.append({"line": raw_line, "reason": "unparseable"})
-            continue
-        name = m.group(1).strip()
-        ver_spec = (m.group(2) or "").strip()
-        if ver_spec:
-            ver = _PYPI_VER_OP_RE.sub("", ver_spec).split(",")[0].strip()
-        else:
-            ver = ""
-        packages.append((name, ver))
-    return packages, warnings
-
-
-def _npm_extract_deps(data: Any) -> list[tuple[str, str]]:
-    """Pure: pull ``(name, ver)`` pairs from a parsed package.json-shaped dict."""
-    if not isinstance(data, dict):
-        return []
-    out: list[tuple[str, str]] = []
-    for key in ("dependencies", "devDependencies", "peerDependencies"):
-        for name, ver_spec in (data.get(key) or {}).items():
-            ver = _NPM_VER_DIGITS_RE.sub("", str(ver_spec)).strip(".") if ver_spec else ""
-            out.append((name, ver))
-    return out
-
-
-def _npm_candidate_payloads(text: str) -> list[str]:
-    """Build progressively-wrapped JSON candidates from a manifest snippet.
-
-    Why: callers paste several common shapes — full package.json, just a
-    "dependencies": {...} fragment, or a bare deps dict. Trying the strictest
-    form first preserves intent; widening only when the strict parse yields
-    nothing avoids misinterpreting a real package.json with empty deps.
-    """
-    candidates = [text]
-    if text and not text.startswith("{") and '"dependencies"' in text:
-        candidates.append("{" + text.rstrip(",") + "}")
-    if text.startswith("{") and '"dependencies"' not in text and '"name"' not in text:
-        candidates.append('{"dependencies": ' + text + "}")
-    return candidates
-
-
-def _parse_npm_manifest(
-    manifest: str,
-) -> tuple[list[tuple[str, str]], list[dict]]:
-    """Parse a package.json-shaped string into ``(packages, warnings)``."""
-    for candidate in _npm_candidate_payloads(manifest.strip()):
-        try:
-            parsed = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        packages = _npm_extract_deps(parsed)
-        if packages:
-            return packages, []
-    return [], []
 
 
 def _cvss_to_severity(score: float) -> str:
@@ -457,16 +383,45 @@ def _fetch_npm_latest(name: str) -> tuple[str | None, str | None, bool]:
     return latest, license_, False
 
 
-def _license_risk(license_str: str | None) -> str:
-    """Pure: bucket a SPDX/free-text license string into the auditor's risk levels."""
-    if not license_str:
-        return "low"
-    lic = license_str.lower()
-    if any(k in lic for k in _COPYLEFT):
+def _single_license_risk(token: str) -> str:
+    """Pure: risk bucket for ONE license identifier (no expression logic).
+
+    Strong copyleft (GPL/AGPL/SSPL...) → high; weak/file-level copyleft
+    (LGPL/MPL/EPL...) → medium; unknown/proprietary hints → medium;
+    recognised-permissive or anything else → none.
+    """
+    lic = token.lower()
+    if any(k in lic for k in _WEAK_COPYLEFT):
+        return "medium"
+    if any(k in lic for k in _STRONG_COPYLEFT):
         return "high"
     if any(hint in lic for hint in _RESTRICTIVE_LICENSE_HINTS):
         return "medium"
     return "none"
+
+
+def _license_risk(license_str: str | None) -> str:
+    """Pure: bucket a SPDX expression / free-text license into risk levels.
+
+    SPDX semantics: ``OR`` lets the consumer pick the most permissive branch
+    (min risk); ``AND`` binds every obligation (max risk). AND binds tighter
+    than OR per the SPDX spec, which a flat OR-first split models correctly.
+    Parentheses are dropped — a nested-grouping approximation we accept
+    because real-world registry metadata almost never nests.
+    """
+    if not license_str:
+        return "low"
+    expression = license_str.replace("(", " ").replace(")", " ")
+    or_risks = []
+    for or_branch in re.split(r"\s+OR\s+", expression, flags=re.IGNORECASE):
+        and_parts = re.split(r"\s+AND\s+", or_branch, flags=re.IGNORECASE)
+        branch_risk = max(
+            (_single_license_risk(p) for p in and_parts if p.strip()),
+            key=_RISK_ORDER.index,
+            default="none",
+        )
+        or_risks.append(branch_risk)
+    return min(or_risks, key=_RISK_ORDER.index)
 
 
 _NPM_FORMAT_HINTS = (

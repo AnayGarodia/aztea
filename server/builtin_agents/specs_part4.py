@@ -49,7 +49,11 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
         multi_language_desc = (
             f"Sandboxed code execution. Currently installed runtimes on this executor: "
             f"{languages_pretty}. Other languages return a clear unsupported_language "
-            "error (no charge). For Python use the Python Code Executor instead."
+            "error (no charge). Offline sandbox: network APIs AND process "
+            "spawning (os/exec, std::process, child_process) are rejected "
+            "up-front with a structured error. Nonzero exits are classified "
+            "via error_kind: 'compile' vs 'runtime'. For Python use the "
+            "Python Code Executor instead."
         )
     else:
         multi_language_desc = (
@@ -69,7 +73,11 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                 "or ``queries`` (list of {sql, params?}) for several. "
                 "Multi-statement strings in ``sql`` are rejected — split them "
                 "into the ``queries`` array. DDL/seed goes in ``schema_sql``. "
-                "If both ``sql`` and ``queries`` are supplied, ``queries`` wins."
+                "If both ``sql`` and ``queries`` are supplied, ``queries`` wins. "
+                "BEGIN/COMMIT/ROLLBACK/SAVEPOINT work as queries items "
+                "(autocommit connection); an unclosed transaction is rolled "
+                "back with a warning. Full-table scans surface as "
+                "index_suggestions."
             ),
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_DB_SANDBOX_AGENT_ID],
             "price_per_call_usd": 0.02,
@@ -150,6 +158,20 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                     "engine": {"type": "string"},
                     "results": {"type": "array", "items": {"type": "object"}},
                     "statements_executed": {"type": "integer"},
+                    "results_truncated": {
+                        "type": "boolean",
+                        "description": "True when any statement's rows were capped at the 500-row limit",
+                    },
+                    "index_suggestions": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Full-table scans detected in query plans, as {statement_index, table, hint}",
+                    },
+                    "warnings": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Non-fatal call-level notices, e.g. an open transaction rolled back at end of call",
+                    },
                     "db_size_bytes": {"type": "integer"},
                     "execution_time_ms": {"type": "integer"},
                 },
@@ -381,8 +403,19 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                     "capture_network": {
                         "type": "boolean",
                         "title": "Capture network log",
-                        "description": "Include a log of all HTTP requests made by the page.",
+                        "description": "Include a log of HTTP requests made by the page.",
                         "default": False,
+                    },
+                    "network_capture_types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "title": "Network log type filter",
+                        "description": (
+                            "Restrict the network log to these Playwright "
+                            "resource types (e.g. ['xhr','fetch','document']) "
+                            "so API traffic isn't drowned out by asset rows "
+                            "before the 200-entry cap. Empty = capture all."
+                        ),
                     },
                     "script": {
                         "type": "string",
@@ -414,7 +447,16 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                     "title": {"type": "string"},
                     "html": {"type": "string"},
                     "html_chars": {"type": "integer"},
+                    "html_truncated": {
+                        "type": "boolean",
+                        "description": "True when html was cut at the 200k cap (previously a silent HTML-comment marker)",
+                    },
                     "visible_text": {"type": "string"},
+                    "visible_text_truncated": {"type": "boolean"},
+                    "network_log_truncated": {
+                        "type": "boolean",
+                        "description": "Present with capture_network; true when more than 200 responses were recorded",
+                    },
                     "links": {"type": "array", "items": {"type": "object"}},
                     "action": {"type": "string"},
                     "wait_for": {"type": "string"},
@@ -524,11 +566,19 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "output_schema": _output_schema_object(
                 {
                     "language": {"type": "string"},
-                    "runtime": {"type": "string"},
+                    "runtime": {
+                        "type": "string",
+                        "description": "Runtime that actually executed the code, e.g. 'node v20.11.0' or 'tsc+node 5.4'",
+                    },
                     "stdout": {"type": "string"},
                     "stderr": {"type": "string"},
                     "exit_code": {"type": "integer"},
                     "passed": {"type": "boolean"},
+                    "error_kind": {
+                        "type": ["string", "null"],
+                        "enum": ["compile", "runtime", None],
+                        "description": "Why a nonzero exit happened: 'compile' (build/typecheck failed before running) vs 'runtime' (code ran and crashed). Null on success.",
+                    },
                     "execution_time_ms": {"type": "integer"},
                 },
                 required=[

@@ -94,6 +94,17 @@ def load_builtin_specs_part6() -> list[dict[str, Any]]:
                         "default": "mobile",
                         "description": "Form factor for the run.",
                     },
+                    "throttling": {
+                        "type": "string",
+                        "enum": ["simulate", "provided", "devtools"],
+                        "description": (
+                            "Lighthouse --throttling-method override. Omit "
+                            "to derive from strategy (mobile=simulate, "
+                            "desktop=provided). 'devtools' applies real "
+                            "browser-level throttling; 'provided' uses the "
+                            "connection as-is."
+                        ),
+                    },
                     "max_wait_seconds": {
                         "type": "integer",
                         "minimum": 20,
@@ -165,7 +176,7 @@ def load_builtin_specs_part6() -> list[dict[str, Any]]:
         {
             "agent_id": _ACCESSIBILITY_AUDITOR_AGENT_ID,
             "name": "Accessibility Auditor",
-            "description": "Use when the task requires checking a web page for WCAG accessibility violations. Loads the URL in a real Chromium browser, injects axe-core 4.x, and returns structured violations grouped by rule with the affected DOM nodes. Defaults to the WCAG-2.1-AA tag set. Best evaluated against content-rich pages (e.g., Wikipedia or a real product site) — single-paragraph stubs like example.com don't exercise the rule engine.",
+            "description": "Use when the task requires checking a web page for WCAG accessibility violations. Loads the URL in a real Chromium browser, injects axe-core 4.x (CDN with a vendored offline fallback — axe_source reports which ran), and returns structured violations grouped by rule with the affected DOM nodes plus the manual-review `incomplete` checks. Defaults to the WCAG-2.1-AA tag set. Best evaluated against content-rich pages (e.g., Wikipedia or a real product site) — single-paragraph stubs like example.com don't exercise the rule engine.",
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_ACCESSIBILITY_AUDITOR_AGENT_ID],
             "price_per_call_usd": 0.03,
             "tags": [
@@ -227,6 +238,23 @@ def load_builtin_specs_part6() -> list[dict[str, Any]]:
                 "properties": {
                     "url": {"type": "string"},
                     "violations": {"type": "array"},
+                    "violations_truncated": {
+                        "type": "boolean",
+                        "description": "True when more than 30 violations were found (totals.violations has the real count)",
+                    },
+                    "incomplete": {
+                        "type": "array",
+                        "description": "Checks axe could not auto-decide (manual review needed), as {id, impact, help, help_url, node_count} — often the most important findings",
+                    },
+                    "axe_source": {
+                        "type": "string",
+                        "enum": ["cdn", "vendored"],
+                        "description": "Where axe-core was loaded from this run",
+                    },
+                    "unknown_tags": {
+                        "type": "array",
+                        "description": "Advisory: requested tags that don't match axe's tag grammar (likely typos auditing zero rules)",
+                    },
                     "totals": {"type": "object"},
                     "billing_units_actual": {"type": "integer"},
                 },

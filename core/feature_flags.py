@@ -208,10 +208,6 @@ LAZY_MCP_SCHEMAS: bool = flag("AZTEA_LAZY_MCP_SCHEMAS", default=True)
 # Default: on.
 OUTPUT_TRUNCATION: bool = flag("AZTEA_OUTPUT_TRUNCATION", default=True)
 
-# Pre-initialised Python interpreter pool for the python_executor agent.
-# Off by default — warm pools consume memory even when idle.
-PYTHON_WARM_POOL: bool = flag("AZTEA_PYTHON_WARM_POOL", default=False)
-
 # Per-key sliding-window rate limits, evaluated as transport-layer middleware.
 # Read at module import — no env hot-reload — because middleware is registered
 # once at startup and the request hot path must not pay an env lookup. Tune via

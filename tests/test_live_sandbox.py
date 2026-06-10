@@ -1756,3 +1756,27 @@ def test_hardening_argv_drops_root_and_masks_hostname():
     idx = argv.index("--hostname")
     assert argv[idx + 1].startswith("sandbox-")
     assert argv[idx + 1] != "sandbox-aaaaaaaa"  # has a random tail
+
+
+# ---------------------------------------------------------------------------
+# Agent-boundary fail-fast checks (size / shape) — these reject BEFORE the
+# engine mints receipts or touches Docker state.
+# ---------------------------------------------------------------------------
+
+
+def test_oversized_payload_rejected_before_dispatch():
+    big = "x" * (live_sandbox._MAX_PAYLOAD_BYTES + 1)
+    out = live_sandbox.run({"action": "sandbox_exec", "input": {"cmd": big}})
+    assert out["error"]["code"] == "live_sandbox.payload_too_large"
+    assert "receipt" not in out, "fail-fast must not mint a receipt"
+
+
+def test_non_string_action_lists_supported_actions():
+    out = live_sandbox.run({"action": 42})
+    assert out["error"]["code"] == "live_sandbox.invalid_action"
+    assert "sandbox_start" in out["error"]["message"]
+
+
+def test_unserializable_payload_rejected():
+    out = live_sandbox.run({"action": "sandbox_exec", "input": {"x": object()}})
+    assert out["error"]["code"] == "live_sandbox.invalid_input"

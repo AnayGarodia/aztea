@@ -17,6 +17,7 @@ Output:
     "stderr": str,
     "exit_code": int,
     "passed": bool,
+    "error_kind": "compile" | "runtime" | None,  # why a nonzero exit happened
     "execution_time_ms": int,
     "error": ...               # only on tool failure (not code failure)
   }
@@ -104,21 +105,57 @@ _NETWORK_API_PATTERNS_RAW = {
         r"\bTcpStream::connect\b",
     ),
 }
+# Process-spawn escapes, kept separate from the network patterns so the
+# rejection message tells the caller what actually tripped: Go and Rust
+# could previously shell out (e.g. exec.Command("curl", ...)) and reach
+# the network indirectly, sidestepping the SSRF pre-filter entirely.
+# JS/TS spawn surfaces (child_process et al.) are already covered by the
+# module lists in _NETWORK_API_PATTERNS_RAW above.
+_PROCESS_SPAWN_PATTERNS_RAW = {
+    ("go",): (
+        r"""(?:^|\s)import\s+\(?[^)]*['"]os/exec['"]""",
+        r"\bexec\.(?:Command|CommandContext|LookPath)\b",
+        r"\bos\.StartProcess\b",
+        r"\bsyscall\.(?:Exec|ForkExec)\b",
+    ),
+    ("rust",): (
+        r"\bstd::process::",
+        r"\bprocess::Command\b",
+        r"\bCommand::new\b",
+    ),
+}
 _NETWORK_API_PATTERNS = {
     langs: tuple(re.compile(p, re.MULTILINE) for p in patterns)
     for langs, patterns in _NETWORK_API_PATTERNS_RAW.items()
 }
+_PROCESS_SPAWN_PATTERNS = {
+    langs: tuple(re.compile(p, re.MULTILINE) for p in patterns)
+    for langs, patterns in _PROCESS_SPAWN_PATTERNS_RAW.items()
+}
 _PRIVATE_HOST_RE = re.compile("|".join(_PRIVATE_HOST_PATTERNS), re.IGNORECASE)
 
 
+def _any_pattern_hit(
+    language: str, code: str, pattern_table: dict
+) -> bool:
+    """Pure: does any pattern registered for ``language`` match ``code``?"""
+    for langs, patterns in pattern_table.items():
+        if language not in langs:
+            continue
+        if any(pattern.search(code) for pattern in patterns):
+            return True
+    return False
+
+
 def _is_code_network_safe(language: str, code: str) -> tuple[bool, str | None]:
-    """Pre-execution SSRF/network safety check.
+    """Pre-execution SSRF/network/process-spawn safety check.
 
     Returns ``(True, None)`` if the code is allowed. Returns
     ``(False, reason)`` with a human-readable explanation when a
-    private-host literal or a network-capable API surface appears in
-    the source. The reason is surfaced verbatim in the structured
-    error envelope so callers can fix the offending construct.
+    private-host literal, a network-capable API surface, or a
+    process-spawn surface appears in the source. The reason is surfaced
+    verbatim in the structured error envelope so callers can fix the
+    offending construct.
     """
     if _PRIVATE_HOST_RE.search(code):
         return (
@@ -127,18 +164,22 @@ def _is_code_network_safe(language: str, code: str) -> tuple[bool, str | None]:
             "or cloud-metadata host. The sandbox has no network and "
             "must not be used to reach internal services (SSRF policy).",
         )
-    for langs, patterns in _NETWORK_API_PATTERNS.items():
-        if language not in langs:
-            continue
-        for pattern in patterns:
-            if pattern.search(code):
-                return (
-                    False,
-                    "Code uses a network-capable API surface "
-                    "(http/https/net/fetch/etc.). The sandbox is offline; "
-                    "remove the network call or run on a host that has "
-                    "explicit egress.",
-                )
+    if _any_pattern_hit(language, code, _NETWORK_API_PATTERNS):
+        return (
+            False,
+            "Code uses a network-capable API surface "
+            "(http/https/net/fetch/etc.). The sandbox is offline; "
+            "remove the network call or run on a host that has "
+            "explicit egress.",
+        )
+    if _any_pattern_hit(language, code, _PROCESS_SPAWN_PATTERNS):
+        return (
+            False,
+            "Code spawns external processes (os/exec, std::process, "
+            "Command::new, etc.). The sandbox does not allow shelling "
+            "out — spawned binaries would sidestep the offline/SSRF "
+            "policy. Inline the logic instead of calling external tools.",
+        )
     return True, None
 
 
@@ -320,6 +361,7 @@ def _try_ts_tsc_node(code: str, stdin: str, timeout: float) -> dict[str, Any] | 
                 "exit_code": compile_proc.returncode,
                 "elapsed_ms": 0,
                 "runtime": f"tsc {ver}",
+                "error_kind": "compile",
             }
         result = _run_subprocess(
             [node_bin, os.path.join(outdir, "main.js")], tmpdir, stdin, timeout,
@@ -360,6 +402,14 @@ def _run_typescript(code: str, stdin: str, timeout: float) -> dict[str, Any]:
     )
 
 
+# `go run` interleaves compile and run in one subprocess; compiler
+# diagnostics are the only way to tell a build break from a runtime crash.
+# Matches "./main.go:3:5: undefined: foo" and the "# command-line-arguments"
+# build-failure banner.
+_GO_COMPILE_ERROR_RE = re.compile(r"\.go:\d+:\d+:|^# command-line-arguments", re.MULTILINE)
+_RUSTC_COMPILE_TIMEOUT_S = 60
+
+
 def _run_go(code: str, stdin: str, timeout: float) -> dict[str, Any]:
     go_bin = _which("go")
     if go_bin is None:
@@ -373,10 +423,11 @@ def _run_go(code: str, stdin: str, timeout: float) -> dict[str, Any]:
             f.write(code)
         result = _run_subprocess([go_bin, "run", fpath], tmpdir, stdin, timeout)
     runtime_ver = _version_string(go_bin, "version", fallback="go")
+    if result.get("exit_code", 0) != 0 and _GO_COMPILE_ERROR_RE.search(
+        str(result.get("stderr") or "")
+    ):
+        result["error_kind"] = "compile"
     return {**result, "runtime": runtime_ver}
-
-
-_RUSTC_COMPILE_TIMEOUT_S = 60
 
 
 def _run_rust_via_script(code: str, stdin: str, timeout: float) -> dict[str, Any] | None:
@@ -424,6 +475,7 @@ def _run_rust(code: str, stdin: str, timeout: float) -> dict[str, Any]:
                 "exit_code": compile_result.returncode,
                 "elapsed_ms": 0,
                 "runtime": "rustc",
+                "error_kind": "compile",
             }
         result = _run_subprocess([out], tmpdir, stdin, timeout)
     return {**result, "runtime": _version_string(rustc, "--version", fallback="rustc")}
@@ -483,14 +535,25 @@ def _validate_run_inputs(
 
 
 def _shape_run_response(language: str, result: dict[str, Any]) -> dict[str, Any]:
-    """Pure: project a runner's ``result`` dict into the agent's response shape."""
+    """Pure: project a runner's ``result`` dict into the agent's response shape.
+
+    ``error_kind`` is "compile" when a runner's compile phase failed
+    (rustc/tsc branches, go diagnostics), "runtime" for any other nonzero
+    exit, and None on success — so callers can route syntax errors to a
+    code-fix loop without parsing stderr themselves.
+    """
+    exit_code = result.get("exit_code", -1)
+    error_kind = result.get("error_kind")
+    if error_kind is None and exit_code != 0:
+        error_kind = "runtime"
     return {
         "language": language,
         "runtime": result.get("runtime", language),
         "stdout": result.get("stdout", ""),
         "stderr": result.get("stderr", ""),
-        "exit_code": result.get("exit_code", -1),
-        "passed": result.get("exit_code", -1) == 0,
+        "exit_code": exit_code,
+        "passed": exit_code == 0,
+        "error_kind": error_kind,
         "execution_time_ms": result.get("elapsed_ms", 0),
     }
 

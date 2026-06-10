@@ -59,6 +59,14 @@ _NAV_TIMEOUT_MS = 15_000
 _NETWORK_LOG_LIMIT = 200
 _CONSOLE_LOG_LIMIT = 20
 _INNER_TEXT_TIMEOUT_MS = 5_000
+# Playwright's request.resource_type vocabulary — used to filter the
+# network log so a caller after XHR traffic isn't drowned in 180 asset
+# rows before the 200-entry cap truncates the data they wanted.
+_NETWORK_CAPTURE_TYPES = frozenset({
+    "document", "stylesheet", "image", "media", "font", "script",
+    "texttrack", "xhr", "fetch", "eventsource", "websocket", "manifest",
+    "other",
+})
 
 _VIEWPORT_WIDTH_DEFAULT = 1280
 _VIEWPORT_HEIGHT_DEFAULT = 720
@@ -173,9 +181,38 @@ def _normalize_run_inputs(payload: dict[str, Any]) -> dict | tuple[Any, ...]:
     except (TypeError, ValueError):
         wait_ms = _DEFAULT_WAIT_MS
     capture_network = bool(payload.get("capture_network", False))
+    network_types = _normalize_network_types(payload.get("network_capture_types"))
+    if isinstance(network_types, dict):
+        return network_types  # error envelope
     script = str(payload.get("script") or "").strip()
     viewport = _normalize_viewport(payload.get("viewport"))
-    return (url, action, wait_for, wait_ms, capture_network, script, viewport)
+    return (url, action, wait_for, wait_ms, capture_network, network_types, script, viewport)
+
+
+def _normalize_network_types(raw: Any) -> frozenset[str] | dict:
+    """Pure: validate the network-log resource-type filter.
+
+    Empty/absent means "capture everything" (the pre-filter behavior).
+    Unknown type names are rejected rather than ignored — a typo like
+    "ajax" would otherwise silently capture nothing of what the caller
+    wanted.
+    """
+    if not raw:
+        return frozenset()
+    if not isinstance(raw, list):
+        return _err(
+            "browser_agent.invalid_network_types",
+            "network_capture_types must be a list of resource type strings.",
+        )
+    cleaned = {str(t).strip().lower() for t in raw if str(t).strip()}
+    unknown = cleaned - _NETWORK_CAPTURE_TYPES
+    if unknown:
+        return _err(
+            "browser_agent.invalid_network_types",
+            f"Unknown resource types: {sorted(unknown)}. "
+            f"Supported: {sorted(_NETWORK_CAPTURE_TYPES)}",
+        )
+    return frozenset(cleaned)
 
 
 def _import_playwright() -> Any:
@@ -203,14 +240,24 @@ def _is_chromium_missing(exc: BaseException) -> bool:
 def _attach_listeners(
     page: Any, network_log: list[dict[str, Any]],
     console_messages: list[str], *, capture_network: bool,
+    network_types: frozenset[str],
 ) -> None:
-    """Side-effect: register the response/console listeners that populate the audit log."""
+    """Side-effect: register the response/console listeners that populate the audit log.
+
+    ``network_types`` filters by Playwright resource type (empty = all);
+    each row now carries ``resource_type`` so unfiltered captures are
+    still classifiable after the fact.
+    """
     if capture_network:
         def _on_response(response: Any) -> None:
+            resource_type = str(response.request.resource_type or "other")
+            if network_types and resource_type not in network_types:
+                return
             network_log.append({
                 "url": response.url,
                 "method": response.request.method,
                 "status": response.status,
+                "resource_type": resource_type,
             })
         page.on("response", _on_response)
 
@@ -268,12 +315,14 @@ def _wait_after_load(
 def _capture_page(page: Any, action: str) -> dict[str, Any]:
     """Side-effect: read title/html/text/links/screenshot/pdf off the live page."""
     title = page.title() or ""
-    html = _truncate_html(page.content())
+    raw_html = page.content()
+    html = _truncate_html(raw_html)
     try:
         visible_text = page.locator("body").inner_text(timeout=_INNER_TEXT_TIMEOUT_MS)
     except Exception:
         _LOG.debug("body.inner_text failed", exc_info=True)
         visible_text = ""
+    raw_text_len = len(visible_text)
     visible_text = _truncate_text(visible_text)
     links = _extract_links(page)
     # `screenshot` is the viewport-only fast path; everything else takes
@@ -285,7 +334,9 @@ def _capture_page(page: Any, action: str) -> dict[str, Any]:
     return {
         "title": title,
         "html": html,
+        "html_truncated": len(raw_html) > _HTML_TRUNCATE,
         "visible_text": visible_text,
+        "visible_text_truncated": raw_text_len > _TEXT_TRUNCATE,
         "links": links,
         "screenshot_bytes": screenshot_bytes,
         "pdf_bytes": pdf_bytes,
@@ -370,7 +421,9 @@ def _build_result(
         "title": capture["title"],
         "html": capture["html"],
         "html_chars": len(capture["html"]),
+        "html_truncated": capture["html_truncated"],
         "visible_text": capture["visible_text"],
+        "visible_text_truncated": capture["visible_text_truncated"],
         "links": capture["links"],
         "action": action,
         "wait_for": wait_for,
@@ -384,6 +437,7 @@ def _build_result(
     }
     if capture_network:
         result["network_log"] = network_log[:_NETWORK_LOG_LIMIT]
+        result["network_log_truncated"] = len(network_log) > _NETWORK_LOG_LIMIT
     if capture["pdf_bytes"] is not None:
         result["pdf_artifact"] = _bytes_to_artifact(
             "page.pdf", "application/pdf", capture["pdf_bytes"],
@@ -393,7 +447,8 @@ def _build_result(
 
 def _drive_chromium(
     pw: Any, url: str, *, action: str, wait_for: str, wait_ms: int,
-    script: str, capture_network: bool, viewport: tuple[int, int],
+    script: str, capture_network: bool, network_types: frozenset[str],
+    viewport: tuple[int, int],
     network_log: list[dict[str, Any]], console_messages: list[str],
 ) -> dict | tuple[Any, dict[str, Any], Any]:
     """Side-effect: launch Chromium, navigate, and return ``(response, capture, script_result)`` or error envelope."""
@@ -414,7 +469,10 @@ def _drive_chromium(
     )
     _install_request_guard(context)
     page = context.new_page()
-    _attach_listeners(page, network_log, console_messages, capture_network=capture_network)
+    _attach_listeners(
+        page, network_log, console_messages,
+        capture_network=capture_network, network_types=network_types,
+    )
     try:
         return _navigate_and_capture(
             page, url, action=action, wait_for=wait_for, wait_ms=wait_ms, script=script,
@@ -433,7 +491,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     parsed = _normalize_run_inputs(payload)
     if isinstance(parsed, dict):
         return parsed  # error envelope
-    url, action, wait_for, wait_ms, capture_network, script, viewport = parsed
+    url, action, wait_for, wait_ms, capture_network, network_types, script, viewport = parsed
     sync_playwright = _import_playwright()
     if isinstance(sync_playwright, dict):
         return sync_playwright  # error envelope
@@ -445,7 +503,8 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         with sync_playwright() as pw:
             outcome = _drive_chromium(
                 pw, url, action=action, wait_for=wait_for, wait_ms=wait_ms,
-                script=script, capture_network=capture_network, viewport=viewport,
+                script=script, capture_network=capture_network,
+                network_types=network_types, viewport=viewport,
                 network_log=network_log, console_messages=console_messages,
             )
     except Exception as exc:
