@@ -73,7 +73,11 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                 "or ``queries`` (list of {sql, params?}) for several. "
                 "Multi-statement strings in ``sql`` are rejected — split them "
                 "into the ``queries`` array. DDL/seed goes in ``schema_sql``. "
-                "If both ``sql`` and ``queries`` are supplied, ``queries`` wins."
+                "If both ``sql`` and ``queries`` are supplied, ``queries`` wins. "
+                "BEGIN/COMMIT/ROLLBACK/SAVEPOINT work as queries items "
+                "(autocommit connection); an unclosed transaction is rolled "
+                "back with a warning. Full-table scans surface as "
+                "index_suggestions."
             ),
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_DB_SANDBOX_AGENT_ID],
             "price_per_call_usd": 0.02,
@@ -154,6 +158,20 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                     "engine": {"type": "string"},
                     "results": {"type": "array", "items": {"type": "object"}},
                     "statements_executed": {"type": "integer"},
+                    "results_truncated": {
+                        "type": "boolean",
+                        "description": "True when any statement's rows were capped at the 500-row limit",
+                    },
+                    "index_suggestions": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Full-table scans detected in query plans, as {statement_index, table, hint}",
+                    },
+                    "warnings": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Non-fatal call-level notices, e.g. an open transaction rolled back at end of call",
+                    },
                     "db_size_bytes": {"type": "integer"},
                     "execution_time_ms": {"type": "integer"},
                 },

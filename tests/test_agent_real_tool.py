@@ -700,3 +700,95 @@ def test_dns_inspector_http_security_headers_and_redirects(monkeypatch):
         "Content-Security-Policy": "default-src 'self'",
     }
     assert info["redirect_chain"] == [{"status": 301, "to": "https://example.com/"}]
+
+
+def test_db_sandbox_supports_explicit_transactions():
+    """BEGIN/ROLLBACK must behave atomically — the old per-statement
+    auto-commit made caller-issued ROLLBACK silently meaningless."""
+    result = db_sandbox.run(
+        {
+            "schema_sql": "CREATE TABLE t(id INTEGER);",
+            "queries": [
+                "BEGIN",
+                "INSERT INTO t VALUES (1)",
+                "ROLLBACK",
+                "SELECT count(*) AS n FROM t",
+            ],
+        }
+    )
+    assert "error" not in result, result
+    assert result["results"][3]["rows"][0]["n"] == 0
+    assert result["warnings"] == []
+
+
+def test_db_sandbox_commit_persists_within_call():
+    result = db_sandbox.run(
+        {
+            "schema_sql": "CREATE TABLE t(id INTEGER);",
+            "queries": [
+                "BEGIN",
+                "INSERT INTO t VALUES (1)",
+                "COMMIT",
+                "SELECT count(*) AS n FROM t",
+            ],
+        }
+    )
+    assert result["results"][3]["rows"][0]["n"] == 1
+
+
+def test_db_sandbox_open_transaction_rolls_back_with_warning():
+    result = db_sandbox.run(
+        {
+            "schema_sql": "CREATE TABLE t(id INTEGER);",
+            "queries": ["BEGIN", "INSERT INTO t VALUES (1)"],
+        }
+    )
+    assert "error" not in result, result
+    assert any("rolled back" in w for w in result["warnings"]), result
+
+
+def test_db_sandbox_suggests_index_for_full_scan():
+    result = db_sandbox.run(
+        {
+            "schema_sql": (
+                "CREATE TABLE items(id INTEGER PRIMARY KEY, color TEXT);"
+                "INSERT INTO items(color) VALUES ('red'), ('blue');"
+            ),
+            "queries": [
+                "SELECT * FROM items WHERE color = 'red'",
+                "SELECT * FROM items WHERE id = 1",
+            ],
+        }
+    )
+    suggestions = result["index_suggestions"]
+    assert any(
+        s["table"] == "items" and s["statement_index"] == 0 for s in suggestions
+    ), result
+    # The id lookup uses the integer primary key — no suggestion for it.
+    assert not any(s["statement_index"] == 1 for s in suggestions), suggestions
+
+
+def test_db_sandbox_per_call_sql_budget():
+    big = "SELECT 1 -- " + "x" * 39_000
+    result = db_sandbox.run({"queries": [big, big, big]})
+    assert result["error"]["code"] == "db_sandbox.sql_budget_exceeded"
+
+
+def test_db_sandbox_results_truncated_flag():
+    result = db_sandbox.run(
+        {
+            "schema_sql": (
+                "CREATE TABLE n(x INTEGER);"
+                "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM seq WHERE x < 600) "
+                "INSERT INTO n SELECT x FROM seq;"
+            ),
+            "sql": "SELECT * FROM n",
+        }
+    )
+    assert result["results"][0]["truncated"] is True
+    assert result["results_truncated"] is True
+
+
+def test_db_sandbox_invalid_payload_returns_envelope():
+    result = db_sandbox.run(["not", "a", "dict"])
+    assert result["error"]["code"] == "db_sandbox.invalid_payload"

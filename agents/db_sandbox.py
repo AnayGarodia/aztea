@@ -24,8 +24,11 @@ Optional fields:
   ``schema_sql`` (str)   — DDL run before queries (CREATE TABLE, INSERT seeds, etc.)
   ``explain`` (bool)     — include EXPLAIN QUERY PLAN output per statement (default True)
 
-All write operations are committed after each non-SELECT statement; PRAGMA
-``foreign_keys=ON`` is set so FK constraints are honoured in the sandbox.
+Transactions: the connection runs in true autocommit, so ``BEGIN`` /
+``COMMIT`` / ``ROLLBACK`` / ``SAVEPOINT`` pass through as ordinary queries
+items and behave atomically. A transaction still open at end-of-call is
+rolled back with a warning. PRAGMA ``foreign_keys=ON`` is set so FK
+constraints are honoured in the sandbox.
 """
 
 from __future__ import annotations
@@ -39,6 +42,9 @@ from typing import Any
 from agents._contracts import agent_error as _err
 
 _MAX_QUERY_CHARS = 40_000
+# Whole-call ceiling across schema_sql + every queries[].sql. The per-
+# statement cap alone let a caller submit 25 x 40k = 1 MB of SQL per call.
+_MAX_TOTAL_SQL_CHARS = 100_000
 _MAX_STATEMENTS = 25
 _MAX_ROWS = 500
 _TIMEOUT_SECONDS = 5.0
@@ -233,8 +239,10 @@ def _execute_one_statement(
                 truncated = True
                 break
             rows.append(dict(row))
-    else:
-        conn.commit()
+    # No explicit commit: the connection runs in autocommit
+    # (isolation_level=None), so DML outside a caller-issued BEGIN commits
+    # itself — and committing here would silently terminate a transaction
+    # the caller opened, breaking their later ROLLBACK.
     return {
         "sql": sql,
         "columns": columns,
@@ -304,6 +312,45 @@ def _run_statements(
     return results
 
 
+# EXPLAIN QUERY PLAN details for a full table scan read "SCAN <table>"
+# (modern SQLite) or "SCAN TABLE <table>" (pre-3.36). A scan that uses an
+# index says "USING INDEX"/"USING COVERING INDEX" and is not flagged.
+_FULL_SCAN_RE = _re.compile(r"^SCAN (?:TABLE )?(\S+)")
+
+
+def _index_suggestions(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pure: flag full-table scans in captured query plans with an index hint.
+
+    Why: the plan output alone tells a caller *that* a scan happened, not
+    *what to do about it* — the previous response left them to decode
+    EXPLAIN QUERY PLAN themselves.
+    """
+    suggestions: list[dict[str, Any]] = []
+    seen: set[tuple[int, str]] = set()
+    for index, item in enumerate(results):
+        for plan_row in item.get("query_plan") or []:
+            detail = str(plan_row.get("detail") or "")
+            if "USING INDEX" in detail or "USING COVERING INDEX" in detail:
+                continue
+            m = _FULL_SCAN_RE.match(detail)
+            if not m:
+                continue
+            table = m.group(1)
+            if table.startswith("sqlite_") or (index, table) in seen:
+                continue
+            seen.add((index, table))
+            suggestions.append({
+                "statement_index": index,
+                "table": table,
+                "hint": (
+                    f"Full table scan on '{table}' — an index on the "
+                    "filtered/joined column(s) would let SQLite seek "
+                    "instead of scanning."
+                ),
+            })
+    return suggestions
+
+
 def _all_statements_errored(results: list[dict[str, Any]]) -> dict | None:
     """Pure: when every statement failed, return a single rolled-up error envelope so the call refunds."""
     error_count = sum(1 for item in results if item.get("error"))
@@ -325,7 +372,8 @@ def _all_statements_errored(results: list[dict[str, Any]]) -> dict | None:
 
 
 def _shape_run_response(
-    results: list[dict[str, Any]], db_path: Path, start: float
+    results: list[dict[str, Any]], db_path: Path, start: float,
+    warnings: list[str],
 ) -> dict[str, Any]:
     """Pure: shape a successful run's results into the response envelope."""
     size_bytes = db_path.stat().st_size if db_path.exists() else 0
@@ -334,6 +382,9 @@ def _shape_run_response(
         "results": results,
         "statements_executed": len(results),
         "statement_error_count": sum(1 for item in results if item.get("error")),
+        "results_truncated": any(item.get("truncated") for item in results),
+        "index_suggestions": _index_suggestions(results),
+        "warnings": warnings,
         "db_size_bytes": size_bytes,
         "execution_time_ms": int((time.monotonic() - start) * 1000),
     }
@@ -349,7 +400,11 @@ def _execute_in_sandbox(
     ``core.db``'s pool with the registry; an ephemeral DB lives only for
     this call's lifetime.
     """
-    conn = sqlite3.connect(str(db_path), timeout=1, check_same_thread=False)
+    # isolation_level=None = true autocommit, which is what lets caller-
+    # issued BEGIN/COMMIT/ROLLBACK statements drive transactions themselves.
+    conn = sqlite3.connect(
+        str(db_path), timeout=1, check_same_thread=False, isolation_level=None,
+    )
     conn.row_factory = sqlite3.Row
     try:
         _configure_sandbox_pragmas(conn)
@@ -389,8 +444,19 @@ def _execute_in_sandbox(
         )
         if isinstance(results, dict):
             return results  # fatal error envelope (timeout / resource_limit)
+        warnings: list[str] = []
+        if conn.in_transaction:
+            # The sandbox is ephemeral, so the rollback itself is cosmetic —
+            # the warning is the point: the caller's COMMIT never ran.
+            conn.rollback()
+            warnings.append(
+                "Transaction left open at end of call; rolled back. "
+                "Issue COMMIT as a final statement to persist within the call."
+            )
         rolled_up = _all_statements_errored(results)
-        return rolled_up if rolled_up is not None else _shape_run_response(results, db_path, start)
+        if rolled_up is not None:
+            return rolled_up
+        return _shape_run_response(results, db_path, start, warnings)
     finally:
         conn.close()
 
@@ -402,7 +468,12 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     any production DB; a per-call tempfile gives complete isolation.
     """
     if not isinstance(payload, dict):
-        raise TypeError(f"payload must be dict, got {type(payload).__name__}")
+        # Structured envelope, not a raise — the dispatch layer surfaces
+        # uncaught raises as HTTP 500s (same NEW-5 precedent as cve_lookup).
+        return _err(
+            "db_sandbox.invalid_payload",
+            f"payload must be dict, got {type(payload).__name__}",
+        )
     schema_sql = str(payload.get("schema_sql") or "").strip()
     schema_err = _validate_schema_sql(schema_sql)
     if schema_err is not None:
@@ -413,6 +484,13 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     size_err = _validate_query_sizes(normalized_queries)
     if size_err is not None:
         return size_err
+    total_sql_chars = len(schema_sql) + sum(len(q["sql"]) for q in normalized_queries)
+    if total_sql_chars > _MAX_TOTAL_SQL_CHARS:
+        return _err(
+            "db_sandbox.sql_budget_exceeded",
+            f"Combined schema_sql + queries SQL is {total_sql_chars} chars; "
+            f"the per-call budget is {_MAX_TOTAL_SQL_CHARS}.",
+        )
     explain = bool(payload.get("explain", True))
     start = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="aztea-db-sandbox-") as tmpdir:
