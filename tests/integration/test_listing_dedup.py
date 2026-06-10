@@ -1,6 +1,8 @@
 """Dedup DB round-trip: cosine reads agent_embeddings (C1), fingerprint block."""
 from __future__ import annotations
 
+import pytest
+
 from core import feature_flags, hosted_skills, listing_dedup, registry
 from scripts.backfill_listing_fingerprints import backfill
 
@@ -16,6 +18,13 @@ def _register(name, description, tags=None):
     )
 
 
+@pytest.mark.skipif(
+    feature_flags.DISABLE_EMBEDDINGS,
+    reason="Needs the real cosine pass (find_near_duplicates skips it when embeddings "
+    "are disabled). CI runs the integration suite with AZTEA_DISABLE_EMBEDDINGS=1 to "
+    "avoid the torch/sentence-transformers segfault on the hosted runner; devs run it "
+    "with embeddings on. See .github/workflows/ci.yml.",
+)
 def test_find_near_duplicates_reads_agent_embeddings(isolated_db):
     """C1 guard: the cosine pass must read agent_embeddings, not the empty
     vector_store. Registering an agent writes an embedding there; querying with

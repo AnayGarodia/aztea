@@ -1228,6 +1228,14 @@ def _lemma_normalize(word: str) -> str:
     w = word.lower().strip()
     if not w:
         return ""
+    # A word shorter than a retainable stem has no useful lemma, and simplemma
+    # over-normalizes such forms (e.g. "is" -> "be", "be" -> "be"), which would
+    # mangle short routing keywords. Preserve them verbatim — this mirrors the
+    # _LEMMA_MIN_RETAIN floor the suffix-stripper already applies, and keeps the
+    # simplemma and fallback paths in agreement on short words. (simplemma became
+    # active in prod via #102's lockfile recompile; before that this path was dead.)
+    if len(w) < _LEMMA_MIN_RETAIN:
+        return w
     if _simplemma is not None:
         try:
             lemma = _simplemma.lemmatize(w, lang="en")
