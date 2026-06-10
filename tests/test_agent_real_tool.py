@@ -894,3 +894,78 @@ def test_accessibility_response_reports_incomplete_and_truncation():
             "node_count": 2,
         }
     ]
+
+
+def test_browser_agent_rejects_unknown_network_capture_types():
+    """A typo like 'ajax' must error, not silently capture nothing of what
+    the caller wanted."""
+    result = browser_agent.run(
+        {
+            "url": "https://example.com",
+            "capture_network": True,
+            "network_capture_types": ["ajax"],
+        }
+    )
+    assert result["error"]["code"] == "browser_agent.invalid_network_types"
+
+
+def test_browser_agent_network_type_filter_applied():
+    from types import SimpleNamespace as _NS
+
+    network_log: list = []
+    handlers = {}
+
+    class _FakePage:
+        def on(self, event, handler):
+            handlers[event] = handler
+
+    browser_agent._attach_listeners(
+        _FakePage(), network_log, [],
+        capture_network=True, network_types=frozenset({"xhr"}),
+    )
+    xhr = _NS(
+        url="https://api.example.com/data", status=200,
+        request=_NS(method="GET", resource_type="xhr"),
+    )
+    img = _NS(
+        url="https://example.com/logo.png", status=200,
+        request=_NS(method="GET", resource_type="image"),
+    )
+    handlers["response"](xhr)
+    handlers["response"](img)
+    assert network_log == [
+        {
+            "url": "https://api.example.com/data",
+            "method": "GET",
+            "status": 200,
+            "resource_type": "xhr",
+        }
+    ]
+
+
+def test_browser_agent_capture_page_reports_truncation():
+    class _FakeLocator:
+        def inner_text(self, timeout=None):
+            return "x" * (browser_agent._TEXT_TRUNCATE + 10)
+
+    class _FakePage:
+        url = "https://example.com/"
+
+        def title(self):
+            return "t"
+
+        def content(self):
+            return "<html>" + "y" * browser_agent._HTML_TRUNCATE + "</html>"
+
+        def locator(self, sel):
+            return _FakeLocator()
+
+        def eval_on_selector_all(self, sel, js):
+            return []
+
+        def screenshot(self, full_page=None, type=None):
+            return b"\x89PNG\r\n\x1a\n" + b"0" * 20
+
+    capture = browser_agent._capture_page(_FakePage(), "scrape")
+    assert capture["html_truncated"] is True
+    assert capture["visible_text_truncated"] is True

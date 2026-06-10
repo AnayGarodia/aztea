@@ -403,8 +403,19 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                     "capture_network": {
                         "type": "boolean",
                         "title": "Capture network log",
-                        "description": "Include a log of all HTTP requests made by the page.",
+                        "description": "Include a log of HTTP requests made by the page.",
                         "default": False,
+                    },
+                    "network_capture_types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "title": "Network log type filter",
+                        "description": (
+                            "Restrict the network log to these Playwright "
+                            "resource types (e.g. ['xhr','fetch','document']) "
+                            "so API traffic isn't drowned out by asset rows "
+                            "before the 200-entry cap. Empty = capture all."
+                        ),
                     },
                     "script": {
                         "type": "string",
@@ -436,7 +447,16 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                     "title": {"type": "string"},
                     "html": {"type": "string"},
                     "html_chars": {"type": "integer"},
+                    "html_truncated": {
+                        "type": "boolean",
+                        "description": "True when html was cut at the 200k cap (previously a silent HTML-comment marker)",
+                    },
                     "visible_text": {"type": "string"},
+                    "visible_text_truncated": {"type": "boolean"},
+                    "network_log_truncated": {
+                        "type": "boolean",
+                        "description": "Present with capture_network; true when more than 200 responses were recorded",
+                    },
                     "links": {"type": "array", "items": {"type": "object"}},
                     "action": {"type": "string"},
                     "wait_for": {"type": "string"},
