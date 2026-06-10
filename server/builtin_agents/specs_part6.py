@@ -94,6 +94,17 @@ def load_builtin_specs_part6() -> list[dict[str, Any]]:
                         "default": "mobile",
                         "description": "Form factor for the run.",
                     },
+                    "throttling": {
+                        "type": "string",
+                        "enum": ["simulate", "provided", "devtools"],
+                        "description": (
+                            "Lighthouse --throttling-method override. Omit "
+                            "to derive from strategy (mobile=simulate, "
+                            "desktop=provided). 'devtools' applies real "
+                            "browser-level throttling; 'provided' uses the "
+                            "connection as-is."
+                        ),
+                    },
                     "max_wait_seconds": {
                         "type": "integer",
                         "minimum": 20,

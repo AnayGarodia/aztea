@@ -969,3 +969,107 @@ def test_browser_agent_capture_page_reports_truncation():
     capture = browser_agent._capture_page(_FakePage(), "scrape")
     assert capture["html_truncated"] is True
     assert capture["visible_text_truncated"] is True
+
+
+def test_lighthouse_resolve_chrome_path_prefers_env_override(monkeypatch, tmp_path):
+    from agents import lighthouse_auditor as la
+
+    fake_chrome = tmp_path / "my-chrome"
+    fake_chrome.write_text("#!/bin/sh\n")
+    monkeypatch.setenv("CHROME_PATH", str(fake_chrome))
+    assert la._resolve_chrome_path() == str(fake_chrome)
+
+
+def test_lighthouse_resolve_chrome_path_falls_back_to_system_then_playwright(
+    monkeypatch, tmp_path
+):
+    """The 2026-05-18 critical fix (every call died ChromePathNotSetError)
+    shipped without a regression test — this pins the fallback chain:
+    CHROME_PATH env -> system chrome -> Playwright cache glob -> None."""
+    from agents import lighthouse_auditor as la
+
+    monkeypatch.delenv("CHROME_PATH", raising=False)
+    monkeypatch.setattr(la.shutil, "which", lambda name: None)
+
+    cache = tmp_path / "ms-playwright"
+    chrome = cache / "chromium-1200" / "chrome-linux64" / "chrome"
+    chrome.parent.mkdir(parents=True)
+    chrome.write_text("#!/bin/sh\n")
+    chrome.chmod(0o755)
+    newer = cache / "chromium-1210" / "chrome-linux64" / "chrome"
+    newer.parent.mkdir(parents=True)
+    newer.write_text("#!/bin/sh\n")
+    newer.chmod(0o755)
+    monkeypatch.setattr(la, "_PLAYWRIGHT_CACHE_DIRS", (str(cache),))
+    assert la._resolve_chrome_path() == str(newer), "newest chromium must win"
+
+    monkeypatch.setattr(la, "_PLAYWRIGHT_CACHE_DIRS", (str(tmp_path / "missing"),))
+    assert la._resolve_chrome_path() is None
+
+
+def test_lighthouse_resolve_chrome_path_walk_prefers_full_chrome(monkeypatch, tmp_path):
+    """When the glob patterns miss (cache layout changed), the os.walk
+    fallback must still find a binary and prefer chrome over headless-shell."""
+    from agents import lighthouse_auditor as la
+
+    monkeypatch.delenv("CHROME_PATH", raising=False)
+    monkeypatch.setattr(la.shutil, "which", lambda name: None)
+    cache = tmp_path / "ms-playwright"
+    shell = cache / "weird-layout" / "chrome-headless-shell"
+    chrome = cache / "weird-layout" / "sub" / "chrome"
+    for p in (shell, chrome):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("#!/bin/sh\n")
+        p.chmod(0o755)
+    monkeypatch.setattr(la, "_PLAYWRIGHT_CACHE_DIRS", (str(cache),))
+    assert la._resolve_chrome_path() == str(chrome)
+
+
+def test_lighthouse_build_cmd_throttling():
+    from agents import lighthouse_auditor as la
+
+    default_mobile = la._build_cmd("https://x.com", ["performance"], "mobile", "/tmp/o.json", "")
+    assert "--throttling-method=simulate" in default_mobile
+    default_desktop = la._build_cmd("https://x.com", ["performance"], "desktop", "/tmp/o.json", "")
+    assert "--throttling-method=provided" in default_desktop
+    devtools = la._build_cmd("https://x.com", ["performance"], "mobile", "/tmp/o.json", "devtools")
+    assert "--throttling-method=devtools" in devtools
+
+
+def test_lighthouse_rejects_invalid_throttling():
+    from agents import lighthouse_auditor as la
+
+    result = la.run({"url": "https://example.com", "throttling": "4g"})
+    assert result["error"]["code"] == "lighthouse_auditor.invalid_throttling"
+
+
+def test_lighthouse_opportunity_extraction_handles_modern_shapes():
+    from agents import lighthouse_auditor as la
+
+    audits = {
+        "classic": {
+            "title": "Classic opportunity",
+            "details": {"type": "opportunity", "overallSavingsMs": 1200},
+        },
+        "metric-savings-only": {
+            "title": "Modern opportunity",
+            "details": {"type": "opportunity"},
+            "metricSavings": {"LCP": 800, "FCP": 300},
+        },
+        "bytes-only": {
+            "title": "Image formats",
+            "details": {"type": "opportunity", "overallSavingsBytes": 50_000},
+        },
+        "garbage-details": {"title": "ignore me", "details": "not-a-dict"},
+        "zero-savings": {"title": "noop", "details": {"type": "opportunity"}},
+    }
+    opps = la._extract_top_opportunities(audits)
+    ids = [o["id"] for o in opps]
+    assert ids[0] == "classic"
+    assert "metric-savings-only" in ids
+    assert "bytes-only" in ids
+    assert "garbage-details" not in ids and "zero-savings" not in ids
+    modern = next(o for o in opps if o["id"] == "metric-savings-only")
+    assert modern["savings_ms"] == 800
+    bytes_only = next(o for o in opps if o["id"] == "bytes-only")
+    assert bytes_only["savings_bytes"] == 50_000
