@@ -127,6 +127,24 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
                     "timed_out": {"type": "boolean"},
                     "execution_time_ms": {"type": "integer"},
                     "explanation": {"type": "string"},
+                    "explanation_status": {
+                        "type": "string",
+                        "enum": [
+                            "ok",
+                            "disabled",
+                            "skipped_timeout",
+                            "skipped_no_output",
+                            "provider_failed",
+                        ],
+                        "description": "Why `explanation` is or is not present",
+                    },
+                    "code_submitted": {
+                        "type": "string",
+                        "description": (
+                            "Truncated echo of the submitted code, present "
+                            "only when timed_out=true so hangs are debuggable"
+                        ),
+                    },
                     "variables_captured": {"type": "object"},
                 },
                 required=["stdout", "exit_code"],

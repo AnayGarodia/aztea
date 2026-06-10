@@ -201,3 +201,74 @@ def test_python_executor_runtime_memory_bomb_killed_by_rlimit():
         # Static analyzer might catch this; either way it's contained.
         return
     assert result["exit_code"] != 0 or result.get("timed_out"), result
+
+
+def test_python_executor_timeout_echoes_submitted_code():
+    """A timed-out run must echo the (truncated) code so callers can debug
+    the hang — without it, stderr says only "timed out" and the submission
+    is gone."""
+    code = "import time\ntime.sleep(30)\n"
+    # explain=True deliberately: the timeout check must short-circuit the
+    # explainer (status skipped_timeout) without ever invoking an LLM.
+    result = python_executor.run({"code": code, "timeout": 1, "explain": True})
+    assert result["timed_out"] is True, result
+    assert "time.sleep(30)" in result.get("code_submitted", ""), result
+    assert result["explanation_status"] == "skipped_timeout", result
+
+
+def test_python_executor_success_omits_code_echo():
+    """code_submitted is a timeout-debugging aid only; clean runs must not
+    re-ship the submission back over the wire."""
+    result = python_executor.run({"code": "print('hi')", "explain": False})
+    assert result["exit_code"] == 0, result
+    assert "code_submitted" not in result, result
+
+
+def test_python_executor_explanation_status_disabled():
+    result = python_executor.run({"code": "print('x')", "explain": False})
+    assert result["explanation_status"] == "disabled", result
+    assert result["explanation"] == ""
+
+
+def test_python_executor_explanation_status_provider_failed(monkeypatch):
+    """When every LLM provider fails, callers must see provider_failed —
+    not an empty string indistinguishable from explain=False."""
+    def _boom(*args, **kwargs):
+        raise RuntimeError("no providers configured")
+
+    monkeypatch.setattr(python_executor, "run_with_fallback", _boom)
+    result = python_executor.run({"code": "print('x')", "explain": True})
+    assert result["explanation_status"] == "provider_failed", result
+    assert result["explanation"] == ""
+    assert result["llm_used"] is False
+
+
+def test_python_executor_explanation_status_ok(monkeypatch):
+    class _FakeResponse:
+        text = "Prints x to stdout."
+
+    monkeypatch.setattr(
+        python_executor, "run_with_fallback", lambda req: _FakeResponse()
+    )
+    result = python_executor.run({"code": "print('x')", "explain": True})
+    assert result["explanation_status"] == "ok", result
+    assert result["explanation"] == "Prints x to stdout."
+    assert result["llm_used"] is True
+
+
+def test_python_executor_static_alloc_limit_env_override(monkeypatch):
+    """Operators can tune the pre-spawn allocation guard via env; the
+    module reads it at import so we reload to exercise the parse+clamp."""
+    import importlib
+
+    monkeypatch.setenv("AZTEA_PYTHON_STATIC_ALLOC_LIMIT_MB", "16")
+    reloaded = importlib.reload(python_executor)
+    try:
+        assert reloaded._STATIC_ALLOCATION_LIMIT_BYTES == 16 * 1024 * 1024
+        result = reloaded.run(
+            {"code": "buf = b'x' * (20 * 1024 * 1024)", "explain": False}
+        )
+        assert (result.get("error") or {}).get("code") == "python_executor.memory_limit"
+    finally:
+        monkeypatch.delenv("AZTEA_PYTHON_STATIC_ALLOC_LIMIT_MB")
+        importlib.reload(python_executor)
