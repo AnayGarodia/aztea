@@ -30,7 +30,7 @@ Output: {
       "mx_method": "dns" | "heuristic",
       "possible_mail_ips": [str],              # heuristic path only (mail.<domain> probe)
       "txt": [str], "spf": str | None,         # "txt" check (needs dnspython)
-      "dmarc": {"present": bool, "policy": str | None},  # "dmarc" check (needs dnspython)
+      "dmarc": {"present": bool, "policy": str | None, "record": str},  # "dmarc" check (needs dnspython); "record" only when present
       "issues": [str]
     }
   ],
@@ -78,7 +78,7 @@ _HTTPS_PORT = 443
 # batch with mx+txt+dmarc stays inside the agent's sync wall budget.
 _DNS_QUERY_LIFETIME_S = 2.0
 _MAX_TXT_RECORDS = 20
-_TXT_VALUE_TRUNCATE = 300
+_VALUE_TRUNCATE_CHARS = 300
 _MAX_REDIRECTS = 5
 # Response headers a security audit cares about; reported when present.
 _SECURITY_HEADERS = (
@@ -199,10 +199,22 @@ class _RecordingRedirectHandler(urllib.request.HTTPRedirectHandler):
         self.chain: list[dict[str, Any]] = []
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
-        self.chain.append({"status": int(code), "to": str(newurl)[:_TXT_VALUE_TRUNCATE]})
+        self.chain.append({"status": int(code), "to": str(newurl)[:_VALUE_TRUNCATE_CHARS]})
         if len(self.chain) > _MAX_REDIRECTS:
             raise urllib.error.HTTPError(
                 req.full_url, code, f"redirect chain exceeded {_MAX_REDIRECTS} hops",
+                headers, fp,
+            )
+        # SSRF: the initial domain was validated, but a redirect can point at
+        # an internal/metadata host (302 -> http://169.254.169.254/...). Without
+        # this guard the agent would follow it AND echo the internal URL +
+        # response headers back via redirect_chain / security_headers.
+        try:
+            validate_outbound_url(newurl, "redirect")
+        except Exception as exc:
+            raise urllib.error.HTTPError(
+                req.full_url, code,
+                f"redirect target blocked by security policy: {exc}",
                 headers, fp,
             )
         return super().redirect_request(req, fp, code, msg, headers, newurl)
@@ -213,7 +225,7 @@ def _present_security_headers(headers: Any) -> dict[str, str]:
     if not headers:
         return {}
     return {
-        name: str(headers.get(name))[:_TXT_VALUE_TRUNCATE]
+        name: str(headers.get(name))[:_VALUE_TRUNCATE_CHARS]
         for name in _SECURITY_HEADERS
         if headers.get(name)
     }
@@ -292,11 +304,23 @@ def _dnspython_resolver():
     return resolver
 
 
+# dnspython raises these for "the name resolved but has no such record" —
+# a definitive absence. Everything else (timeout, SERVFAIL, no-nameservers)
+# is a transport failure where the check could not actually run. Matched by
+# class name so the module stays importable without dnspython installed.
+_DNS_ABSENT_EXC_NAMES = frozenset({"NXDOMAIN", "NoAnswer"})
+
+
+def _is_dns_absence(exc: Exception) -> bool:
+    """Pure: True when ``exc`` means 'no such record' vs a transport failure."""
+    return type(exc).__name__ in _DNS_ABSENT_EXC_NAMES
+
+
 def _resolve_txt_strings(resolver: Any, name: str) -> list[str]:
     """Side-effect: TXT RRset for ``name`` as decoded strings; raises on lookup failure."""
     answers = resolver.resolve(name, "TXT")
     return [
-        b"".join(r.strings).decode("utf-8", "replace")[:_TXT_VALUE_TRUNCATE]
+        b"".join(r.strings).decode("utf-8", "replace")[:_VALUE_TRUNCATE_CHARS]
         for r in answers
     ][:_MAX_TXT_RECORDS]
 
@@ -319,9 +343,8 @@ def _check_mx_heuristic_into(entry: dict[str, Any], domain: str) -> None:
         entry["possible_mail_ips"] = []
 
 
-def _check_mx_into(entry: dict[str, Any], domain: str) -> None:
+def _check_mx_into(entry: dict[str, Any], domain: str, resolver: Any) -> None:
     """Side-effect (mutating ``entry``): real MX RRset lookup via dnspython."""
-    resolver = _dnspython_resolver()
     if resolver is None:
         _check_mx_heuristic_into(entry, domain)
         return
@@ -335,15 +358,17 @@ def _check_mx_into(entry: dict[str, Any], domain: str) -> None:
             ),
             key=lambda m: m["priority"],
         )
-    except Exception:
+    except Exception as exc:
         _LOG.debug("MX lookup failed for %s", domain, exc_info=True)
         entry["mx"] = []
-        entry["issues"].append("No MX records found")
+        # Only assert absence on a definitive no-record answer; a transport
+        # failure means we don't know, so don't claim "No MX records found".
+        if _is_dns_absence(exc):
+            entry["issues"].append("No MX records found")
 
 
-def _check_txt_into(entry: dict[str, Any], domain: str) -> None:
+def _check_txt_into(entry: dict[str, Any], domain: str, resolver: Any) -> None:
     """Side-effect (mutating ``entry``): TXT RRset + SPF extraction."""
-    resolver = _dnspython_resolver()
     if resolver is None:
         # None (vs []) = "check could not run"; callers must not read this
         # as "domain has no TXT records".
@@ -352,10 +377,14 @@ def _check_txt_into(entry: dict[str, Any], domain: str) -> None:
         return
     try:
         txt = _resolve_txt_strings(resolver, domain)
-    except Exception:
+    except Exception as exc:
         _LOG.debug("TXT lookup failed for %s", domain, exc_info=True)
-        entry["txt"] = []
+        # Empty list only for a definitive no-record answer; None for a
+        # transport failure (the check could not run).
+        entry["txt"] = [] if _is_dns_absence(exc) else None
         entry["spf"] = None
+        if _is_dns_absence(exc):
+            entry["issues"].append("No SPF record found")
         return
     entry["txt"] = txt
     spf = next((t for t in txt if t.lower().startswith("v=spf1")), None)
@@ -367,16 +396,19 @@ def _check_txt_into(entry: dict[str, Any], domain: str) -> None:
 _DMARC_POLICY_RE = re.compile(r"\bp\s*=\s*(none|quarantine|reject)\b", re.IGNORECASE)
 
 
-def _check_dmarc_into(entry: dict[str, Any], domain: str) -> None:
+def _check_dmarc_into(entry: dict[str, Any], domain: str, resolver: Any) -> None:
     """Side-effect (mutating ``entry``): DMARC record presence + policy."""
-    resolver = _dnspython_resolver()
     if resolver is None:
         entry["dmarc"] = None
         return
     try:
         records = _resolve_txt_strings(resolver, f"_dmarc.{domain}")
-    except Exception:
+    except Exception as exc:
         _LOG.debug("DMARC lookup failed for %s", domain, exc_info=True)
+        if not _is_dns_absence(exc):
+            # Transport failure: check could not run — don't claim absence.
+            entry["dmarc"] = None
+            return
         records = []
     record = next((t for t in records if t.lower().startswith("v=dmarc1")), None)
     if record is None:
@@ -434,12 +466,16 @@ def _inspect_one(
     domain_ok = True
     if "dns" in checks:
         domain_ok = _check_dns_into(entry, domain)
+    # Resolve the dnspython resolver once per domain rather than once per
+    # record check — Resolver(configure=True) re-reads/parses resolv.conf on
+    # every construction. None when dnspython is absent (checks degrade).
+    resolver = _dnspython_resolver() if checks & {"mx", "txt", "dmarc"} else None
     if "mx" in checks:
-        _check_mx_into(entry, domain)
+        _check_mx_into(entry, domain, resolver)
     if "txt" in checks:
-        _check_txt_into(entry, domain)
+        _check_txt_into(entry, domain, resolver)
     if "dmarc" in checks:
-        _check_dmarc_into(entry, domain)
+        _check_dmarc_into(entry, domain, resolver)
     if "ssl" in checks:
         _check_ssl_into(entry, domain, warn_days)
     if "http" in checks:

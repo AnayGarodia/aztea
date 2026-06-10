@@ -91,8 +91,22 @@ _CODE_ECHO_CHARS = 2000
 # 32 MB is the right default floor: any literal sequence > 32 MB in submitted
 # code has no plausible legitimate use inside the sandbox. Operator-tunable
 # (env, NOT payload — callers must never be able to weaken the guard).
+# Floor 8 MB so the guard can't be set so low it rejects ordinary buffers;
+# ceiling 1 GB so it can't exceed any plausible worker's RLIMIT_AS backstop.
+_STATIC_ALLOC_LIMIT_MIN_MB = 8
+_STATIC_ALLOC_LIMIT_MAX_MB = 1024
+_STATIC_ALLOC_LIMIT_DEFAULT_MB = 32
 _STATIC_ALLOCATION_LIMIT_BYTES = (
-    max(8, min(int(os.environ.get("AZTEA_PYTHON_STATIC_ALLOC_LIMIT_MB", "32") or "32"), 1024))
+    max(
+        _STATIC_ALLOC_LIMIT_MIN_MB,
+        min(
+            int(
+                os.environ.get("AZTEA_PYTHON_STATIC_ALLOC_LIMIT_MB", str(_STATIC_ALLOC_LIMIT_DEFAULT_MB))
+                or str(_STATIC_ALLOC_LIMIT_DEFAULT_MB)
+            ),
+            _STATIC_ALLOC_LIMIT_MAX_MB,
+        ),
+    )
     * 1024
     * 1024
 )

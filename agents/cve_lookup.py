@@ -101,6 +101,11 @@ _EXPLOIT_KEYWORDS = (
     "actively exploited",
 )
 
+# Sentinel affected_range when OSV gave no comparable version window.
+# Produced in _build_pkg_result and short-circuited in _version_in_range —
+# named so the two sites can't drift apart.
+_RANGE_UNKNOWN = "see advisory"
+
 CveLookupMode = Literal["single", "list"]
 
 
@@ -609,7 +614,7 @@ def _version_in_range(version: str, affected_range: str) -> bool:
     Unparseable input stays permissive (True): on a security tool, a false
     positive beats silently dropping a real vulnerability.
     """
-    if not version or not affected_range or affected_range == "see advisory":
+    if not version or not affected_range or affected_range == _RANGE_UNKNOWN:
         return True
     try:
         spec = SpecifierSet(affected_range)
@@ -770,7 +775,7 @@ def _build_pkg_result(
     """Pure: shape one package-mode CVE row for the response array."""
     fixed_in = hydrated.get("fixed_in") or fallback_fixed_in or ""
     if not affected_range:
-        affected_range = f"<{fixed_in}" if fixed_in else "see advisory"
+        affected_range = f"<{fixed_in}" if fixed_in else _RANGE_UNKNOWN
     return {
         "package": pkg_name,
         "version": pkg_version or "unknown",
@@ -781,7 +786,7 @@ def _build_pkg_result(
         "published": hydrated["published"],
         "last_modified": hydrated["last_modified"],
         "affected_range": affected_range,
-        "fixed_in": fixed_in or "see advisory",
+        "fixed_in": fixed_in or _RANGE_UNKNOWN,
         "exploit_available": _has_exploit_marker(str(hydrated.get("description") or "")),
     }
 

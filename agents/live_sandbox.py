@@ -59,7 +59,10 @@ def _payload_size_error(payload: dict[str, Any]) -> dict[str, Any] | None:
     engine would otherwise fail later while building the signed receipt.
     """
     try:
-        size = len(json.dumps(payload, ensure_ascii=False))
+        # Measure bytes, not characters — len() of an ensure_ascii=False
+        # string counts code points, so a non-ASCII payload could be 3-4x
+        # the byte cap before tripping it.
+        size = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
     except (TypeError, ValueError):
         return _err(
             "live_sandbox.invalid_input",

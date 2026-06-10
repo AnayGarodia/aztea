@@ -10,6 +10,8 @@ chrome-path resolution.
 
 from __future__ import annotations
 
+import pytest
+
 from agents import browser_agent
 from agents import cve_lookup
 from agents import db_sandbox
@@ -235,6 +237,12 @@ class _FakeTXTRecord:
         self.strings = strings
 
 
+class NXDOMAIN(Exception):
+    """Stand-in for dns.resolver.NXDOMAIN — class NAME is what the agent's
+    _is_dns_absence classifier matches, so a missing record reads as a
+    definitive absence (not a transport failure)."""
+
+
 class _FakeResolver:
     """Minimal dns.resolver.Resolver stand-in keyed on (name, rtype)."""
 
@@ -244,7 +252,7 @@ class _FakeResolver:
     def resolve(self, name, rtype):
         key = (name, rtype)
         if key not in self._table:
-            raise RuntimeError(f"NXDOMAIN {key}")
+            raise NXDOMAIN(f"{key}")
         return self._table[key]
 
 
@@ -782,3 +790,180 @@ def test_lighthouse_opportunity_extraction_handles_modern_shapes():
     assert modern["savings_ms"] == 800
     bytes_only = next(o for o in opps if o["id"] == "bytes-only")
     assert bytes_only["savings_bytes"] == 50_000
+
+
+# ---------------------------------------------------------------------------
+# /review + /cso remediation: regression tests for the fixes
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_pypi_multi_ge_bound_picks_numerically_lowest():
+    """Regression: lexicographic sort put '10.5' before '2.0', feeding OSV
+    the wrong installed version."""
+    from agents._manifest_parsing import parse_pypi_manifest
+
+    for manifest in ("pkg>=2.0,>=10.5\n", "pkg>=10.5,>=2.0\n"):
+        pkgs, _ = parse_pypi_manifest(manifest)
+        assert pkgs == [("pkg", "2.0")], manifest
+
+
+def test_manifest_npm_upper_bound_only_is_unpinned():
+    """Regression: '<2.0.0' returned the ceiling as if it were installed."""
+    from agents._manifest_parsing import _npm_version_from_spec
+
+    assert _npm_version_from_spec("<2.0.0") == ("", None)
+    assert _npm_version_from_spec("<=3.1") == ("", None)
+    # A real range still yields its lower bound.
+    assert _npm_version_from_spec(">=1.2.0 <2.0.0") == ("1.2.0", None)
+
+
+def test_dns_inspector_redirect_to_internal_host_blocked(monkeypatch):
+    """SSRF: a redirect to a private/metadata host must be refused per-hop,
+    not followed (and its URL/headers echoed back)."""
+    from agents import dns_inspector
+
+    handler = dns_inspector._RecordingRedirectHandler()
+
+    class _Req:
+        full_url = "http://example.com"
+
+    # validate_outbound_url raises for the internal target.
+    monkeypatch.setattr(
+        dns_inspector,
+        "validate_outbound_url",
+        lambda url, field: (_ for _ in ()).throw(ValueError("blocked private IP")),
+    )
+    import urllib.error
+
+    with pytest.raises(urllib.error.HTTPError):
+        handler.redirect_request(
+            _Req(), None, 302, "Found", {}, "http://169.254.169.254/latest/meta-data/"
+        )
+
+
+def test_dns_inspector_transport_failure_not_reported_as_absence(monkeypatch):
+    """A resolver timeout must NOT be reported as 'No MX records found' —
+    that conflates outage with definitive absence."""
+    from agents import dns_inspector
+
+    class _TimeoutResolver:
+        def resolve(self, name, rtype):
+            raise RuntimeError("LifetimeTimeout")  # not NXDOMAIN/NoAnswer
+
+    monkeypatch.setattr(
+        dns_inspector, "_dnspython_resolver", lambda: _TimeoutResolver()
+    )
+    result = dns_inspector.run(
+        {"domains": ["example.com"], "checks": ["mx", "txt", "dmarc"]}
+    )
+    entry = result["results"][0]
+    assert "No MX records found" not in entry["issues"]
+    assert entry["txt"] is None  # transport failure -> could not run
+    assert entry["dmarc"] is None
+
+
+def test_dns_inspector_txt_dmarc_null_without_dnspython(monkeypatch):
+    """Documented contract: dnspython absent -> txt/dmarc are None (not [])."""
+    from agents import dns_inspector
+
+    monkeypatch.setattr(dns_inspector, "_dnspython_resolver", lambda: None)
+    result = dns_inspector.run(
+        {"domains": ["example.com"], "checks": ["txt", "dmarc"]}
+    )
+    entry = result["results"][0]
+    assert entry["txt"] is None
+    assert entry["spf"] is None
+    assert entry["dmarc"] is None
+    assert "No SPF record found" not in entry["issues"]
+
+
+def test_cve_lookup_kev_enrichment_in_cve_id_mode(monkeypatch):
+    """KEV stamping runs in cve_ids mode (id_key='cve_id'), not just package
+    mode — a regression reordering normalization would silently no-op it."""
+    from agents import _kev_feed
+
+    _patch_cve_network(monkeypatch)
+    monkeypatch.setattr(
+        _kev_feed,
+        "_fetch_catalog",
+        lambda: {"CVE-2024-99999": {"date_added": "2024-03-01", "ransomware": True}},
+    )
+    _kev_feed.reset_cache()
+    result = cve_lookup.run({"cve_id": "CVE-2024-99999"})
+    row = result["results"][0]
+    assert row["exploit_source"] == "cisa_kev"
+    assert row["kev"] == {"listed": True, "date_added": "2024-03-01"}
+
+
+def test_kev_feed_failure_cooldown(monkeypatch):
+    """A failed fetch is cached for the cooldown window, then retried —
+    a dead feed must not add a 10s timeout to every call."""
+    from agents import _kev_feed
+
+    calls = {"n": 0}
+
+    def fail():
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(_kev_feed, "_fetch_catalog", fail)
+    monkeypatch.setattr(_kev_feed.time, "time", lambda: 1000.0)
+    _kev_feed.reset_cache()
+    assert _kev_feed.kev_entries(["CVE-2024-1"]) is None
+    assert _kev_feed.kev_entries(["CVE-2024-1"]) is None
+    assert calls["n"] == 1, "within cooldown, no re-fetch"
+
+    # Past the cooldown -> one more fetch.
+    monkeypatch.setattr(
+        _kev_feed.time, "time", lambda: 1000.0 + _kev_feed._FETCH_FAILURE_COOLDOWN_S + 1
+    )
+    _kev_feed.kev_entries(["CVE-2024-1"])
+    assert calls["n"] == 2
+
+
+def test_db_sandbox_no_index_hint_for_subquery_scan():
+    """SCAN SUBQUERY / SCAN CONSTANT name derived ops, not real tables —
+    no addable index, so no suggestion."""
+    from agents import db_sandbox
+
+    suggestions = db_sandbox._index_suggestions([
+        {"query_plan": [
+            {"detail": "SCAN SUBQUERY 1"},
+            {"detail": "SCAN CONSTANT ROW"},
+        ]}
+    ])
+    assert suggestions == []
+
+
+def test_live_sandbox_payload_cap_measured_in_bytes():
+    """The cap is bytes: a multi-byte-char payload just under the char count
+    but over the byte cap must still be rejected."""
+    from agents import live_sandbox
+
+    # Each '€' is 3 UTF-8 bytes; 100k of them = 300KB > 256KB cap but only
+    # 100k chars.
+    payload = {"action": "sandbox_exec", "input": {"cmd": "€" * 100_000}}
+    result = live_sandbox.run(payload)
+    assert result["error"]["code"] == "live_sandbox.payload_too_large"
+
+
+def test_browser_agent_network_types_rejects_non_list():
+    from agents import browser_agent
+
+    err = browser_agent._normalize_network_types("xhr")
+    assert err["error"]["code"] == "browser_agent.invalid_network_types"
+
+
+def test_accessibility_empty_vendored_axe_not_cached(monkeypatch, tmp_path):
+    """A truncated/empty vendored read must not poison the cache for the
+    worker's lifetime."""
+    from agents import accessibility_auditor as aa
+
+    empty = tmp_path / "axe.min.js"
+    empty.write_text("")
+    monkeypatch.setattr(aa, "_VENDORED_AXE_PATH", empty)
+    monkeypatch.setattr(aa, "_vendored_axe_cache", None)
+    assert aa._vendored_axe_source() is None
+    # Now a good file appears — must be picked up (not stuck on cached "").
+    empty.write_text("/*! axe v4.8.4 */ window.axe={};")
+    assert aa._vendored_axe_source() is not None

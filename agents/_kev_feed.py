@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 
 import requests
@@ -39,6 +40,10 @@ _USER_AGENT = "aztea-cve-lookup/1.0"
 # latency to every cve_lookup call.
 _FETCH_FAILURE_COOLDOWN_S = 300
 _kev_cache: tuple[float, dict[str, dict] | None] | None = None
+# Agents run on worker threads; without this lock, N concurrent cve_lookup
+# calls arriving on a cold/expired cache would each fetch + parse the
+# multi-MB catalog (thundering herd). The lock collapses that to one fetch.
+_kev_lock = threading.Lock()
 
 
 def _parse_catalog(payload: dict) -> dict[str, dict]:
@@ -88,9 +93,13 @@ def kev_entries(cve_ids: list[str]) -> dict[str, dict] | None:
     global _kev_cache
     now = time.time()
     if _kev_cache is None or now >= _kev_cache[0]:
-        catalog = _fetch_catalog()
-        ttl = _KEV_TTL_S if catalog is not None else _FETCH_FAILURE_COOLDOWN_S
-        _kev_cache = (now + ttl, catalog)
+        with _kev_lock:
+            # Double-checked: another thread may have refreshed while we
+            # waited on the lock, so re-test before fetching.
+            if _kev_cache is None or time.time() >= _kev_cache[0]:
+                catalog = _fetch_catalog()
+                ttl = _KEV_TTL_S if catalog is not None else _FETCH_FAILURE_COOLDOWN_S
+                _kev_cache = (now + ttl, catalog)
     catalog = _kev_cache[1]
     if catalog is None:
         return None

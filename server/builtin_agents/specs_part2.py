@@ -267,8 +267,9 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
                             "(mx_method='dns'; falls back to a mail.<domain> "
                             "heuristic without dnspython); txt returns TXT "
                             "records + extracted SPF; dmarc returns "
-                            "{present, policy} from _dmarc.<domain>. txt and "
-                            "dmarc are opt-in to keep the default path fast."
+                            "{present, policy, record} from _dmarc.<domain> "
+                            "(record only when present). txt and dmarc are "
+                            "opt-in to keep the default path fast."
                         ),
                     },
                     "cert_expiry_warn_days": {

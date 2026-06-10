@@ -149,11 +149,12 @@ _AGENT_WALL_BUDGET_OVERRIDES: dict[str, float] = {
     # tier remains available for very large sites via the 1200 s override
     # below. Audit flagged this as "async even at ~4s — could fit sync".
     _ACCESSIBILITY_AUDITOR_AGENT_ID: 20.0,
-    # 2026-06-10 — dns_inspector gained mx/txt/dmarc record checks (each a
-    # dnspython query with a 2 s lifetime). Worst case — 10 domains with
-    # every check against a slow resolver — no longer fits the 8 s default;
-    # 15 s covers it because per-domain inspections run in parallel.
-    _DNS_INSPECTOR_AGENT_ID: 15.0,
+    # 2026-06-10 — dns_inspector gained mx/txt/dmarc record checks. Checks
+    # for ONE domain run serially in _inspect_one, so a single slow domain
+    # with every check sums mx(2) + txt(2) + dmarc(2) + ssl(5) + http(5) =
+    # 16 s; parallelism is only across domains, not across a domain's checks.
+    # 25 s (the dependency_auditor tier) covers that serial worst case.
+    _DNS_INSPECTOR_AGENT_ID: 25.0,
 }
 
 # 2026-05-18 (C3) — ASYNC path budget. Distinct from the sync table above.

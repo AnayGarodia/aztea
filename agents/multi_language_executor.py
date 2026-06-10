@@ -135,7 +135,7 @@ _PROCESS_SPAWN_PATTERNS = {
 _PRIVATE_HOST_RE = re.compile("|".join(_PRIVATE_HOST_PATTERNS), re.IGNORECASE)
 
 
-def _first_pattern_hit(
+def _any_pattern_hit(
     language: str, code: str, pattern_table: dict
 ) -> bool:
     """Pure: does any pattern registered for ``language`` match ``code``?"""
@@ -164,7 +164,7 @@ def _is_code_network_safe(language: str, code: str) -> tuple[bool, str | None]:
             "or cloud-metadata host. The sandbox has no network and "
             "must not be used to reach internal services (SSRF policy).",
         )
-    if _first_pattern_hit(language, code, _NETWORK_API_PATTERNS):
+    if _any_pattern_hit(language, code, _NETWORK_API_PATTERNS):
         return (
             False,
             "Code uses a network-capable API surface "
@@ -172,7 +172,7 @@ def _is_code_network_safe(language: str, code: str) -> tuple[bool, str | None]:
             "remove the network call or run on a host that has "
             "explicit egress.",
         )
-    if _first_pattern_hit(language, code, _PROCESS_SPAWN_PATTERNS):
+    if _any_pattern_hit(language, code, _PROCESS_SPAWN_PATTERNS):
         return (
             False,
             "Code spawns external processes (os/exec, std::process, "
@@ -402,6 +402,14 @@ def _run_typescript(code: str, stdin: str, timeout: float) -> dict[str, Any]:
     )
 
 
+# `go run` interleaves compile and run in one subprocess; compiler
+# diagnostics are the only way to tell a build break from a runtime crash.
+# Matches "./main.go:3:5: undefined: foo" and the "# command-line-arguments"
+# build-failure banner.
+_GO_COMPILE_ERROR_RE = re.compile(r"\.go:\d+:\d+:|^# command-line-arguments", re.MULTILINE)
+_RUSTC_COMPILE_TIMEOUT_S = 60
+
+
 def _run_go(code: str, stdin: str, timeout: float) -> dict[str, Any]:
     go_bin = _which("go")
     if go_bin is None:
@@ -420,14 +428,6 @@ def _run_go(code: str, stdin: str, timeout: float) -> dict[str, Any]:
     ):
         result["error_kind"] = "compile"
     return {**result, "runtime": runtime_ver}
-
-
-_RUSTC_COMPILE_TIMEOUT_S = 60
-# `go run` interleaves compile and run in one subprocess; compiler
-# diagnostics are the only way to tell a build break from a runtime crash.
-# Matches "./main.go:3:5: undefined: foo" and the "# command-line-arguments"
-# build-failure banner.
-_GO_COMPILE_ERROR_RE = re.compile(r"\.go:\d+:\d+:|^# command-line-arguments", re.MULTILINE)
 
 
 def _run_rust_via_script(code: str, stdin: str, timeout: float) -> dict[str, Any] | None:

@@ -305,12 +305,19 @@ def _vendored_axe_source() -> str | None:
     once per worker process, not once per audit.
     """
     global _vendored_axe_cache
-    if _vendored_axe_cache is None:
+    # `not` (rather than `is None`): a transient truncated/empty read must
+    # not be memoized — caching "" would inject an empty script and leave
+    # `axe` undefined for the life of the worker.
+    if not _vendored_axe_cache:
         try:
-            _vendored_axe_cache = _VENDORED_AXE_PATH.read_text(encoding="utf-8")
+            content = _VENDORED_AXE_PATH.read_text(encoding="utf-8")
         except OSError:
             _LOG.warning("vendored axe-core missing at %s", _VENDORED_AXE_PATH)
             return None
+        if not content.strip():
+            _LOG.warning("vendored axe-core at %s is empty", _VENDORED_AXE_PATH)
+            return None
+        _vendored_axe_cache = content
     return _vendored_axe_cache
 
 

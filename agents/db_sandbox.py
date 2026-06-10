@@ -316,6 +316,10 @@ def _run_statements(
 # (modern SQLite) or "SCAN TABLE <table>" (pre-3.36). A scan that uses an
 # index says "USING INDEX"/"USING COVERING INDEX" and is not flagged.
 _FULL_SCAN_RE = _re.compile(r"^SCAN (?:TABLE )?(\S+)")
+# Plan rows like "SCAN SUBQUERY 1" / "SCAN CONSTANT ROW" name a derived
+# operation, not a real table — an index can't be added to them, so they
+# must not produce a suggestion.
+_NON_TABLE_SCAN_TARGETS = frozenset({"SUBQUERY", "CONSTANT", "UNION", "EXCEPT", "INTERSECT"})
 
 
 def _index_suggestions(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -336,7 +340,11 @@ def _index_suggestions(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if not m:
                 continue
             table = m.group(1)
-            if table.startswith("sqlite_") or (index, table) in seen:
+            if (
+                table.startswith("sqlite_")
+                or table.upper() in _NON_TABLE_SCAN_TARGETS
+                or (index, table) in seen
+            ):
                 continue
             seen.add((index, table))
             suggestions.append({

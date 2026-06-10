@@ -28,12 +28,17 @@ import re
 from typing import Any
 
 from packaging.requirements import InvalidRequirement, Requirement
+from packaging.version import InvalidVersion, Version
 
 # Lower bound of an npm range expression, prerelease identifiers included.
 # First version in the spec string is the range's lower bound for every
 # shape npm emits (^x.y.z, ~x.y, >=a <b, x.y.z - a.b.c, plain pins, "16").
 # Prerelease/build identifiers only attach to a full x.y.z triple.
 _NPM_SEMVER_RE = re.compile(r"\d+(?:\.\d+(?:\.\d+(?:-[0-9A-Za-z.-]+)?)?)?")
+# Upper-bound-only specs (<x, <=x) have no lower bound — the first version
+# in the string IS the bound, which is NOT the installed version. Treat as
+# unpinned rather than auditing the ceiling as if it were installed.
+_NPM_UPPER_BOUND_ONLY_RE = re.compile(r"^\s*<=?\s*[\d.]")
 # Specs that point at code instead of a registry version — not auditable.
 _NPM_URL_SPEC_RE = re.compile(r"^(?:git\+|github:|gitlab:|bitbucket:|https?:|file:|link:|workspace:)")
 _VCS_PREFIXES = ("git+", "hg+", "svn+", "bzr+")
@@ -63,6 +68,20 @@ def _classify_pip_option(line: str) -> str | None:
     return None
 
 
+def _lowest_version(versions: list[str]) -> str:
+    """Pure: the numerically-lowest version string.
+
+    Sorted by packaging.Version, NOT lexicographically — string sort puts
+    '10.5' before '2.0', which would feed OSV the wrong "installed" version
+    on a multi-bound spec. Falls back to string sort only if a bound is not
+    PEP 440-parseable.
+    """
+    try:
+        return min(versions, key=Version)
+    except InvalidVersion:
+        return min(versions)
+
+
 def _pin_from_specifier(req: Requirement) -> str:
     """Pure: best auditable version from a requirement's specifier set.
 
@@ -72,9 +91,9 @@ def _pin_from_specifier(req: Requirement) -> str:
     eq_versions = [s.version for s in req.specifier if s.operator in ("==", "===")]
     if eq_versions:
         return eq_versions[0].rstrip(".*")
-    ge_versions = sorted(s.version for s in req.specifier if s.operator == ">=")
+    ge_versions = [s.version for s in req.specifier if s.operator == ">="]
     if ge_versions:
-        return ge_versions[0]
+        return _lowest_version(ge_versions)
     return ""
 
 
@@ -118,6 +137,8 @@ def _npm_version_from_spec(ver_spec: Any) -> tuple[str, str | None]:
         return "", None
     if _NPM_URL_SPEC_RE.match(spec):
         return "", "vcs_url_not_audited"
+    if _NPM_UPPER_BOUND_ONLY_RE.match(spec):
+        return "", None
     m = _NPM_SEMVER_RE.search(spec)
     return (m.group(0) if m else "", None)
 
