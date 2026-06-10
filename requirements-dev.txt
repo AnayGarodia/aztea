@@ -8,8 +8,10 @@ aiodns==3.6.1
     # via checkov
 aiohappyeyeballs==2.6.2
     # via aiohttp
-aiohttp==3.13.5
-    # via checkov
+aiohttp==3.14.1
+    # via
+    #   -r requirements.in
+    #   checkov
 aiomultiprocess==0.9.1
     # via checkov
 aiosignal==1.4.0
@@ -45,6 +47,8 @@ attrs==26.1.0
     #   jsonschema
     #   referencing
     #   semgrep
+babel==2.18.0
+    # via courlan
 bandit==1.9.4
     # via -r requirements.in
 bc-detect-secrets==1.5.47
@@ -58,6 +62,7 @@ beartype==0.22.9
 beautifulsoup4==4.14.3
     # via
     #   -r requirements.in
+    #   markdownify
     #   policy-sentry
 boltons==21.0.0
     # via
@@ -89,6 +94,7 @@ certifi==2026.5.20
     #   httpx
     #   requests
     #   sentry-sdk
+    #   trafilatura
 cffi==2.0.0
     # via
     #   cryptography
@@ -96,8 +102,10 @@ cffi==2.0.0
 charset-normalizer==3.4.7
     # via
     #   checkov
+    #   htmldate
     #   pdfminer-six
     #   requests
+    #   trafilatura
 checkov==3.2.529
     # via -r requirements.in
 click==8.1.8
@@ -125,6 +133,8 @@ configargparse==1.7.5
     # via checkov
 contextlib2==21.6.0
     # via schema
+courlan==1.4.0
+    # via trafilatura
 coverage==7.14.0
     # via -r requirements.in
 cryptography==48.0.0
@@ -134,6 +144,8 @@ cryptography==48.0.0
     #   pyjwt
 cyclonedx-python-lib==7.6.2
     # via checkov
+dateparser==1.4.0
+    # via htmldate
 decorator==5.3.1
     # via bc-jsonpath-ng
 defusedxml==0.7.1
@@ -165,9 +177,6 @@ fastapi==0.136.1
     # via
     #   -r requirements.in
     #   sentry-sdk
-    # 0.136.3 is OSV MAL-2026-4750: malicious release that injects an
-    # undocumented `fastar` dep into the [standard] extra. The `.in`
-    # constraint is `fastapi!=0.136.3`; this is the last clean version.
 filelock==3.29.0
     # via
     #   huggingface-hub
@@ -202,6 +211,8 @@ h11==0.16.0
     #   uvicorn
 hf-xet==1.5.0
     # via huggingface-hub
+htmldate==1.10.0
+    # via trafilatura
 httpcore==1.0.9
     # via httpx
 httptools==0.8.0
@@ -271,6 +282,8 @@ jsonschema-specifications==2025.9.1
     #   openapi-schema-validator
 junit-xml==1.9
     # via checkov
+justext==3.0.2
+    # via trafilatura
 lark==1.3.1
     # via
     #   bc-python-hcl2
@@ -286,10 +299,20 @@ license-expression==30.4.4
     #   spdx-tools
 limits==5.8.0
     # via slowapi
+lxml==6.1.1
+    # via
+    #   htmldate
+    #   justext
+    #   lxml-html-clean
+    #   trafilatura
+lxml-html-clean==0.4.5
+    # via lxml
 markdown==3.10.2
     # via cloudsplaining
 markdown-it-py==4.2.0
     # via rich
+markdownify==1.2.2
+    # via -r requirements.in
 markupsafe==3.0.3
     # via jinja2
 mccabe==0.7.0
@@ -493,7 +516,10 @@ pytest-timeout==2.4.0
 pytest-xdist==3.8.0
     # via -r requirements-dev.in
 python-dateutil==2.9.0.post0
-    # via botocore
+    # via
+    #   botocore
+    #   dateparser
+    #   htmldate
 python-dotenv==1.2.2
     # via
     #   -r requirements.in
@@ -501,6 +527,8 @@ python-dotenv==1.2.2
     #   uvicorn
 python-multipart==0.0.29
     # via mcp
+pytz==2026.2
+    # via dateparser
 pyyaml==6.0.3
     # via
     #   -r requirements.in
@@ -525,6 +553,7 @@ referencing==0.37.0
 regex==2026.5.9
     # via
     #   -r requirements.in
+    #   dateparser
     #   pycep-parser
     #   transformers
 requests==2.34.2
@@ -583,9 +612,12 @@ sentry-sdk==2.60.0
     # via -r requirements.in
 shellingham==1.5.4
     # via typer
+simplemma==1.2.0
+    # via -r requirements.in
 six==1.17.0
     # via
     #   junit-xml
+    #   markdownify
     #   python-dateutil
     #   rfc3339-validator
 slowapi==0.1.9
@@ -624,6 +656,8 @@ termcolor==2.3.0
     # via checkov
 threadpoolctl==3.6.0
     # via scikit-learn
+tld==0.13.2
+    # via courlan
 tokenizers==0.22.2
     # via transformers
 tomli==2.4.1
@@ -637,6 +671,8 @@ tqdm==4.67.3
     #   openai
     #   sentence-transformers
     #   transformers
+trafilatura==2.1.0
+    # via -r requirements.in
 transformers==5.9.0
     # via sentence-transformers
 typer==0.23.1
@@ -645,6 +681,7 @@ typer==0.23.1
     #   transformers
 typing-extensions==4.15.0
     # via
+    #   aiohttp
     #   aiosignal
     #   anthropic
     #   anyio
@@ -679,6 +716,8 @@ typing-inspection==0.4.2
     #   mcp
     #   pydantic
     #   pydantic-settings
+tzlocal==5.3.1
+    # via dateparser
 unidiff==0.7.5
     # via bc-detect-secrets
 uritools==6.1.2
@@ -687,10 +726,13 @@ urllib3==2.7.0
     # via
     #   botocore
     #   checkov
+    #   courlan
     #   docker
+    #   htmldate
     #   requests
     #   semgrep
     #   sentry-sdk
+    #   trafilatura
 uvicorn==0.48.0
     # via
     #   -r requirements.in

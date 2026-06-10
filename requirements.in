@@ -81,6 +81,10 @@ pytest>=8.0.0
 # at collection time.
 pytest-asyncio>=0.21
 checkov>=3.2.0
+# 2026-06-10: aiohttp arrives transitively via checkov; floor it at 3.14.0 so a
+# recompile can't pin <3.14, which carries CVE-2026-34993 / CVE-2026-47265 that
+# pip-audit --strict fails CI on. 3.14.0 is the fix release.
+aiohttp>=3.14.0
 # 2026-05-20: quant_patch_validator uses Hypothesis to generate adversarial
 # numeric inputs for differential fuzzing. Was previously dev-only, but the
 # agent ships in the curated public catalog so prod must have it too.
@@ -88,6 +92,9 @@ hypothesis>=6.100
 # 2026-05-20: jwt_validator imports `jwt` (PyJWT) at the verify call site.
 # Was relying on transitive resolution; making the dep explicit so a future
 # dependency tree shuffle doesn't break the agent.
+# NOTE: PyJWT is capped at <2.13 by semgrep's transitive `pyjwt[crypto]~=2.12.0`
+# pin (true as of semgrep 1.165). PyJWT 2.13 fixes PYSEC-2026-175/177/178/179, so
+# pip-audit ignores those 4 in ci.yml until semgrep relaxes the cap. See ci.yml.
 PyJWT>=2.8
 # 2026-05-20: openapi_validator imports openapi_spec_validator to validate
 # OpenAPI 3.x specs. Same explicit-dep rationale as PyJWT above.

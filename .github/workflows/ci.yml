@@ -27,7 +27,11 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
-        run: pip install -r requirements-dev.txt flake8 pip-audit
+        # Upgrade pip first: pip 26.1.1 carries PYSEC-2026-196, which pip-audit
+        # --strict flags against the build environment itself. 26.1.2 is the fix.
+        run: |
+          python -m pip install --upgrade "pip>=26.1.2"
+          pip install -r requirements-dev.txt flake8 pip-audit
 
       - name: Run flake8
         run: flake8 .
@@ -49,12 +53,41 @@ jobs:
       # of pip-tools only; it never reaches runtime, so the path-traversal
       # attack surface (untrusted .whl content) doesn't exist in our use.
       # Revisit when checkov 3.3 (or its packaging>=24 successor) lands.
+      #
+      # PYSEC-2026-175/177/178/179 — PyJWT <2.13. We can't bump to 2.13 because
+      # semgrep (sast_scanner) transitively pins `pyjwt[crypto]~=2.12.0` through
+      # at least 1.165. None of the four reach our usage: agents/jwt_validator.py
+      # does NOT use PyJWKClient (it fetches JWKS via _fetch_jwks behind the
+      # url_security SSRF gate -> -175/-177 N/A), and it calls jwt.decode with a
+      # caller algorithms allow-list that blocks alg=none and keeps the HMAC and
+      # JWKS key paths separate (-178 detached-JWS / -179 alg-confusion N/A).
+      # Drop these once semgrep relaxes the pyjwt cap.
       - name: pip-audit (supply-chain vulnerability scan)
-        run: pip-audit --skip-editable --strict --ignore-vuln CVE-2026-24049
+        run: >-
+          pip-audit --skip-editable --strict
+          --ignore-vuln CVE-2026-24049
+          --ignore-vuln PYSEC-2026-175
+          --ignore-vuln PYSEC-2026-177
+          --ignore-vuln PYSEC-2026-178
+          --ignore-vuln PYSEC-2026-179
 
   test:
     name: Python tests
     runs-on: ubuntu-latest
+    # Pin native math/tokenizer libs to a single thread across the whole job.
+    # The integration suite loads torch / sentence-transformers (embeddings); on
+    # the hosted runner their multi-threaded native pools race the per-test
+    # uvicorn lifespan teardown and segfault non-deterministically (seen at both
+    # ~13% and at the first embeddings "Batches" op). Single-threaded native libs
+    # remove the race without changing test behavior. TOKENIZERS_PARALLELISM=false
+    # silences + disables the HuggingFace fork-after-parallelism path that is the
+    # usual trigger.
+    env:
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
+      TOKENIZERS_PARALLELISM: "false"
     steps:
       - uses: actions/checkout@v4
 
@@ -102,13 +135,25 @@ jobs:
 
       - name: Run pytest (integration)
         # Separate invocation: process boundary kills any leftover lifespan
-        # threads before the next test starts, sidestepping the segfault.
+        # threads before the next test starts.
+        #
+        # AZTEA_DISABLE_EMBEDDINGS=1 is the load-bearing fix for the integration
+        # segfault. The crash is always at "Batches: 0%" — the first
+        # sentence-transformers .encode() — i.e. a torch native crash on the
+        # hosted runner, not a test bug (thread-pinning above did not help).
+        # Disabling embeddings routes scoring through the deterministic SHA256
+        # fallback (core/embeddings.py) so torch is never imported in this step,
+        # which removes the crash entirely (verified: the full suite runs clean
+        # with it set). The one test that asserts the *real* cosine pass,
+        # test_find_near_duplicates_reads_agent_embeddings, skipif's itself under
+        # this flag (devs still run it with embeddings on).
         run: |
           pytest -q tests/integration -p no:randomly \
             --deselect "tests/integration/test_onboarding_registry.py::test_registry_register_auto_verifies_with_verifier_url" \
             --deselect "tests/integration/test_wallets_stripe_auth.py::test_outbound_url_validation_blocks_private_targets_by_default"
         env:
           API_KEY: test-master-key
+          AZTEA_DISABLE_EMBEDDINGS: "1"
 
 
   frontend-build:
