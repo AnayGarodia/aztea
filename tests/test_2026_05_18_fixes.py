@@ -64,9 +64,13 @@ def test_a1_dependency_auditor_surfaces_parse_warnings_and_flags():
         })
 
     warnings = result["parse_warnings"]
-    assert any(w.get("reason") == "unparseable" for w in warnings), (
-        f"parse_warnings should flag the '-e git+...' line: {warnings}"
-    )
+    # The '-e git+...' line must surface a warning. Originally flagged as
+    # generic "unparseable"; the 2026-06-10 parser rewrite classifies it
+    # as editable_not_audited — the invariant is "not silently dropped",
+    # not the exact reason string.
+    assert any(
+        w.get("line") == "-e git+https://x" and w.get("reason") for w in warnings
+    ), f"parse_warnings should flag the '-e git+...' line: {warnings}"
     assert any(w.get("reason") == "duplicate_entry" for w in warnings), (
         f"parse_warnings should flag duplicate 'requests' entries: {warnings}"
     )
