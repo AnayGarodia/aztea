@@ -264,7 +264,8 @@ def test_browser_agent_rejects_invalid_action():
     assert result["error"]["code"] == "browser_agent.invalid_action"
 
 
-def test_browser_agent_request_guard_aborts_private_subrequests():
+def test_browser_agent_request_guard_aborts_private_subrequests(monkeypatch):
+    monkeypatch.delenv("ALLOW_PRIVATE_OUTBOUND_URLS", raising=False)  # force SSRF enforcement (dev .env sets it on)
     events: list[str] = []
 
     class _FakeRoute:

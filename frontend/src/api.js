@@ -273,6 +273,35 @@ async function request(path, {
   }
 }
 
+// ── Web playground (public, anonymous; /scrape + /web/verify) ───────────────────
+
+// POST /scrape — anonymous. Returns 200 with {success, data} | {success:false,error};
+// 503 when the web API is disabled. throwOnError:false so the page renders inline.
+export async function scrapeWeb(url, formats = ['markdown'], followLinks = 0) {
+  const { ok, status, body } = await request('/scrape', {
+    method: 'POST', body: { url, formats, follow_links: followLinks }, throwOnError: false,
+  })
+  return { ok, status, body }
+}
+
+// POST /web/verify — verify a signed observation receipt without re-crawling.
+export async function verifyWebReceipt(receipt) {
+  const { body } = await request('/web/verify', {
+    method: 'POST', body: { receipt }, throwOnError: true,
+  })
+  return body // {valid, checks?, claim, note?, error?}
+}
+
+// POST /web/act — drive web_actor (interact | dry_run | preview). Anonymous; gated
+// server-side by AZTEA_ACTION_WEB_ENABLED (503 when off). throwOnError:false so the
+// page renders the agent envelope (result or {error}) inline.
+export async function webAct(payload) {
+  const { ok, status, body } = await request('/web/act', {
+    method: 'POST', body: payload, throwOnError: false,
+  })
+  return { ok, status, body }
+}
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 export async function authRegister(username, email, password, role = 'both') {

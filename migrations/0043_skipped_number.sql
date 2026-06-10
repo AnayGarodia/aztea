@@ -1,0 +1,10 @@
+-- 0043_skipped_number.sql
+--
+-- Tombstone. Version 0043 was never used: the sequence jumped 0042 -> 0044
+-- (no git record of a deleted file, so nothing to restore). This comment-only
+-- migration is a deliberate no-op that *claims* the number so the sequence is
+-- contiguous and the "never reuse a migration number" rule is visibly honored.
+--
+-- The runner's _split_statements() drops comment-only fragments, so this
+-- applies as a zero-statement no-op on both SQLite and Postgres and is simply
+-- recorded in schema_migrations (version 43). Do not add DDL here.

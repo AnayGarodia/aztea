@@ -1,4 +1,4 @@
--- 0071_agent_domain_verification.sql
+-- 0076_agent_domain_verification.sql
 --
 -- Optional domain-ownership badge introduced in Plan B Phase 3c. Sellers
 -- can prove they control the domain hosting their endpoint by serving a

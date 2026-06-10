@@ -339,7 +339,10 @@ def test_transactional_email_html_escapes_user_values(monkeypatch):
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in captured["html"]
 
 
-def test_registry_register_blocks_private_endpoint_urls(client):
+def test_registry_register_blocks_private_endpoint_urls(client, monkeypatch):
+    # The dev .env sets ALLOW_PRIVATE_OUTBOUND_URLS=1 (so localhost agents register
+    # locally); force it off so this SSRF-enforcement test asserts the real default.
+    monkeypatch.delenv("ALLOW_PRIVATE_OUTBOUND_URLS", raising=False)
     user = _register_user()
     resp = client.post(
         "/registry/register",
@@ -651,6 +654,7 @@ def test_registry_register_rejects_endpoint_url_credentials(client):
 
 
 def test_registry_call_blocks_misconfigured_endpoint_without_charging(client, isolated_db, monkeypatch):
+    monkeypatch.delenv("ALLOW_PRIVATE_OUTBOUND_URLS", raising=False)  # force SSRF enforcement (dev .env sets it on)
     user = _register_user()
     owner_id = f"user:{user['user_id']}"
     caller_wallet = payments.get_or_create_wallet(owner_id)

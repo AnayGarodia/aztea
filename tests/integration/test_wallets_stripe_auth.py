@@ -631,7 +631,12 @@ def test_wallet_withdrawals_returns_only_caller_wallet_history(client):
     assert item["status"] == "complete"
 
 
-def test_outbound_url_validation_blocks_private_targets_by_default(client):
+def test_outbound_url_validation_blocks_private_targets_by_default(client, monkeypatch):
+    # Force SSRF enforcement (the dev .env sets ALLOW_PRIVATE_OUTBOUND_URLS=1). The
+    # hook path reads the import-time module constant, so patch that too — delenv
+    # alone (call-time env) wouldn't reach it.
+    monkeypatch.delenv("ALLOW_PRIVATE_OUTBOUND_URLS", raising=False)
+    monkeypatch.setattr("server.application._ALLOW_PRIVATE_OUTBOUND_URLS", False, raising=False)
     user = _register_user()
 
     hook_resp = client.post(
