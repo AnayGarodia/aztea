@@ -58,19 +58,25 @@ def test_r1_cve_empty_input_returns_structured_error():
 # ---------------------------------------------------------------------------
 
 
-def test_r2_python_executor_skips_explainer_on_timeout():
+def test_r2_python_executor_skips_explainer_on_timeout(monkeypatch):
     """The 2026-05-08 eval saw `while True: pass` time out at exit 124 and
     THEN spend ~300ms running an LLM 'explanation' that added zero insight.
-    The conditional that gates the explainer must skip when timed_out.
+    Asserted behaviorally (the old source-regex pinned one if-statement
+    shape and broke on an equivalent refactor): with explain=True and a
+    timeout, the LLM must never be invoked.
     """
-    src = Path("agents/python_executor.py").read_text()
-    # Match the gating clause whether the timed_out flag is a local
-    # variable (`not timed_out`) or a dict field on the returned struct
-    # (`not raw["timed_out"]`) — both are equivalent. The semantic is what
-    # matters: the explainer call must short-circuit on timeout.
-    assert re.search(r"if\s+explain\s+and\s+not\s+(raw\[[\"']timed_out[\"']\]|timed_out)", src), (
-        "Explainer must skip when timed_out is True (eval finding R2)."
+    from agents import python_executor
+
+    def _must_not_be_called(*args, **kwargs):
+        raise AssertionError("explainer LLM was invoked on a timed-out run (R2)")
+
+    monkeypatch.setattr(python_executor, "run_with_fallback", _must_not_be_called)
+    result = python_executor.run(
+        {"code": "while True: pass", "timeout": 1, "explain": True}
     )
+    assert result["timed_out"] is True
+    assert result["explanation"] == ""
+    assert result["explanation_status"] == "skipped_timeout"
 
 
 # ---------------------------------------------------------------------------
