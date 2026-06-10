@@ -25,14 +25,18 @@ Mode 2: Package-based CVE search (original)
       "description": str,
       "published": str,
       "last_modified": str,
-      "affected_range": str,
+      "affected_range": str,    # PEP 440 specifier, e.g. ">=2.0,<4.17.21"
       "fixed_in": str,
-      "exploit_available": bool
+      "exploit_available": bool,
+      "exploit_source": "cisa_kev" | "keyword_heuristic" | None,
+      "kev": {"listed": bool, "date_added": str | None}
     }],
     "total_vulnerable": int,
     "total_packages_checked": int,
     "summary": str,
-    "source": str
+    "source": str,
+    "exploit_intel_degraded": bool,  # KEV feed was unreachable this call
+    "nvd_key_configured": bool
   }
 """
 
@@ -44,6 +48,10 @@ import time
 from typing import Any, Literal
 
 import requests
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
+from packaging.version import InvalidVersion, Version
+
+from agents import _kev_feed
 from agents._contracts import agent_error as _err
 
 _LOG = logging.getLogger(__name__)
@@ -288,6 +296,37 @@ def _osv_extract_fixed_in(vuln: dict) -> str:
     return ""
 
 
+# OSV range types whose events name registry versions a PEP 440 specifier
+# can compare. GIT ranges name commit hashes — useless for version math.
+_OSV_VERSIONED_RANGE_TYPES = frozenset({"SEMVER", "ECOSYSTEM"})
+
+
+def _osv_extract_range(vuln: dict) -> str:
+    """Pure: full ``>=introduced,<fixed`` specifier from OSV events, '' if none.
+
+    The old behavior reduced every advisory to ``< fixed_in``, which marks
+    versions BELOW the introduced bound as vulnerable — wrong for advisories
+    like lodash's ``introduced 2.0 / fixed 4.17.21``.
+    """
+    for affected in vuln.get("affected") or []:
+        for r in affected.get("ranges") or []:
+            if str(r.get("type") or "").upper() not in _OSV_VERSIONED_RANGE_TYPES:
+                continue
+            introduced = ""
+            fixed = ""
+            for ev in r.get("events") or []:
+                introduced = introduced or str(ev.get("introduced") or "")
+                fixed = fixed or str(ev.get("fixed") or "")
+            parts = []
+            if introduced and introduced != "0":
+                parts.append(f">={introduced}")
+            if fixed:
+                parts.append(f"<{fixed}")
+            if parts:
+                return ",".join(parts)
+    return ""
+
+
 def _osv_vuln_to_record(vuln: dict) -> dict | None:
     """Pure: shape one OSV vuln record into the agent's CVE schema; ``None`` if id missing."""
     vuln_id = vuln.get("id", "")
@@ -304,6 +343,7 @@ def _osv_vuln_to_record(vuln: dict) -> dict | None:
         "published": (vuln.get("published") or "")[:_DATE_PREFIX_CHARS],
         "last_modified": (vuln.get("modified") or "")[:_DATE_PREFIX_CHARS],
         "fixed_in": _osv_extract_fixed_in(vuln),
+        "affected_range": _osv_extract_range(vuln),
     }
 
 
@@ -561,17 +601,22 @@ def _parse_package_version(pkg: str) -> tuple[str, str]:
 
 
 def _version_in_range(version: str, affected_range: str) -> bool:
-    """Very lightweight semver range check for < X.Y.Z style ranges."""
-    if not version or not affected_range:
-        return True
-    m = re.match(r"<\s*(\d+\.\d+(?:\.\d+)?)", affected_range)
-    if not m:
+    """Pure: is ``version`` inside the affected range?
+
+    Ranges are PEP 440-style specifier sets built from OSV events
+    (e.g. ``>=2.0,<4.17.21``) — the old implementation only understood a
+    single ``< X.Y.Z`` and silently treated everything else as affected.
+    Unparseable input stays permissive (True): on a security tool, a false
+    positive beats silently dropping a real vulnerability.
+    """
+    if not version or not affected_range or affected_range == "see advisory":
         return True
     try:
-        threshold = tuple(int(x) for x in m.group(1).split("."))
-        current = tuple(int(x) for x in version.split(".")[:3])
-        return current < threshold
-    except ValueError:
+        spec = SpecifierSet(affected_range)
+        # prereleases=True: OSV events routinely name beta/rc versions and
+        # callers pin them; PEP 440 excludes prereleases by default.
+        return spec.contains(Version(version), prereleases=True)
+    except (InvalidSpecifier, InvalidVersion):
         return True
 
 
@@ -604,6 +649,14 @@ def _normalize_cve_id_keys_inplace(results: list[dict]) -> None:
             r.setdefault("cve_id", cve_value)
 
 
+def _nvd_key_configured() -> bool:
+    """Pure-ish: is an NVD API key present? Surfaced so callers hitting the
+    public 5 req/s tier can tell quota-driven slowness from outages.
+    The field name deliberately avoids the ``api_key`` substring that the
+    work-example redactor would scrub."""
+    return bool(os.environ.get("NVD_API_KEY"))
+
+
 def _run_cve_id_mode(cve_ids: list[str], *, mode: CveLookupMode) -> dict:
     """Side-effect: orchestrate NVD lookups for each CVE id and shape the response."""
     results: list[dict] = []
@@ -614,9 +667,12 @@ def _run_cve_id_mode(cve_ids: list[str], *, mode: CveLookupMode) -> dict:
     successful = [r for r in results if "error" not in r]
     if not successful and results:
         return _err("cve_lookup.not_found", "No matching CVE records were found.")
+    exploit_intel_degraded = _apply_exploit_intel(successful, "cve_id")
     output: dict[str, Any] = {
         "results": results,
         "billing_units_actual": len(successful),
+        "exploit_intel_degraded": exploit_intel_degraded,
+        "nvd_key_configured": _nvd_key_configured(),
     }
     # Mirror first result at top level for the legacy single-id call shape.
     if mode == "single" and successful:
@@ -661,7 +717,10 @@ def _validate_cve_ids(
                 "cve_lookup.invalid_id_format",
                 f"Invalid CVE ID format: {raw_id!r}. Expected pattern: CVE-YYYY-NNNNN",
             )
-        normalized.append(upper_id)
+        # Dedup preserving order: duplicate ids would each pay an NVD
+        # round-trip + rate-delay AND each bill a unit for the same record.
+        if upper_id not in normalized:
+            normalized.append(upper_id)
     return (normalized, mode)
 
 
@@ -705,10 +764,13 @@ def _has_exploit_marker(description: str) -> bool:
 
 
 def _build_pkg_result(
-    pkg_name: str, pkg_version: str, hydrated: dict, fallback_fixed_in: str
+    pkg_name: str, pkg_version: str, hydrated: dict, fallback_fixed_in: str,
+    affected_range: str,
 ) -> dict:
     """Pure: shape one package-mode CVE row for the response array."""
     fixed_in = hydrated.get("fixed_in") or fallback_fixed_in or ""
+    if not affected_range:
+        affected_range = f"<{fixed_in}" if fixed_in else "see advisory"
     return {
         "package": pkg_name,
         "version": pkg_version or "unknown",
@@ -718,7 +780,7 @@ def _build_pkg_result(
         "description": hydrated["description"],
         "published": hydrated["published"],
         "last_modified": hydrated["last_modified"],
-        "affected_range": f"< {fixed_in}" if fixed_in else "see advisory",
+        "affected_range": affected_range,
         "fixed_in": fixed_in or "see advisory",
         "exploit_available": _has_exploit_marker(str(hydrated.get("description") or "")),
     }
@@ -738,11 +800,44 @@ def _audit_one_package(
         hydrated = _hydrate_cve_details(item["cve"], item)
         time.sleep(_NVD_RATE_DELAY)
         fixed_in = hydrated.get("fixed_in") or item.get("fixed_in") or ""
-        if not include_patched and fixed_in and pkg_version:
-            if not _version_in_range(pkg_version, f"< {fixed_in}"):
+        # Prefer OSV's full introduced/fixed window; fall back to the
+        # fixed-bound-only range when OSV shipped no versioned events.
+        affected_range = item.get("affected_range") or (f"<{fixed_in}" if fixed_in else "")
+        if not include_patched and affected_range and pkg_version:
+            if not _version_in_range(pkg_version, affected_range):
                 continue
-        rows.append(_build_pkg_result(pkg_name, pkg_version, hydrated, fixed_in))
+        rows.append(
+            _build_pkg_result(pkg_name, pkg_version, hydrated, fixed_in, affected_range)
+        )
     return rows, bool(pkg_cves)
+
+
+def _apply_exploit_intel(rows: list[dict], id_key: str) -> bool:
+    """Side-effect (mutating): stamp KEV-backed exploit fields onto each row.
+
+    Sets ``exploit_available``, ``exploit_source`` ("cisa_kev" |
+    "keyword_heuristic" | None) and ``kev`` per row. Returns True when the
+    KEV catalog was unavailable (callers surface exploit_intel_degraded so
+    "no exploit" is never confused with "feed was down").
+    """
+    cve_ids = [str(r.get(id_key) or "") for r in rows if r.get(id_key)]
+    kev = _kev_feed.kev_entries(cve_ids) if cve_ids else {}
+    degraded = kev is None
+    for row in rows:
+        cve_id = str(row.get(id_key) or "").upper()
+        keyword_hit = bool(row.get("exploit_available")) or _has_exploit_marker(
+            str(row.get("description") or "")
+        )
+        entry = None if kev is None else kev.get(cve_id)
+        if entry is not None:
+            row["exploit_available"] = True
+            row["exploit_source"] = "cisa_kev"
+            row["kev"] = {"listed": True, "date_added": entry["date_added"]}
+        else:
+            row["exploit_available"] = keyword_hit
+            row["exploit_source"] = "keyword_heuristic" if keyword_hit else None
+            row["kev"] = {"listed": False, "date_added": None}
+    return degraded
 
 
 def _summarise_package_run(all_results: list[dict]) -> str:
@@ -807,6 +902,7 @@ def _run_package_mode(payload: dict) -> dict:
         if hit:
             used_source = "osv+nvd"
         all_results.extend(rows)
+    exploit_intel_degraded = _apply_exploit_intel(all_results, "cve")
     all_results.sort(key=lambda x: x["cvss"], reverse=True)
     pkg_names_with_vulns = {r["package"] for r in all_results}
     return {
@@ -816,6 +912,8 @@ def _run_package_mode(payload: dict) -> dict:
         "summary": _summarise_package_run(all_results),
         "source": used_source,
         "billing_units_actual": len(all_results),
+        "exploit_intel_degraded": exploit_intel_degraded,
+        "nvd_key_configured": _nvd_key_configured(),
     }
 
 

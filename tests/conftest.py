@@ -105,3 +105,21 @@ def _reset_rate_limit_store_per_test():
 
     rate_limit.reset_store_for_tests()
     yield
+
+
+@pytest.fixture(autouse=True)
+def _kev_feed_offline(monkeypatch):
+    """Keep the CISA KEV feed offline (and its cache clean) for every test.
+
+    Why: cve_lookup enriches results via agents._kev_feed, whose requests
+    live in a different module than the cve_lookup.requests that existing
+    tests patch — without this guard those tests would silently hit the
+    real CISA endpoint. KEV-specific tests re-patch _fetch_catalog (or
+    kev_entries) themselves, which overrides this stub.
+    """
+    from agents import _kev_feed
+
+    _kev_feed.reset_cache()
+    monkeypatch.setattr(_kev_feed, "_fetch_catalog", lambda: None)
+    yield
+    _kev_feed.reset_cache()

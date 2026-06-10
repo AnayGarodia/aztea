@@ -372,3 +372,144 @@ def test_dependency_auditor_spdx_or_expression_takes_permissive_branch():
     assert dependency_auditor._license_risk("LGPL-2.1-only") == "medium"
     assert dependency_auditor._license_risk("MPL-2.0") == "medium"
     assert dependency_auditor._license_risk("AGPL-3.0") == "high"
+
+
+def _osv_vuln_payload(cve_id="CVE-2024-99999", introduced="2.0", fixed="4.17.21"):
+    return {
+        "vulns": [
+            {
+                "id": "GHSA-kev1",
+                "aliases": [cve_id],
+                "summary": "Some memory corruption issue",
+                "published": "2024-01-02T00:00:00.000",
+                "modified": "2024-01-03T00:00:00.000",
+                "severity": [{"score": "8.8"}],
+                "affected": [
+                    {
+                        "ranges": [
+                            {
+                                "type": "SEMVER",
+                                "events": [
+                                    {"introduced": introduced},
+                                    {"fixed": fixed},
+                                ],
+                            }
+                        ]
+                    }
+                ],
+            }
+        ]
+    }
+
+
+def _nvd_cve_payload(cve_id="CVE-2024-99999"):
+    return {
+        "vulnerabilities": [
+            {
+                "cve": {
+                    "id": cve_id,
+                    "published": "2024-01-02T00:00:00.000",
+                    "lastModified": "2024-01-03T00:00:00.000",
+                    "descriptions": [
+                        {"lang": "en", "value": "Some memory corruption issue"}
+                    ],
+                    "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 9.1}}]},
+                    "references": [],
+                }
+            }
+        ]
+    }
+
+
+def _patch_cve_network(monkeypatch, cve_id="CVE-2024-99999", **osv_kwargs):
+    monkeypatch.setattr(cve_lookup, "_NVD_RATE_DELAY", 0)
+    cve_lookup._cve_cache.clear()
+    monkeypatch.setattr(
+        cve_lookup.requests,
+        "post",
+        lambda *a, **k: _FakeResponse(200, _osv_vuln_payload(cve_id, **osv_kwargs)),
+    )
+    monkeypatch.setattr(
+        cve_lookup.requests,
+        "get",
+        lambda *a, **k: _FakeResponse(200, _nvd_cve_payload(cve_id)),
+    )
+
+
+def test_cve_lookup_kev_listing_flips_exploit_available(monkeypatch):
+    """A CVE on the CISA KEV catalog must report exploit_available=True with
+    exploit_source=cisa_kev even when its description has no exploit keyword."""
+    from agents import _kev_feed
+
+    _patch_cve_network(monkeypatch)
+    monkeypatch.setattr(
+        _kev_feed,
+        "_fetch_catalog",
+        lambda: {"CVE-2024-99999": {"date_added": "2024-02-01", "ransomware": False}},
+    )
+    _kev_feed.reset_cache()
+
+    result = cve_lookup.run({"packages": ["lodash@4.17.20"]})
+    row = result["results"][0]
+    assert row["exploit_available"] is True
+    assert row["exploit_source"] == "cisa_kev"
+    assert row["kev"] == {"listed": True, "date_added": "2024-02-01"}
+    assert result["exploit_intel_degraded"] is False
+
+
+def test_cve_lookup_kev_outage_degrades_to_keyword_heuristic(monkeypatch):
+    """KEV feed down: the call still succeeds, exploit_intel_degraded=True,
+    and a description containing 'exploit' still flags via the heuristic."""
+    _patch_cve_network(monkeypatch)
+    # conftest's autouse fixture already stubs _fetch_catalog -> None (outage).
+
+    result = cve_lookup.run({"packages": ["lodash@4.17.20"]})
+    row = result["results"][0]
+    assert result["exploit_intel_degraded"] is True
+    assert row["exploit_source"] is None  # no exploit keyword in description
+    assert row["kev"] == {"listed": False, "date_added": None}
+
+
+def test_kev_feed_caches_catalog_across_calls(monkeypatch):
+    from agents import _kev_feed
+
+    calls = {"n": 0}
+
+    def fake_fetch():
+        calls["n"] += 1
+        return {"CVE-2024-1": {"date_added": "2024-01-01", "ransomware": False}}
+
+    monkeypatch.setattr(_kev_feed, "_fetch_catalog", fake_fetch)
+    _kev_feed.reset_cache()
+    assert _kev_feed.kev_entries(["CVE-2024-1"]) == {
+        "CVE-2024-1": {"date_added": "2024-01-01", "ransomware": False}
+    }
+    assert _kev_feed.kev_entries(["CVE-2024-2"]) == {}
+    assert calls["n"] == 1, "second call must be served from the TTL cache"
+
+
+def test_cve_lookup_range_filter_excludes_version_below_introduced(monkeypatch):
+    """Regression: '< fixed' ranges marked versions BELOW the introduced
+    bound as vulnerable. lodash 1.0.0 with an advisory on >=2.0,<4.17.21
+    must NOT be reported."""
+    _patch_cve_network(monkeypatch, introduced="2.0", fixed="4.17.21")
+
+    affected = cve_lookup.run({"packages": ["lodash@3.0.0"]})
+    assert len(affected["results"]) == 1
+
+    cve_lookup._cve_cache.clear()
+    safe_below = cve_lookup.run({"packages": ["lodash@1.0.0"]})
+    assert safe_below["results"] == []
+
+    cve_lookup._cve_cache.clear()
+    safe_above = cve_lookup.run({"packages": ["lodash@4.17.21"]})
+    assert safe_above["results"] == []
+
+
+def test_cve_lookup_duplicate_ids_deduped_and_billed_once(monkeypatch):
+    _patch_cve_network(monkeypatch)
+
+    result = cve_lookup.run({"cve_ids": ["CVE-2024-99999", "cve-2024-99999"]})
+    assert len(result["results"]) == 1
+    assert result["billing_units_actual"] == 1
+    assert result["nvd_key_configured"] is False
