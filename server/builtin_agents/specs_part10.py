@@ -48,7 +48,10 @@ def load_builtin_specs_part10() -> list[dict[str, Any]]:
                 "are transparently resumed on the next sandbox_exec. "
                 "Concurrency: this agent is rate-limited at the transport "
                 "layer to the platform's per-key RPM (see metadata.concurrency); "
-                "fan-outs above that drop into the standard 429 retry-after path."
+                "fan-outs above that drop into the standard 429 retry-after path. "
+                "Payload cap: 256 KB serialized per call (payload_too_large, "
+                "fail-fast, no receipt minted) — write larger content into the "
+                "sandbox via sandbox_write chunks or sync_from_local."
             ),
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_LIVE_SANDBOX_AGENT_ID],
             "price_per_call_usd": 0.05,
