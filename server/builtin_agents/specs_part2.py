@@ -191,7 +191,14 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
         {
             "agent_id": str(_DNS_INSPECTOR_AGENT_ID),
             "name": "DNS & SSL Inspector",
-            "description": "Use when the task requires checking domain health: DNS records, SSL certificate expiry, or HTTP security headers. Runs live checks against up to 10 domains and returns structured findings with actionable issues.",
+            "description": (
+                "Use when the task requires checking domain health: DNS "
+                "records, SSL certificate expiry, HTTP security headers "
+                "(CSP/XFO/HSTS + redirect chain), real MX records, and "
+                "mail-auth posture (TXT/SPF and DMARC policy). Runs live "
+                "checks against up to 10 domains and returns structured "
+                "findings with actionable issues."
+            ),
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_DNS_INSPECTOR_AGENT_ID],
             "price_per_call_usd": 0.01,
             "tags": ["dns", "ssl", "security", "infrastructure"],
@@ -250,9 +257,26 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
                     },
                     "checks": {
                         "type": "array",
-                        "items": {"type": "string"},
+                        "items": {
+                            "type": "string",
+                            "enum": ["dns", "ssl", "http", "mx", "txt", "dmarc"],
+                        },
                         "default": ["dns", "ssl", "http"],
-                        "description": "Checks to run: dns, ssl, http, mx",
+                        "description": (
+                            "Checks to run. mx returns the real MX RRset "
+                            "(mx_method='dns'; falls back to a mail.<domain> "
+                            "heuristic without dnspython); txt returns TXT "
+                            "records + extracted SPF; dmarc returns "
+                            "{present, policy} from _dmarc.<domain>. txt and "
+                            "dmarc are opt-in to keep the default path fast."
+                        ),
+                    },
+                    "cert_expiry_warn_days": {
+                        "type": "integer",
+                        "default": 30,
+                        "minimum": 1,
+                        "maximum": 365,
+                        "description": "Days-to-expiry threshold below which an SSL expiry issue is raised",
                     },
                 },
                 "required": ["domains"],
@@ -260,7 +284,17 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
             "output_schema": {
                 "type": "object",
                 "properties": {
-                    "results": {"type": "array"},
+                    "results": {
+                        "type": "array",
+                        "description": (
+                            "Per-domain entries. http includes "
+                            "security_headers (present CSP/XFO/XCTO/"
+                            "Referrer-Policy/Permissions-Policy/HSTS values) "
+                            "and redirect_chain hops; mx/txt/spf/dmarc appear "
+                            "when their checks are requested (null when the "
+                            "check could not run)."
+                        ),
+                    },
                     "billing_units_actual": {"type": "integer"},
                 },
             },

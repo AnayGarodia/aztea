@@ -513,3 +513,190 @@ def test_cve_lookup_duplicate_ids_deduped_and_billed_once(monkeypatch):
     assert len(result["results"]) == 1
     assert result["billing_units_actual"] == 1
     assert result["nvd_key_configured"] is False
+
+
+class _FakeMXRecord:
+    def __init__(self, exchange: str, preference: int):
+        self.exchange = exchange
+        self.preference = preference
+
+
+class _FakeTXTRecord:
+    def __init__(self, *strings: bytes):
+        self.strings = strings
+
+
+class _FakeResolver:
+    """Minimal dns.resolver.Resolver stand-in keyed on (name, rtype)."""
+
+    def __init__(self, table: dict):
+        self._table = table
+
+    def resolve(self, name, rtype):
+        key = (name, rtype)
+        if key not in self._table:
+            raise RuntimeError(f"NXDOMAIN {key}")
+        return self._table[key]
+
+
+def test_dns_inspector_real_mx_lookup(monkeypatch):
+    """MX must come from the real RRset — the old mail.<domain> heuristic
+    missed every hosted-mail setup (Google Workspace -> aspmx.l.google.com)."""
+    from agents import dns_inspector
+
+    resolver = _FakeResolver(
+        {
+            ("example.com", "MX"): [
+                _FakeMXRecord("alt1.aspmx.l.google.com.", 5),
+                _FakeMXRecord("aspmx.l.google.com.", 1),
+            ]
+        }
+    )
+    monkeypatch.setattr(dns_inspector, "_dnspython_resolver", lambda: resolver)
+    result = dns_inspector.run({"domains": ["example.com"], "checks": ["mx"]})
+    entry = result["results"][0]
+    assert entry["mx_method"] == "dns"
+    assert entry["mx"] == [
+        {"host": "aspmx.l.google.com", "priority": 1},
+        {"host": "alt1.aspmx.l.google.com", "priority": 5},
+    ]
+
+
+def test_dns_inspector_mx_falls_back_to_heuristic_without_dnspython(monkeypatch):
+    from agents import dns_inspector
+
+    monkeypatch.setattr(dns_inspector, "_dnspython_resolver", lambda: None)
+    monkeypatch.setattr(
+        dns_inspector,
+        "_cached_getaddrinfo",
+        lambda host, family=None: [(2, 1, 6, "", ("1.2.3.4", 0))],
+    )
+    result = dns_inspector.run({"domains": ["example.com"], "checks": ["mx"]})
+    entry = result["results"][0]
+    assert entry["mx_method"] == "heuristic"
+    assert entry["possible_mail_ips"] == ["1.2.3.4"]
+
+
+def test_dns_inspector_spf_and_dmarc_checks(monkeypatch):
+    from agents import dns_inspector
+
+    resolver = _FakeResolver(
+        {
+            ("example.com", "TXT"): [
+                _FakeTXTRecord(b"v=spf1 include:_spf.google.com ~all"),
+                _FakeTXTRecord(b"google-site-verification=abc"),
+            ],
+            ("_dmarc.example.com", "TXT"): [
+                _FakeTXTRecord(b"v=DMARC1; p=quarantine; rua=mailto:d@example.com"),
+            ],
+        }
+    )
+    monkeypatch.setattr(dns_inspector, "_dnspython_resolver", lambda: resolver)
+    result = dns_inspector.run(
+        {"domains": ["example.com"], "checks": ["txt", "dmarc"]}
+    )
+    entry = result["results"][0]
+    assert entry["spf"] == "v=spf1 include:_spf.google.com ~all"
+    assert entry["dmarc"]["present"] is True
+    assert entry["dmarc"]["policy"] == "quarantine"
+
+
+def test_dns_inspector_missing_spf_and_dmarc_raise_issues(monkeypatch):
+    from agents import dns_inspector
+
+    resolver = _FakeResolver({("example.com", "TXT"): [_FakeTXTRecord(b"other")]})
+    monkeypatch.setattr(dns_inspector, "_dnspython_resolver", lambda: resolver)
+    result = dns_inspector.run(
+        {"domains": ["example.com"], "checks": ["txt", "dmarc"]}
+    )
+    entry = result["results"][0]
+    assert entry["spf"] is None
+    assert entry["dmarc"] == {"present": False, "policy": None}
+    assert "No SPF record found" in entry["issues"]
+    assert "No DMARC record found" in entry["issues"]
+
+
+def test_dns_inspector_rejects_unknown_check():
+    from agents import dns_inspector
+
+    result = dns_inspector.run({"domains": ["example.com"], "checks": ["dnssec"]})
+    assert result["error"]["code"] == "dns_inspector.unknown_check"
+
+
+def test_dns_inspector_cert_expiry_threshold_configurable(monkeypatch):
+    from agents import dns_inspector
+
+    monkeypatch.setattr(
+        dns_inspector,
+        "_ssl_check",
+        lambda domain: (
+            {
+                "issuer": {},
+                "subject": {},
+                "expires_at": "x",
+                "days_until_expiry": 45,
+                "san_names": [],
+            },
+            None,
+        ),
+    )
+    default_run = dns_inspector.run({"domains": ["example.com"], "checks": ["ssl"]})
+    assert default_run["results"][0]["issues"] == []
+
+    strict_run = dns_inspector.run(
+        {
+            "domains": ["example.com"],
+            "checks": ["ssl"],
+            "cert_expiry_warn_days": 60,
+        }
+    )
+    assert "SSL certificate expires in 45 days" in strict_run["results"][0]["issues"]
+
+    bad = dns_inspector.run(
+        {"domains": ["example.com"], "checks": ["ssl"], "cert_expiry_warn_days": 0}
+    )
+    assert bad["error"]["code"] == "dns_inspector.invalid_expiry_threshold"
+
+
+def test_dns_inspector_http_security_headers_and_redirects(monkeypatch):
+    from agents import dns_inspector
+
+    class _FakeHeaders(dict):
+        def get(self, key, default=None):
+            return dict.get(self, key, default)
+
+    class _FakeHTTPResponse:
+        status = 200
+        headers = _FakeHeaders(
+            {
+                "Server": "nginx",
+                "Strict-Transport-Security": "max-age=63072000",
+                "Content-Security-Policy": "default-src 'self'",
+            }
+        )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    class _FakeOpener:
+        def open(self, req, timeout=None):
+            return _FakeHTTPResponse()
+
+    def fake_build_opener(handler):
+        handler.chain.append({"status": 301, "to": "https://example.com/"})
+        return _FakeOpener()
+
+    monkeypatch.setattr(
+        dns_inspector.urllib.request, "build_opener", fake_build_opener
+    )
+    info, err = dns_inspector._http_check("example.com")
+    assert err is None
+    assert info["hsts"] is True
+    assert info["security_headers"] == {
+        "Strict-Transport-Security": "max-age=63072000",
+        "Content-Security-Policy": "default-src 'self'",
+    }
+    assert info["redirect_chain"] == [{"status": 301, "to": "https://example.com/"}]
