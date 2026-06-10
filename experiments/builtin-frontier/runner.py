@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -19,8 +20,16 @@ import time
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import capture  # noqa: E402
+# Load the sibling capture module by explicit path under a unique name rather
+# than `sys.path.insert(...)` + `import capture`. The two experiments both ship
+# a `capture.py`; a bare import registers `sys.modules['capture']` and collides
+# whenever both are loaded in one interpreter (a pytest process). Path-loading
+# under a unique name makes the collision structurally impossible.
+_spec = importlib.util.spec_from_file_location(
+    "frontier_capture_runner", Path(__file__).resolve().parent / "capture.py"
+)
+capture = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(capture)
 
 _HERE = Path(__file__).resolve().parent
 CORPUS_PATH = _HERE / "corpus.json"
