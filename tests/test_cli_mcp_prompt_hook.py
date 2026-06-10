@@ -13,7 +13,7 @@ import json
 import pytest
 import typer
 
-from aztea.cli import mcp, mcp_hooks
+from aztea.cli import deference_core, mcp, mcp_hooks
 
 
 # ── pure helpers ───────────────────────────────────────────────────────────
@@ -63,9 +63,12 @@ class _Resp:
 
 @pytest.fixture(autouse=True)
 def _isolate_cooldown(monkeypatch, tmp_path):
-    """Point the on-disk scout cooldown at a tmp file so tests never read or
-    write the real ~/.aztea/.scout-cooldown (and don't leak state between tests)."""
-    monkeypatch.setattr(mcp_hooks, "_SCOUT_COOLDOWN_PATH", tmp_path / ".scout-cooldown")
+    """Point the on-disk scout cooldown AND the deference decision log at tmp
+    files so tests never read or write the real ~/.aztea/* (and don't leak state
+    between tests). Both live in deference_core now — patch them there, not on the
+    mcp_hooks re-export, since that's where the writers read them."""
+    monkeypatch.setattr(deference_core, "_SCOUT_COOLDOWN_PATH", tmp_path / ".scout-cooldown")
+    monkeypatch.setattr(deference_core, "DEFERENCE_LOG_PATH", tmp_path / "deference.jsonl")
 
 
 def _run_prompt(monkeypatch, prompt: str, post_fake) -> int:
@@ -93,6 +96,18 @@ def test_prompt_hook_injects_named_suggestion_on_match(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert code == 0
     assert "DNS Inspector" in out and "auto_call_agent" in out
+
+
+def test_prompt_hook_logs_scout_as_advisory_not_redirect(monkeypatch, capsys):
+    # A matched scout is advisory; it must log redirected=False so it doesn't
+    # inflate the redirect tally (the one operator-facing deference signal).
+    def post(*_a, **_k):
+        return _Resp(200, {"would_invoke": True, "agent": {"name": "X", "slug": "x"}})
+
+    _run_prompt(monkeypatch, "check DNS and SSL health for example.com", post)
+    rows = deference_core.read_deference_log(path=deference_core.DEFERENCE_LOG_PATH)
+    scout = [r for r in rows if r.get("category") == "prompt_scout"]
+    assert scout and scout[-1]["redirected"] is False
 
 
 def test_prompt_hook_silent_on_no_match(monkeypatch, capsys):
@@ -153,8 +168,8 @@ def test_scout_specialist_uses_split_timeout_and_no_redirects(monkeypatch):
         return _Resp(200, {"would_invoke": False})
 
     monkeypatch.setattr("requests.post", post)
-    mcp_hooks.scout_specialist("look up CVE-2021-44228 in deps", "az_k", "https://aztea.ai", now=1000.0)
-    assert captured["timeout"] == (mcp_hooks._SCOUT_CONNECT_TIMEOUT_S, mcp_hooks._SCOUT_READ_TIMEOUT_S)
+    deference_core.scout_specialist("look up CVE-2021-44228 in deps", "az_k", "https://aztea.ai", now=1000.0)
+    assert captured["timeout"] == (deference_core._SCOUT_CONNECT_TIMEOUT_S, deference_core._SCOUT_READ_TIMEOUT_S)
     assert captured["allow_redirects"] is False
 
 
@@ -167,7 +182,7 @@ def test_scout_specialist_returns_suggestion_on_match(monkeypatch):
         })
 
     monkeypatch.setattr("requests.post", post)
-    out = mcp_hooks.scout_specialist("check DNS health for example.com", "az_k", "https://aztea.ai", now=1000.0)
+    out = deference_core.scout_specialist("check DNS health for example.com", "az_k", "https://aztea.ai", now=1000.0)
     assert out and "DNS Inspector" in out
 
 
@@ -179,13 +194,13 @@ def test_scout_specialist_non_2xx_sets_cooldown_and_skips_next_call(monkeypatch)
         return _Resp(401, {})
 
     monkeypatch.setattr("requests.post", post)
-    assert mcp_hooks.scout_specialist("look up CVE in my deps now", "bad", "https://aztea.ai", now=1000.0) is None
+    assert deference_core.scout_specialist("look up CVE in my deps now", "bad", "https://aztea.ai", now=1000.0) is None
     # Cooldown is active → the next prompt within the window skips the network.
-    assert mcp_hooks.scout_specialist("look up CVE in my deps now", "bad", "https://aztea.ai", now=1100.0) is None
+    assert deference_core.scout_specialist("look up CVE in my deps now", "bad", "https://aztea.ai", now=1100.0) is None
     assert calls["n"] == 1
     # After the window expires, scouting resumes.
-    assert mcp_hooks.scout_specialist("look up CVE in my deps now", "bad", "https://aztea.ai",
-                                      now=1000.0 + mcp_hooks._SCOUT_COOLDOWN_S + 1) is None
+    assert deference_core.scout_specialist("look up CVE in my deps now", "bad", "https://aztea.ai",
+                                      now=1000.0 + deference_core._SCOUT_COOLDOWN_S + 1) is None
     assert calls["n"] == 2
 
 
@@ -196,18 +211,18 @@ def test_scout_specialist_fail_open_on_network_error(monkeypatch):
         raise requests.RequestException("backend down")
 
     monkeypatch.setattr("requests.post", post)
-    assert mcp_hooks.scout_specialist("look up CVE in deps", "az_k", "https://aztea.ai", now=1000.0) is None
+    assert deference_core.scout_specialist("look up CVE in deps", "az_k", "https://aztea.ai", now=1000.0) is None
     # error armed the cooldown — confirm it's now active
-    assert mcp_hooks._scout_in_cooldown(1100.0) is True
+    assert deference_core._scout_in_cooldown(1100.0) is True
 
 
 def test_scout_specialist_rejects_oversized_response(monkeypatch):
     def post(*_a, **_k):
         return _Resp(200, {"would_invoke": True, "agent": {"name": "X"}},
-                     headers={"Content-Length": str(mcp_hooks._SCOUT_MAX_RESPONSE_BYTES + 1)})
+                     headers={"Content-Length": str(deference_core._SCOUT_MAX_RESPONSE_BYTES + 1)})
 
     monkeypatch.setattr("requests.post", post)
-    assert mcp_hooks.scout_specialist("look up CVE in my deps", "az_k", "https://aztea.ai", now=1000.0) is None
+    assert deference_core.scout_specialist("look up CVE in my deps", "az_k", "https://aztea.ai", now=1000.0) is None
 
 
 # ── prompt-injection sanitization ──────────────────────────────────────────

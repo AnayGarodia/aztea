@@ -277,3 +277,151 @@ def test_install_writes_json_config_owner_only(monkeypatch, tmp_path, install_en
     _point_target_at(monkeypatch, "cursor", cfg)
     mcp.install(client="cursor", api_key=None, base_url=None, json_mode=True)
     assert stat.S_IMODE(cfg.stat().st_mode) == 0o600
+
+
+# ── client_id attribution (agent-harness surfaces) ─────────────────────────
+
+def test_server_entry_omits_client_id_by_default() -> None:
+    """Byte-identical to the pre-change shape — editors must not regress."""
+    assert mcp._server_entry("az_k", "https://aztea.ai") == {
+        "type": "stdio",
+        "command": "aztea",
+        "args": ["mcp", "serve"],
+        "env": {"AZTEA_API_KEY": "az_k", "AZTEA_BASE_URL": "https://aztea.ai"},
+    }
+
+
+def test_server_entry_stamps_client_id_when_given() -> None:
+    entry = mcp._server_entry("az_k", "https://aztea.ai", client_id="openclaw")
+    assert entry["env"]["AZTEA_CLIENT_ID"] == "openclaw"
+
+
+def test_attribution_only_tags_harness_surfaces() -> None:
+    assert mcp._attribution_client_id("openclaw") == "openclaw"
+    assert mcp._attribution_client_id("hermes") == "hermes"
+    assert mcp._attribution_client_id("claude") is None
+    assert mcp._attribution_client_id("cursor") is None
+
+
+# ── OpenClaw (JSON, nested mcp.servers) ────────────────────────────────────
+
+def test_install_openclaw_nested_mcp_servers_with_attribution(monkeypatch, tmp_path, install_env) -> None:
+    cfg = tmp_path / "openclaw.json"
+    cfg.write_text('{"model": "x"}\n', encoding="utf-8")
+    _point_target_at(monkeypatch, "openclaw", cfg)
+    mcp.install(client="openclaw", api_key=None, base_url=None, json_mode=True)
+    data = json.loads(cfg.read_text())
+    assert data["model"] == "x"  # surrounding config preserved
+    entry = data["mcp"]["servers"]["aztea"]  # NESTED, not top-level mcpServers
+    assert entry["command"] == "aztea" and entry["args"] == ["mcp", "serve"]
+    assert entry["env"]["AZTEA_API_KEY"] == "az_test_key"
+    assert entry["env"]["AZTEA_CLIENT_ID"] == "openclaw"
+
+
+def test_uninstall_openclaw_prunes_nested(monkeypatch, tmp_path, install_env) -> None:
+    cfg = tmp_path / "openclaw.json"
+    cfg.write_text('{"model": "x"}\n', encoding="utf-8")
+    _point_target_at(monkeypatch, "openclaw", cfg)
+    mcp.install(client="openclaw", api_key=None, base_url=None, json_mode=True)
+    mcp.uninstall(client="openclaw", json_mode=True)
+    data = json.loads(cfg.read_text())
+    assert "mcp" not in data and data["model"] == "x"
+
+
+# ── Hermes (YAML, top-level mcp_servers) ───────────────────────────────────
+
+def test_install_hermes_writes_yaml_mcp_servers(monkeypatch, tmp_path, install_env) -> None:
+    import yaml
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("model: hermes-4\n", encoding="utf-8")
+    _point_target_at(monkeypatch, "hermes", cfg)
+    mcp.install(client="hermes", api_key=None, base_url=None, json_mode=True)
+    data = yaml.safe_load(cfg.read_text())
+    assert data["model"] == "hermes-4"  # surrounding key preserved
+    entry = data["mcp_servers"]["aztea"]  # TOP-LEVEL snake_case, YAML
+    assert entry["command"] == "aztea" and entry["args"] == ["mcp", "serve"]
+    assert entry["env"]["AZTEA_CLIENT_ID"] == "hermes"
+    assert entry["env"]["AZTEA_API_KEY"] == "az_test_key"
+
+
+def test_hermes_write_is_idempotent(tmp_path) -> None:
+    cfg = tmp_path / "config.yaml"
+    assert mcp._hermes_write_entry(cfg, "az_a", "https://aztea.ai", client_id="hermes") is True
+    assert mcp._hermes_write_entry(cfg, "az_a", "https://aztea.ai", client_id="hermes") is False
+    assert mcp._hermes_write_entry(cfg, "az_b", "https://aztea.ai", client_id="hermes") is True
+
+
+def test_hermes_write_owner_only_perms(tmp_path) -> None:
+    import stat
+    cfg = tmp_path / "config.yaml"
+    mcp._hermes_write_entry(cfg, "az_k", "https://aztea.ai")
+    assert stat.S_IMODE(cfg.stat().st_mode) == 0o600
+
+
+def test_hermes_refuses_non_mapping_yaml(tmp_path) -> None:
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("- just\n- a\n- list\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        mcp._hermes_write_entry(cfg, "az_k", "https://aztea.ai")
+
+
+def test_hermes_malformed_yaml_raises_value_error_not_yamlerror(tmp_path) -> None:
+    # PyYAML raises YAMLError (not ValueError) on bad YAML; the writer must
+    # normalize it so the install path's clean refusal catches it.
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("key: [unclosed\n  bad: : :\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        mcp._hermes_write_entry(cfg, "az_k", "https://aztea.ai")
+
+
+def test_hermes_refuses_list_form_mcp_servers(tmp_path) -> None:
+    # A hand-edited list-form mcp_servers must NOT be silently clobbered.
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("mcp_servers:\n  - name: foo\n  - name: bar\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        mcp._hermes_write_entry(cfg, "az_k", "https://aztea.ai")
+    assert "foo" in cfg.read_text()  # original left untouched
+
+
+def test_install_hermes_missing_pyyaml_exits_cleanly(monkeypatch, tmp_path, install_env) -> None:
+    cfg = tmp_path / "config.yaml"
+    _point_target_at(monkeypatch, "hermes", cfg)
+
+    def _raise(*_a, **_k):
+        raise mcp.HermesYamlUnavailable("PyYAML not installed")
+    monkeypatch.setattr(mcp, "_hermes_write_entry", _raise)
+    with pytest.raises(typer.Exit):
+        mcp.install(client="hermes", api_key=None, base_url=None, json_mode=True)
+
+
+def test_install_hermes_parse_error_exits_cleanly(monkeypatch, tmp_path, install_env) -> None:
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("key: [unclosed\n  : :\n", encoding="utf-8")
+    _point_target_at(monkeypatch, "hermes", cfg)
+    with pytest.raises(typer.Exit):
+        mcp.install(client="hermes", api_key=None, base_url=None, json_mode=True)
+    assert "unclosed" in cfg.read_text()  # untouched on refusal
+
+
+def test_uninstall_hermes_prunes(monkeypatch, tmp_path, install_env) -> None:
+    import yaml
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("model: hermes-4\n", encoding="utf-8")
+    _point_target_at(monkeypatch, "hermes", cfg)
+    mcp.install(client="hermes", api_key=None, base_url=None, json_mode=True)
+    mcp.uninstall(client="hermes", json_mode=True)
+    data = yaml.safe_load(cfg.read_text())
+    assert "mcp_servers" not in data and data["model"] == "hermes-4"
+
+
+def test_is_mcp_registered_openclaw_and_hermes(monkeypatch, tmp_path, install_env) -> None:
+    oc = tmp_path / "openclaw.json"
+    hm = tmp_path / "config.yaml"
+    _point_target_at(monkeypatch, "openclaw", oc)
+    _point_target_at(monkeypatch, "hermes", hm)
+    assert mcp.is_mcp_registered("openclaw") is False
+    assert mcp.is_mcp_registered("hermes") is False
+    mcp.install(client="openclaw", api_key=None, base_url=None, json_mode=True)
+    mcp.install(client="hermes", api_key=None, base_url=None, json_mode=True)
+    assert mcp.is_mcp_registered("openclaw") is True
+    assert mcp.is_mcp_registered("hermes") is True
