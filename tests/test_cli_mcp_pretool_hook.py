@@ -17,10 +17,16 @@ import json
 import pytest
 import typer
 
-from aztea.cli import mcp, mcp_hooks
+from aztea.cli import deference_core, mcp, mcp_hooks
 
 
 # ── Fakes / fixtures ───────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def _isolate_deference_log(monkeypatch, tmp_path):
+    """The pretool-hook command now records a decision row; keep that write off
+    the real ~/.aztea/deference.jsonl during tests."""
+    monkeypatch.setattr(deference_core, "DEFERENCE_LOG_PATH", tmp_path / "deference.jsonl")
 
 class _FakeAuth:
     def me(self) -> dict:
@@ -177,6 +183,46 @@ def test_command_block_exits_2(monkeypatch, capsys):
 
 def test_command_fail_open_on_garbage(monkeypatch):
     assert _run_command(monkeypatch, "garbage", "warn") == 0
+
+
+# ── deference observability wiring ─────────────────────────────────────────
+
+def test_pretool_command_records_wedge_decision(monkeypatch):
+    # The block command logs one row; a pass-through (Edit) logs nothing.
+    _run_command(
+        monkeypatch, json.dumps({"tool_name": "WebFetch", "tool_input": {"url": "https://x"}}), "block"
+    )
+    _run_command(monkeypatch, json.dumps({"tool_name": "Edit"}), "block")
+    rows = deference_core.read_deference_log(path=deference_core.DEFERENCE_LOG_PATH)
+    assert len(rows) == 1
+    assert rows[0]["category"] == "web" and rows[0]["redirected"] is True
+
+
+def test_deference_log_command_summarizes(capsys):
+    for cat, redir in (("web", True), ("web", False), ("exec", False)):
+        deference_core.record_deference_decision(
+            tool="t", category=cat, action="warn", redirected=redir, now=1.0,
+            path=deference_core.DEFERENCE_LOG_PATH,
+        )
+    mcp.deference_log(tail=20)
+    out = capsys.readouterr().out
+    assert "3 decisions, 1 redirected" in out and "web 2" in out and "exec 1" in out
+
+
+def test_deference_log_command_empty(capsys):
+    mcp.deference_log(tail=20)
+    assert "No deference decisions logged yet" in capsys.readouterr().out
+
+
+def test_pretool_command_format_json_emits_neutral_decision(monkeypatch, capsys):
+    # --format json: neutral {decision,reason} on stdout, exit 0 (plugin decides).
+    monkeypatch.setattr("sys.stdin", io.StringIO(
+        json.dumps({"tool_name": "WebFetch", "tool_input": {"url": "https://x"}})))
+    with pytest.raises(typer.Exit) as exc:
+        mcp.pretool_hook(mode="block", fmt="json")
+    assert int(exc.value.exit_code or 0) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["decision"] == "block" and "auto_call_agent" in payload["reason"]
 
 
 # ── install / uninstall wiring (Claude only) ───────────────────────────────

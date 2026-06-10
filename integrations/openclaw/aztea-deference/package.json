@@ -1,0 +1,10 @@
+{
+  "name": "@aztea/openclaw-deference",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Aztea deference plugin for OpenClaw — routes wedge tasks to Aztea specialists.",
+  "license": "Apache-2.0",
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}

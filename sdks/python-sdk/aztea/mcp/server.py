@@ -841,6 +841,49 @@ def _parse_data_uri(value: str) -> tuple[str | None, str | None]:
     return match.group(1).strip().lower(), match.group(2).strip()
 
 
+# Cap on the agent-output text appended to a job tool result. Large enough for
+# real specialist outputs (a fetched RFC is ~13K chars); bounded so a runaway
+# output can't blow up the model's context. Truncation is always explicit.
+_JOB_OUTPUT_TEXT_MAX_CHARS = 32_000
+
+
+def _job_output_text(payload: dict[str, Any]) -> str:
+    """Render a completed job's output for the model. The output CONTENT is the
+    product — before 2026-06-10 this surfaced only a summary-ish key and
+    silently dropped everything else, so a specialist could run, charge, and
+    return nothing usable (the buyer's model saw 'status: complete' and gave
+    up). Preference order: server-rendered string, summary-ish key, then the
+    full output JSON (explicitly truncated at the cap)."""
+    rendered = payload.get("rendered_output")
+    if isinstance(rendered, str) and rendered.strip():
+        return _truncate_with_notice(rendered.strip())
+    output = payload.get("output")
+    if isinstance(output, dict):
+        for key in ("summary", "message", "answer", "title"):
+            value = output.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        try:
+            dumped = json.dumps(output, ensure_ascii=False)
+        except (TypeError, ValueError):
+            dumped = str(output)
+        return _truncate_with_notice(f"Output:\n{dumped}")
+    if isinstance(output, str) and output.strip():
+        return _truncate_with_notice(f"Output:\n{output.strip()}")
+    if output is not None:
+        return _truncate_with_notice(f"Output:\n{json.dumps(output, ensure_ascii=False)}")
+    return ""
+
+
+def _truncate_with_notice(text: str) -> str:
+    if len(text) <= _JOB_OUTPUT_TEXT_MAX_CHARS:
+        return text
+    return (
+        text[:_JOB_OUTPUT_TEXT_MAX_CHARS]
+        + f"\n…[output truncated at {_JOB_OUTPUT_TEXT_MAX_CHARS} chars]"
+    )
+
+
 def _mcp_text_from_payload(payload: Any) -> str:
     if isinstance(payload, dict):
         if (
@@ -931,14 +974,8 @@ def _mcp_text_from_payload(payload: Any) -> str:
                     pass
             if payload.get("cached") is True:
                 lines.append("Cached result")
-            output = payload.get("output")
-            if isinstance(output, dict):
-                for key in ("summary", "message", "answer", "title"):
-                    value = output.get(key)
-                    if isinstance(value, str) and value.strip():
-                        lines.append(value.strip())
-                        break
-            return "\n".join(lines)
+            lines.append(_job_output_text(payload))
+            return "\n".join(line for line in lines if line)
     if isinstance(payload, dict):
         for key in (
             "summary",

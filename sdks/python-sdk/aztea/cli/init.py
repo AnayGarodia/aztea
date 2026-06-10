@@ -77,7 +77,8 @@ def init(  # noqa: PLR0913 — Typer signature is the public API.
     client: str = typer.Option(
         "claude",
         "--client",
-        help="Editor to wire up: claude | cursor | vscode | windsurf | codex.",
+        # Keep in sync with mcp._CLIENT_CHOICES.
+        help="Editor / agent harness: claude | cursor | vscode | windsurf | codex | openclaw | hermes.",
     ),
     api_key: Optional[str] = ApiKeyOpt,
     base_url: Optional[str] = BaseUrlOpt,

@@ -1,0 +1,19 @@
+{
+  "id": "aztea-deference",
+  "name": "Aztea Deference",
+  "description": "Observes wedge tasks (live web fetch/scrape, package installs, ad-hoc code exec) and logs deference opportunities; optional block modes redirect them to Aztea specialists via auto_call_agent.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mode": {
+        "type": "string",
+        "enum": ["warn", "block", "block-all"],
+        "description": "warn = observe + log only (default); block = hard-block web fetch/search tools (opt-in); block-all = hard-block every wedge category (experiment instrument only)."
+      }
+    }
+  }
+}

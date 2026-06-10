@@ -25,6 +25,24 @@ from .mcp_codex import (  # noqa: F401
     _codex_write_entry,
     _toml_basic_string,
 )
+# Hermes (YAML) helpers live in mcp_hermes.py for the same line-budget reason.
+from .mcp_hermes import (  # noqa: F401
+    HermesYamlUnavailable,
+    _hermes_extract_env,
+    _hermes_has_entry,
+    _hermes_remove_entry,
+    _hermes_write_entry,
+)
+# Pure JSON config IO lives in mcp_config_io.py (line budget); re-exported so
+# callers/tests keep using mcp._read_config / mcp._nested_servers / etc.
+from .mcp_config_io import (  # noqa: F401
+    _ConfigParseError,
+    _nested_servers,
+    _prune_empty_path,
+    _read_config,
+    _read_config_or_raise,
+    _write_config,
+)
 from .output import (
     BAR,
     CHECK,
@@ -100,16 +118,46 @@ def _codex_path() -> Path:
     return Path.home() / ".codex" / "config.toml"
 
 
+def _openclaw_path() -> Path:
+    # OpenClaw reads MCP servers from ~/.openclaw/openclaw.json under a NESTED
+    # `mcp.servers` map (confirmed against the OpenClaw source — README.md +
+    # CHANGELOG `mcp.servers.<name>`), the same shape VS Code uses. NOT a
+    # top-level `mcpServers`.
+    return Path.home() / ".openclaw" / "openclaw.json"
+
+
+def _hermes_path() -> Path:
+    # Hermes (Nous Research) reads MCP servers from ~/.hermes/config.yaml under a
+    # TOP-LEVEL `mcp_servers` map (confirmed against the hermes-agent source +
+    # docs). YAML, not JSON — handled by the mcp_hermes writer.
+    return Path.home() / ".hermes" / "config.yaml"
+
+
 _TARGETS: dict[str, _ClientTarget] = {
     "claude":   _ClientTarget("Claude Code", _claude_path()),
     "cursor":   _ClientTarget("Cursor",      _cursor_path()),
     "vscode":   _ClientTarget("VS Code",     _vscode_path(), servers_key=("mcp", "servers")),
     "windsurf": _ClientTarget("Windsurf",    _windsurf_path()),
     "codex":    _ClientTarget("Codex",       _codex_path(), fmt="toml"),
+    # Agent harnesses (opted-out-of-human-loop surfaces). OpenClaw nests under
+    # mcp.servers (JSON); Hermes uses top-level mcp_servers (YAML).
+    "openclaw": _ClientTarget("OpenClaw",    _openclaw_path(), servers_key=("mcp", "servers")),
+    "hermes":   _ClientTarget("Hermes",      _hermes_path(), fmt="yaml", servers_key=("mcp_servers",)),
 }
 
 # Shown in error hints / help so the list stays in one place.
-_CLIENT_CHOICES = "claude | cursor | vscode | windsurf | codex"
+_CLIENT_CHOICES = "claude | cursor | vscode | windsurf | codex | openclaw | hermes"
+
+# Only the agent-harness surfaces get an explicit AZTEA_CLIENT_ID stamped in
+# their MCP server env, so jobs they originate are attributed to the harness
+# (jobs.client_id). Editors stay byte-identical to what they were before — the
+# server defaults an unstamped client to "claude-code".
+_CLIENT_ID_TAGGED_SURFACES = frozenset({"openclaw", "hermes"})
+
+
+def _attribution_client_id(client_key: str) -> Optional[str]:
+    """AZTEA_CLIENT_ID to stamp for ``client_key`` (None = don't stamp)."""
+    return client_key if client_key in _CLIENT_ID_TAGGED_SURFACES else None
 
 
 def is_mcp_registered(client: str = "claude") -> bool:
@@ -130,6 +178,8 @@ def is_mcp_registered(client: str = "claude") -> bool:
             return False
         if target.fmt == "toml":
             return _codex_has_entry(target.config_path)
+        if target.fmt == "yaml":
+            return _hermes_has_entry(target.config_path)
         cfg = _read_config(target.config_path)
         servers = _nested_servers(cfg, target.servers_key, create=False)
         return isinstance(servers, dict) and "aztea" in servers
@@ -162,109 +212,26 @@ def client_label(client: str) -> str:
     return target.label if target is not None else "your editor"
 
 
-# ── Config IO ──────────────────────────────────────────────────────────────
+def _server_entry(
+    api_key: str, base_url: str, *, client_id: Optional[str] = None
+) -> dict[str, Any]:
+    """Standard stdio MCP server entry, launched via the pip-installed `aztea` CLI.
 
-def _read_config(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    try:
-        raw = path.read_text(encoding="utf-8").strip()
-        if not raw:
-            return {}
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-
-
-def _write_config(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    # These editor config files embed the API key in the MCP server env block —
-    # keep them owner-only rather than inheriting a 0644 umask.
-    os.chmod(tmp, 0o600)
-    tmp.replace(path)
-
-
-def _server_entry(api_key: str, base_url: str) -> dict[str, Any]:
-    """Standard stdio MCP server entry, launched via the pip-installed `aztea` CLI."""
+    ``client_id`` (when set) is stamped as AZTEA_CLIENT_ID so the MCP server
+    forwards it as the X-Aztea-Client header and jobs are attributed to the
+    harness. Only added when non-None, so editors stay byte-identical."""
+    env = {
+        "AZTEA_API_KEY": api_key,
+        "AZTEA_BASE_URL": base_url,
+    }
+    if client_id:
+        env["AZTEA_CLIENT_ID"] = client_id
     return {
         "type": "stdio",
         "command": "aztea",
         "args": ["mcp", "serve"],
-        "env": {
-            "AZTEA_API_KEY": api_key,
-            "AZTEA_BASE_URL": base_url,
-        },
+        "env": env,
     }
-
-
-# ── JSON config: strict read + nested-key access ───────────────────────────
-
-class _ConfigParseError(Exception):
-    """Raised when a config file exists and is non-empty but won't parse.
-
-    We refuse to write in this case so we never clobber a config we don't
-    understand (e.g. a VS Code settings.json carrying JSONC comments).
-    """
-
-
-def _read_config_or_raise(path: Path) -> dict[str, Any]:
-    """Like ``_read_config`` but distinguishes 'empty/missing' (safe to
-    create, returns {}) from 'exists but unparseable' (raises). Use this on
-    the write path; ``_read_config`` stays lenient for read-only callers."""
-    if not path.exists():
-        return {}
-    raw = path.read_text(encoding="utf-8").strip()
-    if not raw:
-        return {}
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise _ConfigParseError(str(exc)) from exc
-    if not isinstance(parsed, dict):
-        raise _ConfigParseError("top-level config is not a JSON object")
-    return parsed
-
-
-def _nested_servers(
-    data: dict[str, Any], servers_key: tuple[str, ...], *, create: bool
-) -> Optional[dict[str, Any]]:
-    """Walk ``data`` along ``servers_key`` and return the server map dict.
-
-    With ``create=True`` missing levels are created. With ``create=False``
-    a missing or non-dict level returns None (nothing registered)."""
-    node: dict[str, Any] = data
-    for key in servers_key:
-        child = node.get(key)
-        if not isinstance(child, dict):
-            if not create:
-                return None
-            child = {}
-            node[key] = child
-        node = child
-    return node
-
-
-def _prune_empty_path(data: dict[str, Any], servers_key: tuple[str, ...]) -> None:
-    """Drop now-empty dicts along ``servers_key`` after a removal, deepest
-    first, so uninstall doesn't leave behind empty ``{"mcp": {"servers": {}}}``
-    scaffolding."""
-    for depth in range(len(servers_key), 0, -1):
-        node: dict[str, Any] = data
-        ok = True
-        for key in servers_key[: depth - 1]:
-            nxt = node.get(key)
-            if not isinstance(nxt, dict):
-                ok = False
-                break
-            node = nxt
-        if not ok:
-            continue
-        leaf = servers_key[depth - 1]
-        child = node.get(leaf)
-        if isinstance(child, dict) and not child:
-            node.pop(leaf, None)
 
 
 def _read_aztea_entry(target: _ClientTarget) -> Optional[dict[str, Any]]:
@@ -275,6 +242,10 @@ def _read_aztea_entry(target: _ClientTarget) -> Optional[dict[str, Any]]:
         if not _codex_has_entry(target.config_path):
             return None
         return {"env": _codex_extract_env(target.config_path)}
+    if target.fmt == "yaml":
+        if not _hermes_has_entry(target.config_path):
+            return None
+        return {"env": _hermes_extract_env(target.config_path)}
     data = _read_config(target.config_path)
     if not isinstance(data, dict):
         return None
@@ -523,8 +494,26 @@ def install(
                 _warn("Aborted. Run `aztea mcp install` again to register.")
                 raise typer.Exit(code=0)
 
+        # AZTEA_CLIENT_ID is stamped only for agent-harness surfaces so their
+        # jobs are attributed (jobs.client_id); editors stay byte-identical.
+        client_id = _attribution_client_id((client or "").strip().lower())
         if target.fmt == "toml":
             _codex_write_entry(target.config_path, key, url)
+        elif target.fmt == "yaml":
+            try:
+                _hermes_write_entry(target.config_path, key, url, client_id=client_id)
+            except HermesYamlUnavailable as exc:
+                from .output import error
+                error(str(exc), code="mcp.hermes_yaml_missing")
+                raise typer.Exit(code=1)
+            except ValueError as exc:
+                from .output import error
+                error(
+                    f"Could not safely update {target.config_path}.",
+                    hint=f"{exc} Fix or remove it, then re-run `aztea mcp install`.",
+                    code="mcp.config_unparseable",
+                )
+                raise typer.Exit(code=1)
         else:
             try:
                 data = _read_config_or_raise(target.config_path)
@@ -542,7 +531,7 @@ def install(
                 raise typer.Exit(code=1)
             servers = _nested_servers(data, target.servers_key, create=True)
             assert servers is not None  # create=True never returns None
-            servers["aztea"] = _server_entry(key, url)
+            servers["aztea"] = _server_entry(key, url, client_id=client_id)
             _write_config(target.config_path, data)
 
         # Reflex rule + hooks are Claude-only — other clients use their own
@@ -652,6 +641,12 @@ def doctor(
         checks.append((f"PreToolUse deference hook: {pre}", True, ""))
         checks.append((f"UserPromptSubmit scout hook: {scout}", True, ""))
 
+    # Deterministic deference self-test (all clients): does the classifier fire
+    # on the 3 wedge categories? Green = deference would fire on a real task.
+    from . import deference_core  # lazy: keeps the mcp import graph flat
+    self_ok, self_detail = deference_core.deference_self_check()
+    checks.append((f"deference classifier: {self_detail}", self_ok, "" if self_ok else self_detail))
+
     profile_user = ""
     if has_key:
         try:
@@ -713,6 +708,13 @@ def uninstall(
             warn("Aztea is not currently registered in this client.")
             return
         _codex_remove_entry(target.config_path)
+    elif target.fmt == "yaml":
+        if not _hermes_remove_entry(target.config_path):
+            if json_mode:
+                emit({"removed": False, "reason": "not installed"}, json_mode=True)
+                return
+            warn("Aztea is not currently registered in this client.")
+            return
     else:
         data = _read_config(target.config_path)
         servers = _nested_servers(data, target.servers_key, create=False) if isinstance(data, dict) else None
@@ -827,13 +829,24 @@ def _read_hook_stdin() -> str:
 
 @app.command(name="pretool-hook", hidden=True)
 def pretool_hook(
-    mode: str = typer.Option("warn", "--mode", help="warn | block"),
+    mode: str = typer.Option("warn", "--mode", help="warn | block | block-all (block-all also denies Bash wedge commands — experiment treatment arm)"),
+    fmt: str = typer.Option("text", "--format", help="text (Claude) | json (neutral, for OpenClaw/Hermes plugins)"),
 ) -> None:
     """PreToolUse hook: nudge toward auto_call_agent before WebFetch/WebSearch/
-    Bash wedge commands. Reads the event JSON on stdin; warn → stderr + exit 0,
-    block → deny-JSON + exit 2 (WebFetch/WebSearch only)."""
-    from . import mcp_hooks  # lazy: breaks the mcp <-> mcp_hooks cycle
-    code, out, err = mcp_hooks.run_pretool_hook(_read_hook_stdin(), mode=mode)
+    Bash wedge commands. Reads the event JSON on stdin.
+
+    --format text (default): Claude Code protocol — warn → stderr + exit 0,
+    block → deny-JSON + exit 2 (WebFetch/WebSearch only).
+    --format json: neutral `{"decision":"block|warn|allow","reason":...}` on
+    stdout + exit 0 — the stable contract a harness plugin maps to its own API."""
+    from . import deference_core, mcp_hooks  # lazy: breaks the mcp <-> mcp_hooks cycle
+    raw = _read_hook_stdin()
+    # Observability: log the wedge decision (fail-open; never affects the hook).
+    deference_core.record_pretool_decision(raw, mode=mode, now=time.time())
+    if fmt == "json":
+        typer.echo(deference_core.pretool_decision_json(raw, mode=mode))
+        raise typer.Exit(0)
+    code, out, err = mcp_hooks.run_pretool_hook(raw, mode=mode)
     if out:
         typer.echo(out)
     if err:
@@ -846,7 +859,7 @@ def prompt_hook() -> None:
     """UserPromptSubmit hook: on each substantive prompt, ask Aztea (free
     dry-run) whether a specialist matches and, if so, inject a one-line named
     suggestion as added context. Fail-open + silent on no-match/error."""
-    from . import mcp_hooks  # lazy: breaks the mcp <-> mcp_hooks cycle
+    from . import deference_core, mcp_hooks  # lazy: breaks the mcp <-> mcp_hooks cycle
     raw = _read_hook_stdin()
     try:
         event = json.loads(raw) if raw.strip() else {}
@@ -868,7 +881,36 @@ def prompt_hook() -> None:
     if suggestion:
         # UserPromptSubmit: stdout on exit 0 is injected into the prompt context.
         typer.echo(suggestion)
+        # Observability: a matched scout is an ADVISORY suggestion, not a hard
+        # redirect — redirected=False so it doesn't inflate the redirect tally
+        # in summarize_deference_log (the one operator-facing signal).
+        deference_core.record_deference_decision(
+            tool="UserPromptSubmit", category="prompt_scout", action="suggest",
+            redirected=False, now=time.time(),
+        )
     raise typer.Exit(0)
+
+
+@app.command(name="deference-log")
+def deference_log(
+    tail: int = typer.Option(20, "--tail", help="show this many recent decisions"),
+) -> None:
+    """Show recent deference decisions — the visible 'is it working?' signal for
+    no-human surfaces. Pairs with job attribution: this is what the hook decided;
+    `aztea_inspect`/jobs.client_id is what actually got called."""
+    from . import deference_core  # lazy: keeps the mcp import graph flat
+    rows = deference_core.read_deference_log(limit=max(1, tail))
+    summary = deference_core.summarize_deference_log(rows)
+    if not rows:
+        typer.echo("No deference decisions logged yet. The hook records a line each "
+                   "time it nudges/redirects a wedge task (web / live_data / deps / exec).")
+        return
+    by_cat = ", ".join(f"{k} {v}" for k, v in sorted(summary["by_category"].items())) or "none"
+    typer.echo(f"{summary['total']} decisions, {summary['redirected']} redirected — {by_cat}")
+    for row in rows:
+        flag = "→aztea" if row.get("redirected") else "warn"
+        typer.echo(f"  {row.get('ts','?')}  {row.get('client','?'):<10} "
+                   f"{row.get('category','?'):<10} {flag}")
 
 
 def _render_doctor(

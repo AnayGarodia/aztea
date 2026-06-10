@@ -1,0 +1,3 @@
+# Harness configs carry the local experiment API key — regenerate per machine
+# (see REPORT.md methodology); never commit credentials.
+configs/

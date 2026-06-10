@@ -363,6 +363,44 @@ def test_mcp_text_formatter_makes_search_results_readable():
     assert "Workflow hints:" in text
 
 
+def test_mcp_text_formatter_surfaces_full_job_output_without_summary_key():
+    # Regression (2026-06-10): a completed job whose output dict has no
+    # summary/message/answer/title key returned ONLY "status: complete" —
+    # the specialist ran, charged, and the buyer's model never saw the
+    # content. The full output JSON must be appended.
+    text = _MODULE._mcp_text_from_payload(
+        {
+            "job_id": "j1",
+            "status": "complete",
+            "latency_ms": 3500,
+            "output": {"url": "https://x", "title": "", "html": "<pre>REAL CONTENT</pre>"},
+        }
+    )
+    assert "Aztea job j1 | status: complete" in text
+    assert "REAL CONTENT" in text
+
+
+def test_mcp_text_formatter_prefers_rendered_output_and_truncates():
+    rendered = "# Pretty result\nline"
+    text = _MODULE._mcp_text_from_payload(
+        {"job_id": "j2", "status": "complete", "output": {"x": 1}, "rendered_output": rendered}
+    )
+    assert "# Pretty result" in text
+    assert '"x": 1' not in text  # rendered form wins over raw JSON
+    huge = {"blob": "A" * (_MODULE._JOB_OUTPUT_TEXT_MAX_CHARS + 1000)}
+    text = _MODULE._mcp_text_from_payload({"job_id": "j3", "status": "complete", "output": huge})
+    assert "[output truncated at" in text
+    assert len(text) < _MODULE._JOB_OUTPUT_TEXT_MAX_CHARS + 200
+
+
+def test_mcp_text_formatter_keeps_summary_key_fast_path():
+    text = _MODULE._mcp_text_from_payload(
+        {"job_id": "j4", "status": "complete", "output": {"summary": "Done well", "raw": "x" * 500}}
+    )
+    assert "Done well" in text
+    assert "x" * 100 not in text  # summary suffices; raw payload not dumped
+
+
 def test_aztea_call_forwards_output_format_into_underlying_call(monkeypatch):
     """Regression: aztea_call(slug=..., arguments={...}, output_format='markdown')
     used to silently drop output_format. The bridge must merge it into the
