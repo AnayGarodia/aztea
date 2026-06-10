@@ -272,3 +272,109 @@ def test_python_executor_static_alloc_limit_env_override(monkeypatch):
     finally:
         monkeypatch.delenv("AZTEA_PYTHON_STATIC_ALLOC_LIMIT_MB")
         importlib.reload(python_executor)
+
+
+def test_multi_language_pre_filter_blocks_go_process_spawn():
+    """Go could shell out (exec.Command("curl", ...)) and reach the network
+    indirectly, sidestepping the SSRF pre-filter. Now rejected up-front
+    with a process-spawn-specific message."""
+    safe, reason = multi_language_executor._is_code_network_safe(
+        "go",
+        'package main\nimport "os/exec"\nfunc main() { exec.Command("sh", "-c", "id").Run() }',
+    )
+    assert safe is False
+    assert "spawns external processes" in (reason or "")
+
+
+def test_multi_language_pre_filter_blocks_rust_process_spawn():
+    safe, reason = multi_language_executor._is_code_network_safe(
+        "rust",
+        'use std::process::Command;\nfn main() { Command::new("curl").status().unwrap(); }',
+    )
+    assert safe is False
+    assert "spawns external processes" in (reason or "")
+
+
+def test_multi_language_spawn_block_does_not_hit_other_languages():
+    """The Go/Rust spawn patterns must not reject unrelated JS code that
+    merely mentions 'Command' in a string or identifier."""
+    safe, reason = multi_language_executor._is_code_network_safe(
+        "javascript", 'const Command = {new: () => 1}; console.log(Command.new());'
+    )
+    assert safe is True, reason
+
+
+def test_multi_language_network_message_distinct_from_spawn_message():
+    safe, reason = multi_language_executor._is_code_network_safe(
+        "go", 'package main\nimport "net/http"\nfunc main() { http.Get("https://example.com") }'
+    )
+    assert safe is False
+    assert "network-capable API surface" in (reason or "")
+
+
+def test_multi_language_rustc_compile_error_classified(monkeypatch):
+    monkeypatch.setattr(
+        multi_language_executor,
+        "_which",
+        lambda name: "/usr/bin/rustc" if name == "rustc" else None,
+    )
+
+    def fake_run(cmd, input=None, capture_output=None, text=None, timeout=None, cwd=None, env=None, **kwargs):
+        del input, capture_output, text, timeout, env, kwargs
+        if cmd[0] == "/usr/bin/rustc" and "-o" in cmd:
+            return SimpleNamespace(
+                returncode=1, stdout="", stderr="error[E0425]: cannot find value `x`"
+            )
+        return SimpleNamespace(returncode=0, stdout="rustc 1.77.0\n", stderr="")
+
+    monkeypatch.setattr(multi_language_executor.subprocess, "run", fake_run)
+    result = multi_language_executor.run(
+        {"language": "rust", "code": "fn main() { println!(\"{}\", x); }"}
+    )
+    assert result["error_kind"] == "compile", result
+    assert result["passed"] is False
+
+
+def test_multi_language_go_compile_vs_runtime_classification(monkeypatch):
+    monkeypatch.setattr(
+        multi_language_executor,
+        "_which",
+        lambda name: "/usr/bin/go" if name == "go" else None,
+    )
+
+    responses = {"stderr": "./main.go:3:5: undefined: foo"}
+
+    def fake_run(cmd, input=None, capture_output=None, text=None, timeout=None, cwd=None, env=None, **kwargs):
+        del input, capture_output, text, timeout, env, kwargs
+        if cmd[:2] == ["/usr/bin/go", "run"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr=responses["stderr"])
+        return SimpleNamespace(returncode=0, stdout="go version go1.22\n", stderr="")
+
+    monkeypatch.setattr(multi_language_executor.subprocess, "run", fake_run)
+    payload = {"language": "go", "code": "package main\nfunc main() { foo() }"}
+
+    compile_result = multi_language_executor.run(payload)
+    assert compile_result["error_kind"] == "compile", compile_result
+
+    responses["stderr"] = "panic: runtime error: index out of range"
+    runtime_result = multi_language_executor.run(payload)
+    assert runtime_result["error_kind"] == "runtime", runtime_result
+
+
+def test_multi_language_success_has_null_error_kind(monkeypatch):
+    monkeypatch.setattr(
+        multi_language_executor,
+        "_which",
+        lambda name: "/usr/bin/node" if name == "node" else None,
+    )
+
+    def fake_run(cmd, input=None, capture_output=None, text=None, timeout=None, cwd=None, env=None, **kwargs):
+        del input, capture_output, text, timeout, env, kwargs
+        return SimpleNamespace(returncode=0, stdout="hi\n", stderr="")
+
+    monkeypatch.setattr(multi_language_executor.subprocess, "run", fake_run)
+    result = multi_language_executor.run(
+        {"language": "javascript", "code": "console.log('hi')"}
+    )
+    assert result["passed"] is True
+    assert result["error_kind"] is None

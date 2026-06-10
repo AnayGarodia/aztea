@@ -49,7 +49,11 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
         multi_language_desc = (
             f"Sandboxed code execution. Currently installed runtimes on this executor: "
             f"{languages_pretty}. Other languages return a clear unsupported_language "
-            "error (no charge). For Python use the Python Code Executor instead."
+            "error (no charge). Offline sandbox: network APIs AND process "
+            "spawning (os/exec, std::process, child_process) are rejected "
+            "up-front with a structured error. Nonzero exits are classified "
+            "via error_kind: 'compile' vs 'runtime'. For Python use the "
+            "Python Code Executor instead."
         )
     else:
         multi_language_desc = (
@@ -524,11 +528,19 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "output_schema": _output_schema_object(
                 {
                     "language": {"type": "string"},
-                    "runtime": {"type": "string"},
+                    "runtime": {
+                        "type": "string",
+                        "description": "Runtime that actually executed the code, e.g. 'node v20.11.0' or 'tsc+node 5.4'",
+                    },
                     "stdout": {"type": "string"},
                     "stderr": {"type": "string"},
                     "exit_code": {"type": "integer"},
                     "passed": {"type": "boolean"},
+                    "error_kind": {
+                        "type": ["string", "null"],
+                        "enum": ["compile", "runtime", None],
+                        "description": "Why a nonzero exit happened: 'compile' (build/typecheck failed before running) vs 'runtime' (code ran and crashed). Null on success.",
+                    },
                     "execution_time_ms": {"type": "integer"},
                 },
                 required=[
