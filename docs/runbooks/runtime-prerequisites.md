@@ -19,6 +19,8 @@ Most Aztea built-in agents are pure Python + HTTP and have no system-level depen
 | Browser Agent            | Playwright + Chromium      | `python -m playwright install --check` | `browser_agent.playwright_not_installed` |
 | Visual Regression *(sunset 2026-05-20)* | Playwright + Chromium      | `python -m playwright install --check` | `visual_regression.playwright_not_installed` (endpoint stays wired for legacy job IDs) |
 | Accessibility Auditor    | Playwright + Chromium      | `python -m playwright install --check` | `accessibility_auditor.tool_unavailable` |
+| Site Navigator           | Playwright + Chromium (skipped on the http-first / API-spec path); trafilatura + markdownify optional for markdown | `python -m playwright install --check` | `site_navigator` degrades / returns retrieval-only |
+| Web Actor *(fail-closed; OFF by default)* | Playwright + Chromium; `AZTEA_ACTION_WEB_ENABLED=1` to enable at all | `python -m playwright install --check` | `web_actor.disabled` / `web_actor.tool_unavailable` |
 | Lighthouse Auditor       | Node.js ≥ 18 + `lighthouse` CLI + Chromium | `lighthouse --version`     | `lighthouse_auditor.runtime_missing`     |
 | Broken Link Crawler      | None (pure Python: httpx + bs4) | —                                  | —                                        |
 | PDF Document Parser      | None (pure Python: pymupdf + pdfplumber) | —                            | `pdf_document_parser.runtime_missing` if `pymupdf` is absent |
@@ -112,6 +114,41 @@ with sync_playwright() as p:
     browser.close()
 "
 ```
+
+---
+
+## Optional: stealth browser (anti-bot reach) for web_actor / site_navigator
+
+Default OFF. When `AZTEA_STEALTH_BROWSER=1`, the web agents launch an **undetected**
+browser (`patchright`, a drop-in Playwright) that masks automation fingerprints to
+reach sites with basic/medium bot detection. It does NOT defeat enterprise anti-bot
+(Cloudflare/DataDome) — that needs the rented proxy / remote-browser seam below.
+`patchright` is heavy (its own Chromium) and is therefore **not** in `requirements.txt`;
+install it only on instances that opt in:
+
+```bash
+pip install "patchright>=1.52"
+patchright install chromium
+```
+
+If the flag is on but `patchright` is absent, `core/web/stealth_browser.py` logs a
+warning and falls back to stock Playwright (no stealth) — it never silently no-ops.
+
+Anti-bot **infrastructure** (residential proxies, CAPTCHA solving) is not code: wire a
+vendor through the existing seam — `AZTEA_FETCH_PROXY_URL` (httpx proxy) or
+`AZTEA_FETCH_BACKEND=remote_browser` + `AZTEA_REMOTE_BROWSER_*` (managed browser).
+
+## Optional: credential vault for web_actor (E3)
+
+Default OFF and fail-closed. Lets `web_actor` log into a user's stored account. Flags:
+
+- `AZTEA_CREDENTIAL_VAULT_ENABLED=1` — enable store/list/revoke/rotate.
+- `AZTEA_CREDENTIAL_INJECTION_ENABLED=1` — allow decrypt + inject into a live browser
+  (the highest-risk switch; keep OFF on hosted/multi-tenant until a `/cso` pass).
+- A KEK provider is **required** to store anything: hosted `AZTEA_VAULT_KMS_KEY_ID`
+  (AWS KMS), or self-host `AZTEA_VAULT_LOCAL_KEK=<base64 32 bytes>` **and**
+  `AZTEA_VAULT_ALLOW_LOCAL_KEK=1`. With neither, the vault raises `VaultUnavailable`
+  rather than persisting secrets weakly.
 
 ---
 

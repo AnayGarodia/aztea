@@ -31,11 +31,13 @@ from server.builtin_agents.constants import (
     LIVE_SANDBOX_AGENT_ID,
     MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
     PYTHON_EXECUTOR_AGENT_ID,
+    SITE_NAVIGATOR_AGENT_ID,
     SUNSET_DEPRECATED_AGENT_IDS,
 )
 
-# WHY: post-2026-05-26 platform-pivot cull. See the comment block above
-# SUNSET_DEPRECATED_AGENT_IDS in constants.py for the per-agent reasoning.
+# WHY: post-2026-05-26 platform-pivot cull (10) + 2026-06-01 site_navigator, the
+# agent-readable-web magnet, added to the curated set (→11). See the comment block
+# above SUNSET_DEPRECATED_AGENT_IDS in constants.py for the per-agent reasoning.
 _CURATED_EXPECTED = frozenset({
     CVELOOKUP_AGENT_ID,
     DEPENDENCY_AUDITOR_AGENT_ID,
@@ -47,9 +49,10 @@ _CURATED_EXPECTED = frozenset({
     BROWSER_AGENT_ID,
     LIGHTHOUSE_AUDITOR_AGENT_ID,
     ACCESSIBILITY_AUDITOR_AGENT_ID,
+    SITE_NAVIGATOR_AGENT_ID,
 })
 
-_CURATED_EXPECTED_COUNT = 10
+_CURATED_EXPECTED_COUNT = 11
 
 
 def test_curated_catalog_count_matches_snapshot() -> None:

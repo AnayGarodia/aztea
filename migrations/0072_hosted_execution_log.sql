@@ -1,4 +1,4 @@
--- 0067_hosted_execution_log.sql
+-- 0072_hosted_execution_log.sql
 -- Persisted audit of every hosted-skill / playground-test execution.
 --
 -- Without this we cannot answer how often the sandbox kills a runaway

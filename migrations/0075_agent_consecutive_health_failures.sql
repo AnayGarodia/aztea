@@ -1,4 +1,4 @@
--- 0070_agent_consecutive_health_failures.sql
+-- 0075_agent_consecutive_health_failures.sql
 --
 -- Counter for the continuous endpoint-health sweeper introduced in Plan B
 -- Phase 3b. Increments on every consecutive failed probe, resets to 0 on

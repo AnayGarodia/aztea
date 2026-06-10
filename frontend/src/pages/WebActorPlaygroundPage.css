@@ -1,0 +1,103 @@
+/* web_actor test playground (/web-actor). Theme tokens with safe fallbacks so it
+   renders acceptably with or without the design-system variables present. */
+.web-act {
+  /* AppShell clips .shell__main overflow, so this page must be its own scroll
+     container (flex:1 to fill the absolute .shell__page, min-height:0 so overflow
+     works inside the flex column, overflow-y:auto to actually scroll). */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 28px 16px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.web-act__hero h1 {
+  font-size: 1.7rem;
+  line-height: 1.2;
+  margin: 0 0 8px;
+}
+.web-act__muted {
+  color: var(--text-muted, #8a8a8a);
+  font-size: 0.9rem;
+  margin: 6px 0 0;
+}
+.web-act__input-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  margin-top: 12px;
+}
+.web-act__input-row > :first-child {
+  flex: 1;
+}
+.web-act__presets {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.web-act__steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+.web-act__step {
+  display: grid;
+  grid-template-columns: 24px 120px 1fr 1fr 36px;
+  gap: 8px;
+  align-items: center;
+}
+.web-act__step-n {
+  color: var(--text-muted, #8a8a8a);
+  font-size: 0.82rem;
+  text-align: center;
+}
+.web-act__follow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.web-act__results {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.web-act__article {
+  border-top: 1px solid var(--border, rgba(127, 127, 127, 0.18));
+  padding: 10px 0;
+}
+.web-act__article > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.web-act__result-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.web-act__row-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.web-act__code {
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+  padding: 12px 14px;
+  border-radius: 8px;
+  overflow: auto;
+  max-height: 460px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

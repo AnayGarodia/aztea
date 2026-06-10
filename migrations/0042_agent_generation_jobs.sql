@@ -1,4 +1,4 @@
--- 0041_agent_generation_jobs.sql
+-- 0042_agent_generation_jobs.sql
 --
 -- Sibling table to `jobs` for the vibe-an-agent self-serve generation flow
 -- (POST /agents/generate). Not reusing `jobs` because that table carries

@@ -318,17 +318,28 @@ def test_registry_register_auto_verifies_with_verifier_url(client, monkeypatch):
     class _VerifierResponse:
         status_code = 200
 
+        def __init__(self, payload_hash: str):
+            # The verifier (2026-05-22 GAP_REPORT I1/I3) binds its verdict to the
+            # request's payload_hash so a "verified=true" reply can't be replayed
+            # against a different registration. A compliant verifier echoes the hash
+            # it was sent — so the mock must too, or the binding check rejects it.
+            self._payload_hash = payload_hash
+
         def raise_for_status(self):
             return None
 
         def json(self):
-            return {"verified": True, "reason": "Verifier accepted registration payload."}
+            return {
+                "verified": True,
+                "reason": "Verifier accepted registration payload.",
+                "payload_hash": self._payload_hash,
+            }
 
     def _fake_post(url, json=None, headers=None, timeout=None, allow_redirects=None):
         captured["url"] = url
         captured["body"] = json
         captured["allow_redirects"] = allow_redirects
-        return _VerifierResponse()
+        return _VerifierResponse((json or {}).get("payload_hash", ""))
 
     monkeypatch.setattr(server.http, "post", _fake_post)
     response = client.post(

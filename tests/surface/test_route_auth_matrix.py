@@ -93,6 +93,11 @@ _PUBLIC_PATH_PREFIXES = (
     "/workspaces/sealer/did.json",
     "/workspaces/{workspace_id}/manifest",
     "/workspaces/{workspace_id}/verify",
+    # /web/verify checks a signed observation receipt offline (provenance, not
+    # truth) — the same public verification posture as /workspaces/*/verify above:
+    # an external consumer must be able to verify a receipt's Ed25519 signature
+    # without an Aztea account. Returns 200 with {valid: bool}; never a secret.
+    "/web/verify",
 )
 
 # Routes intentionally NOT available to the master API key (user-scoped

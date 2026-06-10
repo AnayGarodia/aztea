@@ -26,6 +26,14 @@ regex>=2024.0.0
 # itself is downloaded by `playwright install chromium` at image build time
 # (see Dockerfile); pip pulls only the python bindings here.
 playwright>=1.40.0
+# 2026-06-02 (Phase 4): OPTIONAL stealth browser for web_actor/site_navigator when
+# AZTEA_STEALTH_BROWSER=1. patchright is a drop-in undetected Playwright; it pulls
+# its own chromium and is heavy, so it is NOT in the compiled lockfile — install it
+# only on instances that opt into stealth:
+#     pip install "patchright>=1.52" && patchright install chromium
+# core/web/stealth_browser.py degrades to stock Playwright (with a logged warning)
+# when it is absent, so the default build is unaffected.
+# patchright>=1.52
 # Local embedding model for the agent-search ranker. Without this (and without
 # OPENAI_API_KEY) the semantic similarity term is always 0, so search is
 # effectively lexical-only. The 2026-05-07 power-user eval scored discovery
@@ -37,6 +45,13 @@ pymupdf>=1.24.0
 pdfplumber>=0.11.0
 # broken_link_crawler uses BeautifulSoup to extract <a>/<img>/<script>/<link>.
 beautifulsoup4>=4.12.0
+# 2026-06-02 (Phase A): site_navigator's 'markdown' output format. trafilatura is
+# the readability-grade main-content extractor (the default, chosen over a naive
+# tag-strip per the build-plan review T1; it pulls lxml). markdownify is the
+# no-lxml fallback converter. Both lazy-imported in agents/_html_extract.py, so a
+# missing dep degrades the markdown format rather than breaking import.
+trafilatura>=1.8.0
+markdownify>=0.11.6
 # email_deliverability_checker uses dnspython for SPF / DKIM / MX lookups.
 # Without this the agent fails every call with "dnspython not installed".
 dnspython>=2.6.0

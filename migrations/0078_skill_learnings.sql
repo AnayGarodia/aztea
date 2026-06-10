@@ -1,4 +1,4 @@
--- 0077_skill_learnings.sql
+-- 0078_skill_learnings.sql
 --
 -- Self-improving hosted skills (learnings memory, Hermes-style). The
 -- distiller turns a skill's accumulated failures into short corrective

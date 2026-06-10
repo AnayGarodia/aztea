@@ -49,6 +49,8 @@ _AGENT_CONCURRENCY_LIMITS: dict[str, int] = {
     _PYTHON_EXECUTOR_AGENT_ID: 16,
     _MULTI_LANGUAGE_EXECUTOR_AGENT_ID: 8,
     _BROWSER_AGENT_ID: 4,
+    _SITE_NAVIGATOR_AGENT_ID: 4,
+    _WEB_ACTOR_AGENT_ID: 4,
     _VISUAL_REGRESSION_AGENT_ID: 4,
     _LIGHTHOUSE_AUDITOR_AGENT_ID: 4,
     _ACCESSIBILITY_AUDITOR_AGENT_ID: 4,
@@ -128,6 +130,11 @@ _AGENT_WALL_BUDGET_OVERRIDES: dict[str, float] = {
     # path uses its own larger budget (see _AGENT_WALL_BUDGET_ASYNC_*).
     _LIGHTHOUSE_AUDITOR_AGENT_ID: 90.0,
     _LIVE_SANDBOX_AGENT_ID: 90.0,
+    # web_actor drives a bounded interaction whose own total budget is 30 s
+    # (agents/_web_interact._TOTAL_BUDGET_S) plus Chromium spin-up; the 8 s sync
+    # default would kill a normal interact/dry_run. 45 s covers the worst case;
+    # heavier sequences should use the async path (1200 s) below.
+    _WEB_ACTOR_AGENT_ID: 45.0,
     # 2026-05-18 — cve_lookup was timing out 3/3 times under the 8 s sync
     # default because NVD round-trips are 8-10 s cold and the agent does
     # one per CVE id sequentially with a 0.7 s rate-limit delay. Combined
@@ -167,6 +174,8 @@ _AGENT_WALL_BUDGET_ASYNC_OVERRIDES: dict[str, float] = {
     _LIGHTHOUSE_AUDITOR_AGENT_ID: 1800.0,
     _LIVE_SANDBOX_AGENT_ID: 1800.0,
     _BROWSER_AGENT_ID: 1200.0,
+    _SITE_NAVIGATOR_AGENT_ID: 1200.0,
+    _WEB_ACTOR_AGENT_ID: 1200.0,
     _VISUAL_REGRESSION_AGENT_ID: 1200.0,
     _BROKEN_LINK_CRAWLER_AGENT_ID: 1200.0,
     _ACCESSIBILITY_AUDITOR_AGENT_ID: 1200.0,
@@ -428,6 +437,8 @@ BUILTIN_AGENT_RUNNERS: dict[str, Callable[[Any], dict]] = {
     _DB_SANDBOX_AGENT_ID: _module_runner(agent_db_sandbox),
     _VISUAL_REGRESSION_AGENT_ID: _module_runner(agent_visual_regression),
     _BROWSER_AGENT_ID: _module_runner(agent_browser_agent),
+    _SITE_NAVIGATOR_AGENT_ID: _module_runner(agent_site_navigator),
+    _WEB_ACTOR_AGENT_ID: _module_runner(agent_web_actor),
     _MULTI_LANGUAGE_EXECUTOR_AGENT_ID: _module_runner(agent_multi_language_executor),
     _SECRET_SCANNER_AGENT_ID: _module_runner(agent_secret_scanner),
     _LIGHTHOUSE_AUDITOR_AGENT_ID: _module_runner(agent_lighthouse_auditor),
