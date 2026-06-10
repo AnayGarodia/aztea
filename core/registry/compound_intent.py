@@ -55,6 +55,38 @@ _IMPERATIVE_VERBS: frozenset[str] = frozenset({
 _MIN_STEP_CHARS = 6
 _MAX_STEPS = 6
 
+# Output-shaping verbs: "fetch X and report it" is ONE hire whose answer is
+# delivered a certain way, not two specialist steps. 2026-06-10: the
+# deference experiment showed "Fetch …rfc2606.txt and report it" refusing
+# with compound_intent, forcing a retry round-trip. A non-first segment that
+# starts with one of these and is short (or refers back to the prior step's
+# result) folds into the preceding step instead of counting as a step.
+_REPORTING_VERBS: frozenset[str] = frozenset({
+    "report", "return", "tell", "show", "give", "print",
+    "output", "say", "list", "display", "describe",
+})
+_BACKREF_TOKENS = ("it", "its", "them", "me", "the result", "the results",
+                   "the content", "the contents", "the output", "the text")
+_REPORTING_TAIL_MAX_CHARS = 60
+
+
+def _is_reporting_tail(step: str) -> bool:
+    """Pure: True when a step only shapes the previous step's output."""
+    text = (step or "").strip().rstrip(".").lower()
+    first = (text.split() or [""])[0].rstrip(",.")
+    if first not in _REPORTING_VERBS:
+        return False
+    if len(text) <= _REPORTING_TAIL_MAX_CHARS:
+        return True
+    return any(ref in text for ref in _BACKREF_TOKENS)
+
+
+def _fold_reporting_tails(parts: tuple[str, ...]) -> tuple[str, ...]:
+    """Pure: drop non-first segments that are output shaping, not steps."""
+    if len(parts) < 2:
+        return parts
+    return (parts[0],) + tuple(p for p in parts[1:] if not _is_reporting_tail(p))
+
 
 @dataclass(frozen=True)
 class CompoundIntent:
@@ -79,7 +111,9 @@ def detect_compound(intent: str) -> CompoundIntent | None:
         parts = pattern.split(text)
         if len(parts) < 2:
             continue
-        cleaned = tuple(p.strip().rstrip(".") for p in parts if p.strip())
+        cleaned = _fold_reporting_tails(
+            tuple(p.strip().rstrip(".") for p in parts if p.strip())
+        )
         if len(cleaned) < 2 or len(cleaned) > _MAX_STEPS:
             continue
         if any(len(p) < _MIN_STEP_CHARS for p in cleaned):
@@ -97,7 +131,9 @@ def detect_compound(intent: str) -> CompoundIntent | None:
             first = (p.strip().split() or [""])[0].lower().rstrip(",.")
             starts_with_imperative.append(first in _IMPERATIVE_VERBS)
         if sum(starts_with_imperative) >= 2:
-            cleaned = tuple(p.strip().rstrip(".") for p in and_parts if p.strip())
+            cleaned = _fold_reporting_tails(
+                tuple(p.strip().rstrip(".") for p in and_parts if p.strip())
+            )
             if 2 <= len(cleaned) <= _MAX_STEPS and all(
                 len(p) >= _MIN_STEP_CHARS for p in cleaned
             ):

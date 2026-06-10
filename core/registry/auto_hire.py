@@ -257,8 +257,18 @@ def _rank_candidates(
     Defaulted to None for backward compat with tests and historical
     callers — when None the affinity bonus contributes 0.
     """
+    # Relative cold-start: rebate the catalog-minimum penalty so a uniformly
+    # cold marketplace isn't uniformly deflated below the confidence floor
+    # (2026-06-10 — see _score_quality_signals).
+    rebate = min((_cold_start_penalty(c) for c in candidates), default=0.0)
     ranked = sorted(
-        (_score_candidate(c, intent_text, explicit_input, caller_owner_id) for c in candidates),
+        (
+            _score_candidate(
+                c, intent_text, explicit_input, caller_owner_id,
+                cold_start_rebate=rebate,
+            )
+            for c in candidates
+        ),
         key=lambda r: r.score,
         reverse=True,
     )
@@ -959,6 +969,13 @@ _FINANCIAL_AGENT_HINTS = ("edgar", "sec", "financial")
 # route to cve_lookup, not dependency_auditor. The bonus matches
 # _DEPENDENCY_AUDIT_BONUS so the two never both win the same intent.
 _CVE_LOOKUP_BONUS = 70
+# 2026-06-10 (deference experiment): "Fetch the raw URL …/package.json"
+# invoked dependency_auditor (the audit cue was INSIDE the URL) instead of a
+# web-fetch agent. An explicit URL + fetch verb, with no package pins, is a
+# fetch intent; the bonus matches _DEPENDENCY_AUDIT_BONUS so it wins ties.
+_URL_FETCH_BONUS = 70
+_FETCH_VERBS = frozenset({"fetch", "scrape", "download", "retrieve", "visit", "open", "load", "get"})
+_WEB_FETCH_AGENT_HINTS = ("browser", "web agent", "scrape", "web_agent", "fetch")
 _CVE_LOOKUP_AGENT_HINTS = ("cve_lookup", "cve lookup", "cve-lookup")
 # Audit 2026-05-16 #14: "what is the capital of France" routed to
 # python_code_executor because no other candidate scored and the executor
@@ -1031,12 +1048,22 @@ def _score_string_signals(c: CandidateAgent, intent_lower: str, tokens: set[str]
     return score, reasons
 
 
-def _score_quality_signals(c: CandidateAgent) -> tuple[float, list[str]]:
+def _cold_start_penalty(c: CandidateAgent) -> float:
+    """Pure: the Bayesian low-evidence penalty for one candidate (bug 7)."""
+    call_count = int(c.raw.get("call_count", c.raw.get("total_calls", 0)) or 0)
+    rating_count = int(c.raw.get("quality_rating_count", 0) or 0)
+    evidence = float(call_count + 2 * rating_count)
+    confidence = evidence / (evidence + _COLD_START_EVIDENCE_DENOM)
+    return (1.0 - confidence) * _COLD_START_MAX_PENALTY
+
+
+def _score_quality_signals(
+    c: CandidateAgent, cold_start_rebate: float = 0.0,
+) -> tuple[float, list[str]]:
     """Pure: success-rate + trust + recommended bonuses for agents with a track record."""
     score = 0.0
     reasons: list[str] = []
     call_count = int(c.raw.get("call_count", c.raw.get("total_calls", 0)) or 0)
-    rating_count = int(c.raw.get("quality_rating_count", 0) or 0)
     if call_count >= _QUALITY_TRACK_RECORD_CALLS:
         score += min(_QUALITY_SUCCESS_BONUS_CAP, c.success_rate * 10)
         score += min(_QUALITY_TRUST_BONUS_CAP, c.trust_score / _TRUST_BONUS_DIVISOR)
@@ -1044,15 +1071,17 @@ def _score_quality_signals(c: CandidateAgent) -> tuple[float, list[str]]:
     # uninformative trust_score (50.0 default). Without this penalty, a
     # fresh agent with strong text match can sit above an established
     # 60-70% agent in filtered searches — the 2026-05-18 audit's bug 7.
-    evidence = float(call_count + 2 * rating_count)
-    confidence = evidence / (evidence + _COLD_START_EVIDENCE_DENOM)
-    penalty = (1.0 - confidence) * _COLD_START_MAX_PENALTY
+    # 2026-06-10: the penalty is RELATIVE — `cold_start_rebate` is the
+    # catalog-minimum penalty, computed in _rank_candidates. On a fresh
+    # marketplace where EVERY agent is cold, the old absolute penalty
+    # deflated all scores uniformly and pushed clear matches below the
+    # confidence floor (the deference experiment's 0.03-confidence
+    # refusals); relative scoring keeps new-vs-established ordering while
+    # leaving a uniformly-cold catalog unaffected.
+    penalty = max(0.0, _cold_start_penalty(c) - max(0.0, cold_start_rebate))
     if penalty > 0.01:
         score -= penalty
-        reasons.append(
-            f"cold-start prior: -{penalty:.1f} (evidence={int(evidence)}, "
-            f"confidence={confidence:.2f})"
-        )
+        reasons.append(f"cold-start prior: -{penalty:.1f} (relative to catalog)")
     if c.raw.get("codex_recommended"):
         score += _CODEX_RECOMMENDED_BONUS
         reasons.append("recommended")
@@ -1081,11 +1110,23 @@ def _score_intent_interlocks(
     """Pure: cohort-specific bonuses (audit, python-exec, lint, browser, image, financial)."""
     score = 0.0
     reasons: list[str] = []
+    # URL-fetch intent: explicit URL + fetch verb + no package pins. Computed
+    # first because it both grants the web-fetch bonus and suppresses the
+    # dependency bonus (whose "package.json" cue can sit inside the URL).
+    has_pins = _looks_like_package_pinning(intent_lower)
+    url_fetch_intent = (
+        not has_pins
+        and bool(_FETCH_VERBS & tokens)
+        and _extract_url(intent) is not None
+    )
+    if url_fetch_intent and any(t in combined for t in _WEB_FETCH_AGENT_HINTS):
+        score += _URL_FETCH_BONUS
+        reasons.append("url fetch intent")
     is_dependency_agent = (
         any(tok in combined for tok in _DEPENDENCY_AGENT_HINTS)
         or ("dependency" in combined and "audit" in combined)
     )
-    if audit_signal and is_dependency_agent:
+    if audit_signal and is_dependency_agent and not url_fetch_intent:
         score += _DEPENDENCY_AUDIT_BONUS
         reasons.append("dependency audit intent")
     has_strong_exec_verb = bool(_EXEC_VERBS & tokens)
@@ -1113,8 +1154,7 @@ def _score_intent_interlocks(
     # Audit 2026-05-16 #12: bare CVE id ("details for CVE-2021-44228")
     # without package pins must dominate dependency_auditor → cve_lookup.
     has_cve_id = bool(_CVE_ID_RE.search(intent))
-    has_packages = _looks_like_package_pinning(intent_lower)
-    if has_cve_id and not has_packages and any(
+    if has_cve_id and not has_pins and any(
         t in combined for t in _CVE_LOOKUP_AGENT_HINTS
     ):
         score += _CVE_LOOKUP_BONUS
@@ -1656,6 +1696,7 @@ def _score_candidate(
     intent: str,
     explicit_input: dict[str, Any] | None = None,
     caller_owner_id: str | None = None,
+    cold_start_rebate: float = 0.0,
 ) -> Ranked:
     """Pure: lean confidence-oriented scorer; sums independent signal helpers.
 
@@ -1703,7 +1744,7 @@ def _score_candidate(
         utility_delta, utility_why = _score_utility_adjustment(c)
     for delta, why in (
         _score_string_signals(c, intent_lower, tokens),
-        _score_quality_signals(c),
+        _score_quality_signals(c, cold_start_rebate),
         _score_intent_interlocks(c, intent, intent_lower, tokens, combined, audit_signal),
         _score_keyword_overrides(c, intent_lower),
         _score_schema_shape(c, explicit_input),
@@ -1958,59 +1999,94 @@ def _resolve_intent_only_payload(
     if not all_required and not composite_variants:
         return {"intent": intent}, []
     if len(all_required) == 1 and not composite_variants:
-        field_name = all_required[0]
-        field_spec = properties.get(field_name) or {}
-        field_type = str(field_spec.get("type") or "").lower()
-        if field_type in {"string", ""}:
-            # Try a strict-form extractor first. When the field has one and
-            # it matches confidently, use the extracted value; when it has
-            # one but doesn't match, refuse rather than dump the intent.
-            extractor = _FIELD_EXTRACTORS.get(field_name)
-            if extractor is not None:
-                extracted = extractor(intent)
-                if extracted:
-                    return {field_name: extracted}, []
-                # 2026-05-18 LLM fallback before refusing.
-                llm_value = _llm_extract_field(intent, field_name, field_spec)
-                if llm_value:
-                    return {field_name: llm_value}, []
-                return {}, [field_name]
-            if _intent_unfit_for_field(intent, field_name):
-                return {}, [field_name]
-            return {field_name: intent}, []
-    # Composite oneOf/anyOf — pick the first variant and try to extract
-    # each of its required fields. If we can fill them all, return the
-    # extracted payload; otherwise list the unfilled fields as missing.
+        return _resolve_single_required_field(intent, all_required[0], properties)
+    # Composite oneOf/anyOf — try EVERY variant with the deterministic
+    # extractors and use the first that fills completely. 2026-06-10: the
+    # deference experiment showed the old first-variant-only behaviour
+    # refusing CVE-lookup intents whose `packages` (variant 3) extractor
+    # would have succeeded, because variant 1 (`cve_id`) didn't fill.
     if composite_variants:
-        variant = composite_variants[0]
-        # Phase 1 (C1, 2026-05-28): try one-shot whole-payload LLM
-        # extraction first when the variant has 2+ string-ish fields.
-        # One round-trip is cheaper than N per-field calls. Fall back
-        # to the per-field path on failure.
-        if len(variant) >= 2:
-            one_shot = _llm_extract_whole_payload(intent, variant, properties)
-            if one_shot is not None:
-                return one_shot, []
-        extracted_payload: dict[str, Any] = {}
-        unfilled: list[str] = []
-        for fname in variant:
-            extractor = _FIELD_EXTRACTORS.get(fname)
-            field_spec = properties.get(fname) or {}
-            if extractor is not None:
-                v = extractor(intent)
-                if v:
-                    extracted_payload[fname] = v
-                    continue
-            # 2026-05-18 LLM fallback per-field.
-            llm_value = _llm_extract_field(intent, fname, field_spec)
-            if llm_value:
-                extracted_payload[fname] = llm_value
-                continue
-            unfilled.append(fname)
-        if not unfilled and extracted_payload:
-            return extracted_payload, []
-        return {}, variant
+        for variant in composite_variants:
+            filled = _fill_variant_with_extractors(intent, variant)
+            if filled is not None:
+                return filled, []
+        return _resolve_first_variant_with_llm(intent, composite_variants[0], properties)
     return {}, all_required
+
+
+def _resolve_single_required_field(
+    intent: str, field_name: str, properties: dict,
+) -> tuple[dict[str, Any], list[str]]:
+    """Pure-ish: fill a single required field from intent, extractor-first.
+
+    The extractor runs regardless of the field's declared type — extractors
+    return the schema-correct shape (e.g. ``domains`` returns a list).
+    2026-06-10: the old string-type gate skipped the registered ``domains``
+    extractor entirely, so array-typed single-field agents (DNS inspector)
+    always bounced with missing_fields. The LLM fallback stays string-only
+    because ``_llm_extract_field`` can only return a string."""
+    field_spec = properties.get(field_name) or {}
+    field_type = str(field_spec.get("type") or "").lower()
+    extractor = _FIELD_EXTRACTORS.get(field_name)
+    if extractor is not None:
+        extracted = extractor(intent)
+        if extracted:
+            return {field_name: extracted}, []
+        if field_type in {"string", ""}:
+            llm_value = _llm_extract_field(intent, field_name, field_spec)
+            if llm_value:
+                return {field_name: llm_value}, []
+        return {}, [field_name]
+    if field_type in {"string", ""}:
+        if _intent_unfit_for_field(intent, field_name):
+            return {}, [field_name]
+        return {field_name: intent}, []
+    return {}, [field_name]
+
+
+def _fill_variant_with_extractors(
+    intent: str, variant: list[str],
+) -> dict[str, Any] | None:
+    """Pure: fill every field of one composite variant using deterministic
+    extractors only. Returns the payload, or None if any field lacks an
+    extractor or its extractor declines."""
+    payload: dict[str, Any] = {}
+    for fname in variant:
+        extractor = _FIELD_EXTRACTORS.get(fname)
+        if extractor is None:
+            return None
+        value = extractor(intent)
+        if not value:
+            return None
+        payload[fname] = value
+    return payload if payload else None
+
+
+def _resolve_first_variant_with_llm(
+    intent: str, variant: list[str], properties: dict,
+) -> tuple[dict[str, Any], list[str]]:
+    """Side-effect (LLM): legacy fallback for the first composite variant when
+    no variant filled deterministically. Preserves the pre-2026-06-10 LLM
+    behaviour (one-shot whole-payload, then per-field)."""
+    if len(variant) >= 2:
+        one_shot = _llm_extract_whole_payload(intent, variant, properties)
+        if one_shot is not None:
+            return one_shot, []
+    extracted_payload: dict[str, Any] = {}
+    unfilled: list[str] = []
+    for fname in variant:
+        field_spec = properties.get(fname) or {}
+        extractor = _FIELD_EXTRACTORS.get(fname)
+        value = extractor(intent) if extractor is not None else None
+        if not value:
+            value = _llm_extract_field(intent, fname, field_spec)
+        if value:
+            extracted_payload[fname] = value
+        else:
+            unfilled.append(fname)
+    if not unfilled and extracted_payload:
+        return extracted_payload, []
+    return {}, variant
 
 
 # Phase 1 (C1): one-shot whole-payload extraction. Replaces N per-field
@@ -2494,10 +2570,107 @@ def _extract_packages(intent: str) -> list[str] | None:
     return found or None
 
 
+# Pip pins keep their original `name==version` form so the synthesized
+# manifest reads as requirements.txt lines; npm pins (`name@version`) become a
+# minimal package.json. Mirrors agents/dependency_auditor.py's format sniff
+# (leading "{" → npm, else pypi).
+_PIP_PIN_RE = re.compile(
+    r"\b([a-zA-Z][a-zA-Z0-9._-]{1,80})==([0-9][0-9a-zA-Z.\-_+]{0,40})\b",
+)
+_NPM_PIN_RE = re.compile(
+    r"\b([a-z][a-z0-9._-]{1,80})@([0-9][0-9a-zA-Z.\-_+]{0,40})\b",
+)
+
+
+_PYTHONISH_CUES = ("python", "pypi", "pip", "requirements")
+_NPMISH_CUES = ("npm", "node", "javascript", "package.json", "yarn")
+
+
+def _extract_manifest(intent: str) -> str | None:
+    """Synthesize a one-package manifest from package pins in the intent.
+
+    Why: the 2026-06-10 deference experiment showed 8 of 12 missing_fields
+    bounces were dep-audit intents that LITERALLY contained the pin
+    ("audit requests==2.19.1 for CVEs") — but `manifest` had no extractor,
+    so the router refused and the caller burned a retry round-trip."""
+    text = intent or ""
+    if not text:
+        return None
+    pip_pins = _PIP_PIN_RE.findall(text)
+    if pip_pins:
+        return "\n".join(f"{name}=={ver}" for name, ver in pip_pins)
+    npm_pins = _NPM_PIN_RE.findall(text)
+    if npm_pins:
+        import json as _json
+        return _json.dumps({"dependencies": {name: ver for name, ver in npm_pins}})
+    # Loose form ("Django 3.2.0") — reuse the cue-gated packages extractor,
+    # but only when the intent names the ecosystem; an ambiguous manifest
+    # format would just bounce at the agent instead of at the router.
+    loose = _extract_packages(text)
+    if not loose:
+        return None
+    lower = text.lower()
+    pairs = [token.split("@", 1) for token in loose if "@" in token]
+    if any(cue in lower for cue in _PYTHONISH_CUES):
+        return "\n".join(f"{name}=={ver}" for name, ver in pairs)
+    if any(cue in lower for cue in _NPMISH_CUES):
+        import json as _json
+        return _json.dumps({"dependencies": {name: ver for name, ver in pairs}})
+    return None
+
+
+_CODE_START_TOKENS = ("import ", "from ", "print(", "def ", "class ", "for ", "while ")
+
+
+def _compiles_as_python(text: str) -> bool:
+    """Pure + safe: syntax-check only — compile() never executes the code."""
+    try:
+        compile(text, "<intent>", "exec")
+        return True
+    except (SyntaxError, ValueError):
+        return False
+
+
+def _python_code_slices(text: str) -> list[str]:
+    """Candidate code substrings: after an instruction colon, or from the
+    first recognizable code token. Ordered most-specific first."""
+    slices: list[str] = []
+    colon = text.find(":")
+    if 0 < colon < 80:
+        slices.append(text[colon + 1:].strip())
+    for token in _CODE_START_TOKENS:
+        idx = text.find(token)
+        if idx > 0:
+            slices.append(text[idx:].strip())
+    return [s for s in slices if s]
+
+
+def _extract_python_code(intent: str) -> str | None:
+    """Strip a natural-language instruction prefix off inline code.
+
+    Why: the deference experiment's one wrong answer came from the router
+    dumping the WHOLE intent ("run this Python: import random; …") into the
+    `code` field — SyntaxError, and the buyer's model then trusted a number
+    that never came from a real run. compile() guards every slice, so this
+    either returns code that parses or refuses (missing_fields beats a
+    guaranteed-SyntaxError invoke)."""
+    text = (intent or "").strip()
+    if not text:
+        return None
+    if _compiles_as_python(text) and _looks_like_code(text):
+        return text
+    for candidate in _python_code_slices(text):
+        if _compiles_as_python(candidate) and _looks_like_code(candidate):
+            return candidate
+    return None
+
+
 # Registry: field-name → extractor. ``_resolve_intent_only_payload`` looks
 # up the field here before falling back to the legacy "dump intent into
 # field" behaviour. Returning None refuses with `missing_fields`.
 _FIELD_EXTRACTORS: dict[str, "Callable[[str], Any]"] = {
+    "manifest": _extract_manifest,
+    "code": _extract_python_code,
     "expression": _extract_cron_expression,
     "cron": _extract_cron_expression,
     "pattern": _extract_regex_pattern,
@@ -2568,6 +2741,15 @@ _IMPERATIVE_PREFIXES = (
     "evaluate ",
     "assess ",
     "diagnose ",
+    # 2026-06-10: fetch-style imperatives — "Fetch the raw URL https://…" was
+    # being dumped verbatim into a `manifest` field and invoked (guaranteed
+    # agent-side rejection + refund round-trip).
+    "fetch ",
+    "download ",
+    "retrieve ",
+    "scrape ",
+    "visit ",
+    "open ",
 )
 
 _CODE_TOKENS = (

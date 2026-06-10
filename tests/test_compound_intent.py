@@ -152,3 +152,28 @@ def test_decide_single_intent_still_routes_normally():
         candidates=[DEP_AUDITOR],
     )
     assert decision.reason != "compound_intent"
+
+
+# ── 2026-06-10: reporting tails are output shaping, not steps ───────────────
+
+def test_fetch_and_report_it_is_not_compound():
+    # The deference experiment showed this exact shape bouncing with
+    # compound_intent and burning a retry round-trip.
+    from core.registry.compound_intent import detect_compound
+    assert detect_compound(
+        "Fetch the plain text content of https://www.rfc-editor.org/rfc/rfc2606.txt and report it"
+    ) is None
+    assert detect_compound(
+        "fetch https://example.com and tell me the four reserved TLDs"
+    ) is None
+    assert detect_compound(
+        "Run this code then print the output"
+    ) is None
+
+
+def test_real_two_step_intents_still_compound():
+    from core.registry.compound_intent import detect_compound
+    two_step = detect_compound("audit my repo and post findings to Slack")
+    assert two_step is not None and len(two_step.steps) == 2
+    chained = detect_compound("scan the repo for secrets, then audit dependencies for CVEs")
+    assert chained is not None and len(chained.steps) == 2
