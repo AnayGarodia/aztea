@@ -32,3 +32,8 @@ The Aztea name and logo are trademarks of Aztea Labs, Inc.
 You are free to fork and redistribute the code under the Apache-2.0
 license, but you may not represent your fork as the official Aztea
 product or service without prior written permission.
+
+This product bundles axe-core v4.8.4 (agents/_vendor/axe_core/axe.min.js),
+Copyright (c) 2015 - 2024 Deque Systems, Inc., licensed under the Mozilla
+Public License 2.0 (file-level copyleft; license text accompanies the file).
+Source: https://github.com/dequelabs/axe-core

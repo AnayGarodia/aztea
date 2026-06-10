@@ -792,3 +792,105 @@ def test_db_sandbox_results_truncated_flag():
 def test_db_sandbox_invalid_payload_returns_envelope():
     result = db_sandbox.run(["not", "a", "dict"])
     assert result["error"]["code"] == "db_sandbox.invalid_payload"
+
+
+def test_accessibility_vendored_axe_matches_cdn_version():
+    """The vendored axe.min.js must stay in version-lockstep with
+    _AXE_CDN_URL — drift would silently change rule behavior between the
+    CDN path and the fallback path."""
+    from agents import accessibility_auditor as aa
+    import re as _re
+
+    cdn_version = _re.search(r"/axe-core/([\d.]+)/", aa._AXE_CDN_URL).group(1)
+    source = aa._vendored_axe_source()
+    assert source, "vendored axe-core missing"
+    assert f"axe v{cdn_version}" in source[:200], (
+        f"vendored axe-core does not match CDN version {cdn_version}"
+    )
+
+
+def test_accessibility_inject_axe_falls_back_to_vendored():
+    """CDN injection failure (outage / strict CSP) must fall back to the
+    vendored copy instead of hard-failing the audit."""
+    from agents import accessibility_auditor as aa
+
+    class _FakePage:
+        def __init__(self):
+            self.inline_injected = False
+
+        def add_script_tag(self, url=None, content=None):
+            if url is not None:
+                raise RuntimeError("net::ERR_BLOCKED_BY_CSP")
+            assert content and "axe" in content[:100]
+            self.inline_injected = True
+
+    page = _FakePage()
+    assert aa._inject_axe(page) == "vendored"
+    assert page.inline_injected is True
+
+
+def test_accessibility_inject_axe_errors_when_both_paths_fail(monkeypatch):
+    from agents import accessibility_auditor as aa
+
+    class _FakePage:
+        def add_script_tag(self, url=None, content=None):
+            raise RuntimeError("blocked")
+
+    monkeypatch.setattr(aa, "_vendored_axe_cache", None)
+    monkeypatch.setattr(aa, "_VENDORED_AXE_PATH", aa._VENDORED_AXE_PATH.parent / "nope.js")
+    result = aa._inject_axe(_FakePage())
+    assert result["error"]["code"] == "accessibility_auditor.axe_load_failed"
+
+
+def test_accessibility_unknown_tags_advisory():
+    from agents import accessibility_auditor as aa
+
+    tags, unknown = aa._normalize_tags(["wcag21aa", "WCAG2.1-AA!"])
+    assert tags == ["wcag21aa", "WCAG2.1-AA!"]  # passed through to axe
+    assert unknown == ["WCAG2.1-AA!"]
+    default_tags, default_unknown = aa._normalize_tags(None)
+    assert default_tags == list(aa._DEFAULT_TAGS)
+    assert default_unknown == []
+
+
+def test_accessibility_response_reports_incomplete_and_truncation():
+    from agents import accessibility_auditor as aa
+
+    axe_result = {
+        "testEngine": {"name": "axe-core", "version": "4.8.4"},
+        "violations": [
+            {"id": f"rule-{i}", "impact": "minor", "nodes": []} for i in range(35)
+        ],
+        "passes": [],
+        "incomplete": [
+            {
+                "id": "color-contrast",
+                "impact": "serious",
+                "help": "Needs manual review",
+                "helpUrl": "https://example.com/rule",
+                "nodes": [{}, {}],
+            }
+        ],
+    }
+    response = aa._build_response(
+        url="https://example.com",
+        final_url="https://example.com/",
+        page_title="t",
+        axe_result=axe_result,
+        elapsed_ms=10,
+        axe_source="vendored",
+        unknown_tags=[],
+    )
+    assert response["violations_truncated"] is True
+    assert len(response["violations"]) == aa._MAX_VIOLATIONS
+    assert response["totals"]["violations"] == 35
+    assert response["axe_source"] == "vendored"
+    assert response["incomplete"] == [
+        {
+            "id": "color-contrast",
+            "impact": "serious",
+            "help": "Needs manual review",
+            "help_url": "https://example.com/rule",
+            "node_count": 2,
+        }
+    ]

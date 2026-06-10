@@ -27,6 +27,12 @@ Output:
         "nodes": [{"target": [str], "html": str, "failure_summary": str}]
       }
     ],
+    "violations_truncated": bool,   # true when > 30 violations were found
+    "incomplete": [                  # manual-review checks (top 10)
+      {"id": str, "impact": str, "help": str, "help_url": str, "node_count": int}
+    ],
+    "axe_source": "cdn" | "vendored",
+    "unknown_tags": [str],           # advisory: tags not matching axe grammar
     "totals": {
       "violations": int,
       "critical": int,
@@ -41,13 +47,17 @@ Output:
 
 Runtime:
   Playwright + Chromium (already provisioned by browser_agent / visual_regression).
-  axe-core is loaded from the official CDN at runtime — no local npm dep.
+  axe-core loads from the official CDN first; when the CDN is unreachable or
+  the page's CSP blocks it, the vendored copy at agents/_vendor/axe_core/ is
+  injected inline instead (axe_source in the response says which ran).
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import time
+from pathlib import Path
 from typing import Any
 
 from core import url_security
@@ -56,10 +66,18 @@ from agents._contracts import agent_error as _err
 _LOG = logging.getLogger(__name__)
 
 _AXE_CDN_URL = "https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.8.4/axe.min.js"
+# Must stay in version-lockstep with the vendored fallback — a unit test
+# pins agents/_vendor/axe_core/axe.min.js to the version in this URL.
+_VENDORED_AXE_PATH = Path(__file__).parent / "_vendor" / "axe_core" / "axe.min.js"
 _DEFAULT_TAGS = ("wcag2a", "wcag2aa", "wcag21a", "wcag21aa")
+# axe tag grammar: lowercase letters/digits/dots/hyphens (wcag21aa,
+# best-practice, cat.color, ...). Used only for an advisory — unknown tags
+# still pass through so new axe releases work without an agent change.
+_AXE_TAG_RE = re.compile(r"^[a-z0-9.\-]+$")
 _DEFAULT_WAIT_MS = 1500
 _MAX_WAIT_MS = 8000
 _MAX_VIOLATIONS = 30
+_MAX_INCOMPLETE = 10
 _MAX_NODES_PER_VIOLATION = 5
 _NODE_HTML_TRUNCATE = 400
 _NODE_FAILURE_SUMMARY_CHARS = 600
@@ -119,12 +137,20 @@ def _summarize_node(node: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _normalize_tags(raw_tags: Any) -> list[str]:
-    """Pure: coerce caller tags to a clean list, falling back to the WCAG defaults."""
+def _normalize_tags(raw_tags: Any) -> tuple[list[str], list[str]]:
+    """Pure: coerce caller tags to ``(tags, unknown_tags)``.
+
+    Tags that don't match axe's tag grammar are still passed through (axe
+    treats unknown tags as matching zero rules) but surfaced as an advisory
+    so a typo like "WCAG21-AA" doesn't silently audit nothing.
+    """
     if not isinstance(raw_tags, list) or not raw_tags:
-        return list(_DEFAULT_TAGS)
+        return list(_DEFAULT_TAGS), []
     cleaned = [str(t).strip() for t in raw_tags if str(t).strip()]
-    return cleaned or list(_DEFAULT_TAGS)
+    if not cleaned:
+        return list(_DEFAULT_TAGS), []
+    unknown = [t for t in cleaned if not _AXE_TAG_RE.match(t)]
+    return cleaned, unknown
 
 
 def _normalize_viewport(vp: Any) -> tuple[int, int]:
@@ -176,9 +202,29 @@ def _aggregate_violations(raw_violations: list) -> tuple[list[dict], dict[str, i
     return violations_out, impact_counts
 
 
+def _summarize_incomplete(raw_incomplete: list) -> list[dict[str, Any]]:
+    """Pure: shape axe's incomplete checks (manual-review items) for the response.
+
+    Why: these were silently dropped before — but "color contrast needs
+    manual review" is often the most important finding on the page.
+    """
+    out: list[dict[str, Any]] = []
+    for item in raw_incomplete[:_MAX_INCOMPLETE]:
+        if not isinstance(item, dict):
+            continue
+        out.append({
+            "id": str(item.get("id") or ""),
+            "impact": str(item.get("impact") or ""),
+            "help": str(item.get("help") or "")[:_VIOLATION_HELP_CHARS],
+            "help_url": str(item.get("helpUrl") or ""),
+            "node_count": len(item.get("nodes") or []),
+        })
+    return out
+
+
 def _build_response(
     *, url: str, final_url: str, page_title: str, axe_result: dict,
-    elapsed_ms: int,
+    elapsed_ms: int, axe_source: str, unknown_tags: list[str],
 ) -> dict[str, Any]:
     """Pure: assemble the response envelope from a successful axe-core run."""
     raw_violations = axe_result.get("violations") or []
@@ -192,7 +238,11 @@ def _build_response(
         "page_title": page_title,
         "axe_version": str(test_engine.get("version") or ""),
         "test_engine": str(test_engine.get("name") or "axe-core"),
+        "axe_source": axe_source,
         "violations": violations_out,
+        "violations_truncated": len(raw_violations) > _MAX_VIOLATIONS,
+        "incomplete": _summarize_incomplete(raw_incomplete),
+        "unknown_tags": unknown_tags,
         "totals": {
             "violations": len(raw_violations),
             **impact_counts,
@@ -215,9 +265,11 @@ def _normalize_inputs(payload: dict[str, Any]) -> dict[str, Any] | tuple:
         url = url_security.validate_outbound_url(raw_url, "url")
     except ValueError as exc:
         return _err("accessibility_auditor.invalid_url", str(exc))
+    tags, unknown_tags = _normalize_tags(payload.get("tags"))
     return (
         url,
-        _normalize_tags(payload.get("tags")),
+        tags,
+        unknown_tags,
         _normalize_viewport(payload.get("viewport")),
         _normalize_wait_ms(payload.get("wait_ms")),
     )
@@ -243,22 +295,69 @@ def _wait_for_settle(page: Any, wait_ms: int) -> None:
         page.wait_for_timeout(wait_ms)
 
 
-def _run_axe_in_page(page: Any, tags: list[str]) -> dict[str, Any] | dict:
-    """Side-effect: inject axe-core and run it against the page; returns axe result or error envelope."""
+_vendored_axe_cache: str | None = None
+
+
+def _vendored_axe_source() -> str | None:
+    """Read the vendored axe.min.js once; None when the file is absent.
+
+    Memoized in a module global — the 500 KB read should happen at most
+    once per worker process, not once per audit.
+    """
+    global _vendored_axe_cache
+    if _vendored_axe_cache is None:
+        try:
+            _vendored_axe_cache = _VENDORED_AXE_PATH.read_text(encoding="utf-8")
+        except OSError:
+            _LOG.warning("vendored axe-core missing at %s", _VENDORED_AXE_PATH)
+            return None
+    return _vendored_axe_cache
+
+
+def _inject_axe(page: Any) -> str | dict:
+    """Side-effect: load axe-core into the page; returns the source label or an error envelope.
+
+    CDN first (tracks patch releases between vendor bumps); the vendored
+    copy is the fallback for CDN outages and strict-CSP pages, injected
+    inline so no network fetch happens at all.
+    """
     try:
         page.add_script_tag(url=_AXE_CDN_URL)
+        return "cdn"
+    except Exception as cdn_exc:
+        _LOG.info("axe-core CDN injection failed; trying vendored copy: %s", cdn_exc)
+    vendored = _vendored_axe_source()
+    if vendored is None:
+        return _err(
+            "accessibility_auditor.axe_load_failed",
+            "Could not load axe-core: CDN injection failed and the vendored "
+            f"copy is missing at {_VENDORED_AXE_PATH}.",
+        )
+    try:
+        page.add_script_tag(content=vendored)
+        return "vendored"
     except Exception as exc:
         return _err(
             "accessibility_auditor.axe_load_failed",
-            f"Could not load axe-core script: {exc}",
+            f"Could not load axe-core from CDN or vendored copy: {exc}",
         )
+
+
+def _run_axe_in_page(page: Any, tags: list[str]) -> dict[str, Any] | dict:
+    """Side-effect: inject axe-core and run it against the page; returns axe result or error envelope."""
+    axe_source = _inject_axe(page)
+    if isinstance(axe_source, dict):
+        return axe_source
     try:
-        return page.evaluate(_AXE_RUN_JS, tags)
+        result = page.evaluate(_AXE_RUN_JS, tags)
     except Exception as exc:
         return _err(
             "accessibility_auditor.axe_eval_failed",
             f"axe.run() failed: {type(exc).__name__}: {exc}",
         )
+    if isinstance(result, dict):
+        result["axe_source"] = axe_source
+    return result
 
 
 def _import_playwright() -> Any:
@@ -314,6 +413,7 @@ def _navigate_and_capture(
         )
     return {
         "axe_result": axe_result.get("result") or {},
+        "axe_source": str(axe_result.get("axe_source") or "cdn"),
         "page_title": page.title() or "",
         "final_url": page.url,
     }
@@ -352,7 +452,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = _normalize_inputs(payload)
     if isinstance(normalized, dict):
         return normalized  # error envelope
-    url, tags, viewport, wait_ms = normalized
+    url, tags, unknown_tags, viewport, wait_ms = normalized
     t_start = time.monotonic()
     try:
         session = _audit_with_chromium(url, tags, viewport, wait_ms)
@@ -370,4 +470,6 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         page_title=session["page_title"],
         axe_result=session["axe_result"],
         elapsed_ms=elapsed_ms,
+        axe_source=session.get("axe_source", "cdn"),
+        unknown_tags=unknown_tags,
     )
