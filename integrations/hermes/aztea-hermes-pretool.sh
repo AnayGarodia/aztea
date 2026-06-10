@@ -7,13 +7,18 @@
 #     pre_tool_call:
 #       - command: /path/to/aztea-hermes-pretool.sh
 #
-# Hermes fires this on every tool call with a JSON payload on stdin:
-#   {"tool_name": "terminal", "args": {"command": "..."}, ...}
-# That shape differs from Aztea's PreToolUse event ({tool_name, tool_input}),
-# and Hermes' tool names differ (its shell tool is "terminal", not "Bash"), so
-# this adapter TRANSLATES the payload, then defers the decision to the single
+# Hermes fires this on every tool call with a JSON payload on stdin
+# (agent/shell_hooks.py::_serialize_payload):
+#   {"hook_event_name": "pre_tool_call", "tool_name": "terminal",
+#    "tool_input": {"command": "..."}, "session_id": ..., "cwd": ..., ...}
+# Hermes' tool names differ from the canonical classifier names (its shell
+# tool is "terminal", its web tools are "web_search"/"web_extract"), so this
+# adapter TRANSLATES the payload, then defers the decision to the single
 # source of truth: `aztea mcp pretool-hook --format json` (which runs the same
 # classifier the OpenClaw plugin and the Python hook use).
+#
+# Mode: set AZTEA_DEFERENCE_MODE=warn|block|block-all in the agent's
+# environment (default warn). block-all is the experiment treatment arm.
 #
 # Output: the neutral decision JSON on stdout — {"decision":"block|warn|allow"}.
 # Finalize how Hermes consumes a block (shell-hook block convention vs the
@@ -37,12 +42,13 @@ command -v jq >/dev/null 2>&1 || {
 # can't balloon shell memory on every tool call.
 payload="$(head -c 1048576)"
 
-# Translate Hermes -> Aztea event shape with jq (tool_name passthrough; map the
-# shell tool to "Bash" so the classifier's Bash rules apply; args -> tool_input).
+# Translate Hermes -> canonical event shape with jq. Hermes sends the args
+# under `tool_input` (older builds used `args`; accept both). Map the wedge
+# tool names so the classifier's rules apply; pass everything else through.
 event="$(printf '%s' "$payload" | jq -c '
   {
-    tool_name: (if (.tool_name // "") == "terminal" then "Bash" else (.tool_name // "") end),
-    tool_input: (.args // {})
+    tool_name: ({terminal: "Bash", web_search: "WebSearch", web_extract: "WebFetch"}[.tool_name // ""] // (.tool_name // "")),
+    tool_input: (.tool_input // .args // {})
   }' 2>/dev/null || echo '{}')"
 
 # Bound the call so a stalled hook (e.g. slow/stale $HOME mount during the
@@ -53,4 +59,9 @@ command -v timeout  >/dev/null 2>&1 && _TIMEOUT="timeout 2"
 command -v gtimeout >/dev/null 2>&1 && _TIMEOUT="gtimeout 2"
 
 # Defer to the shared classifier. Fail-open: any error/timeout -> allow.
-printf '%s' "$event" | ${_TIMEOUT} aztea mcp pretool-hook --format json 2>/dev/null || echo "$ALLOW"
+# AZTEA_CLIENT_ID tags the deference-log row; this adapter only ever runs
+# under Hermes, so default the harness identity here (the MCP server entry's
+# env does not reach hook subprocesses).
+_MODE="${AZTEA_DEFERENCE_MODE:-warn}"
+export AZTEA_CLIENT_ID="${AZTEA_CLIENT_ID:-hermes}"
+printf '%s' "$event" | ${_TIMEOUT} aztea mcp pretool-hook --mode "$_MODE" --format json 2>/dev/null || echo "$ALLOW"
