@@ -314,3 +314,61 @@ def test_db_sandbox_blocks_detach():
 
 
 
+
+
+def test_dependency_auditor_prerelease_version_reaches_osv_intact(monkeypatch):
+    """Regression: the old npm parser digit-stripped ^1.2.3-beta.1 into
+    1.2.3.1, so OSV was queried for a version that never existed."""
+    seen_versions: list[str] = []
+
+    def fake_post(url, json=None, timeout=None, headers=None):
+        del url, timeout, headers
+        seen_versions.append(json["version"])
+        return _FakeResponse(200, {"vulns": []})
+
+    def fake_get(url, timeout=None, headers=None):
+        del url, timeout, headers
+        return _FakeResponse(200, {"dist-tags": {"latest": "1.2.3"}, "versions": {}})
+
+    monkeypatch.setattr(dependency_auditor.requests, "post", fake_post)
+    monkeypatch.setattr(dependency_auditor.requests, "get", fake_get)
+
+    result = dependency_auditor.run(
+        {
+            "manifest": '{"dependencies": {"express": "^1.2.3-beta.1"}}',
+            "checks": ["cve"],
+        }
+    )
+    assert "error" not in result, result
+    assert seen_versions == ["1.2.3-beta.1"]
+
+
+def test_dependency_auditor_classifies_vcs_and_editable_warnings(monkeypatch):
+    """Editable installs and VCS URLs must surface as classified warnings,
+    not generic 'unparseable' noise."""
+    monkeypatch.setattr(
+        dependency_auditor.requests,
+        "post",
+        lambda *a, **k: _FakeResponse(200, {"vulns": []}),
+    )
+    result = dependency_auditor.run(
+        {
+            "manifest": (
+                "requests==2.31.0\n"
+                "-e git+https://github.com/x/y.git#egg=y\n"
+                "git+https://github.com/a/b.git@v2#egg=b\n"
+            ),
+            "checks": ["cve"],
+        }
+    )
+    assert "error" not in result, result
+    reasons = sorted(w["reason"] for w in result["parse_warnings"])
+    assert reasons == ["editable_not_audited", "vcs_url_not_audited"]
+
+
+def test_dependency_auditor_spdx_or_expression_takes_permissive_branch():
+    assert dependency_auditor._license_risk("MIT OR GPL-2.0") == "none"
+    assert dependency_auditor._license_risk("MIT AND GPL-2.0") == "high"
+    assert dependency_auditor._license_risk("LGPL-2.1-only") == "medium"
+    assert dependency_auditor._license_risk("MPL-2.0") == "medium"
+    assert dependency_auditor._license_risk("AGPL-3.0") == "high"

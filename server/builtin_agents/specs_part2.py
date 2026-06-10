@@ -427,11 +427,16 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
                         "type": "array",
                         "items": {"type": "object"},
                         "description": (
-                            "Manifest lines that were dropped or merged. "
-                            "Examples: ``{\"line\": \"-e git+https://...\", "
-                            "\"reason\": \"unparseable\"}``, "
-                            "``{\"package\": \"requests\", "
-                            "\"reason\": \"duplicate_entry\", ...}``."
+                            "Manifest lines that were not audited, with a "
+                            "classified ``reason``: editable_not_audited "
+                            "(-e installs), vcs_url_not_audited (git+/URL "
+                            "specs), nested_requirements_not_followed "
+                            "(-r/-c includes), pip_option_ignored "
+                            "(--index-url etc.), unparseable, or "
+                            "duplicate_entry (merged). Extras "
+                            "(``pkg[socks]``), env markers, and npm "
+                            "prerelease versions parse correctly and do "
+                            "not warn."
                         ),
                     },
                     "summary": {"type": "string"},
