@@ -180,7 +180,7 @@ def summarize(scored: list[dict[str, Any]], corpus: dict[str, dict[str, Any]]) -
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
-    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def main(argv: list[str]) -> int:
