@@ -1,0 +1,22 @@
+{
+  "invoice.pdf": {
+    "total": "$48,217.63",
+    "po": "PO-7Q2X-9931",
+    "calibration": "$5,977.63"
+  },
+  "report.pdf": {
+    "q3": "147,300",
+    "peak_quarter": "Q3",
+    "sum": "479,600"
+  },
+  "receipt.png": {
+    "total": "$3,184.07",
+    "id": "RX-55K8-2207",
+    "ups_line": "$449.00"
+  },
+  "chart.png": {
+    "peak": "1473",
+    "peak_day": "Wed",
+    "tuesday": "1120"
+  }
+}

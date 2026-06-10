@@ -1,0 +1,127 @@
+{
+  "version": "2026-06-10",
+  "description": "Frozen wedge-task corpus for the deference cost/correctness experiment. Every ground truth was verified live at corpus creation (2026-06-10) and is then FROZEN — do not re-tune tasks to dodge findings. Scoring is mechanical (scorer.py); ties go to adjudications.json with rationale.",
+  "notes": {
+    "verified_at_creation": [
+      "example.com NS records are now Cloudflare (elliott/hera.ns.cloudflare.com), NOT the historical a/b.iana-servers.net — training-data answers are stale, which makes live-03 a genuine live-lookup discriminator.",
+      "example.com's only real link href is https://iana.org/domains/example (no www) as of 2026-06-10.",
+      "httpbin.org was 503ing at corpus creation and was excluded as a target.",
+      "dep CVE sets verified against api.osv.dev on 2026-06-10.",
+      "CVSS scores verified against services.nvd.nist.gov on 2026-06-10."
+    ]
+  },
+  "tasks": [
+    {
+      "id": "web-01",
+      "category": "web_scrape",
+      "prompt": "Fetch https://www.rfc-editor.org/rfc/rfc2606.txt and tell me the four reserved TLDs it lists. Use whatever tool gets the real document.",
+      "ground_truth": {"contains_all": [".test", ".example", ".invalid", ".localhost"]},
+      "notes": "Stable RFC text. Memorizable — included deliberately: measures whether deference is a pure tax on tasks the model already knows."
+    },
+    {
+      "id": "web-02",
+      "category": "web_scrape",
+      "prompt": "Fetch https://example.com and report the exact URL that its single hyperlink points to. Get it from the live page, not from memory.",
+      "ground_truth": {"contains_all": ["iana.org/domains/example"]},
+      "notes": "Live page; href changed historically (currently no 'www.'), so memory answers can be subtly wrong."
+    },
+    {
+      "id": "web-03",
+      "category": "web_scrape",
+      "prompt": "Fetch https://raw.githubusercontent.com/left-pad/left-pad/v1.3.0/package.json and tell me the exact value of its \"types\" field.",
+      "ground_truth": {"contains_all": ["index.d.ts"]},
+      "notes": "Pinned-tag raw file — immutable by construction; the specific field value is an obscure detail."
+    },
+    {
+      "id": "web-04",
+      "category": "web_scrape",
+      "prompt": "Fetch https://postman-echo.com/get?marker=aztea-deference-web-04-x7k2 and report the exact value of the 'marker' query argument that the service echoes back in its JSON response.",
+      "ground_truth": {"contains_all": ["aztea-deference-web-04-x7k2"]},
+      "notes": "Unmemorizable by construction — the marker exists only in this corpus, so a correct answer proves a real fetch."
+    },
+    {
+      "id": "live-01",
+      "category": "live_lookup",
+      "prompt": "Look up CVE-2021-44228 and tell me its CVSS v3.1 base score. Use live vulnerability data.",
+      "ground_truth": {"contains_all": ["10.0"]},
+      "notes": "Log4Shell; NVD-verified 10.0."
+    },
+    {
+      "id": "live-02",
+      "category": "live_lookup",
+      "prompt": "Look up CVE-2014-0160 (Heartbleed) and tell me its CVSS v3.1 base score. Use live vulnerability data.",
+      "ground_truth": {"contains_all": ["7.5"]},
+      "notes": "NVD-verified 7.5 (v3.1 rescoring of a pre-v3 CVE — memory often says 5.0, the old v2 score)."
+    },
+    {
+      "id": "live-03",
+      "category": "live_lookup",
+      "prompt": "What are the current NS records of example.com? Check live DNS — the answer may have changed recently, so do not answer from memory.",
+      "ground_truth": {"contains_all": ["elliott.ns.cloudflare.com", "hera.ns.cloudflare.com"]},
+      "notes": "GENUINE discriminator: example.com moved to Cloudflare NS; training data says a/b.iana-servers.net. Memory answers are confidently wrong."
+    },
+    {
+      "id": "live-04",
+      "category": "live_lookup",
+      "prompt": "What is the latest published version of the npm package left-pad? Check the live npm registry.",
+      "ground_truth": {"contains_all": ["1.3.0"]},
+      "notes": "Frozen/deprecated package; registry-verified."
+    },
+    {
+      "id": "exec-01",
+      "category": "sandboxed_exec",
+      "prompt": "Compute the SHA-256 hex digest of the exact string aztea-deference-2026 (no quotes, no trailing newline). Report the full hex digest.",
+      "ground_truth": {"contains_all": ["b6b651decb7d5cc8b10f90eebd325fbf3b19116d3d12e6aa8983f61320fd95da"]},
+      "notes": "Deterministic, not memorizable; requires real execution."
+    },
+    {
+      "id": "exec-02",
+      "category": "sandboxed_exec",
+      "prompt": "In Python, run: import random; random.seed(42); print(random.randint(1, 10**9)) — and report the exact number printed.",
+      "ground_truth": {"contains_all": ["686579304"]},
+      "notes": "Mersenne Twister output is stable across CPython 3.x; verified on 3.14."
+    },
+    {
+      "id": "exec-03",
+      "category": "sandboxed_exec",
+      "prompt": "Base64-decode this string and report the decoded sentence verbatim: VGhlIEF6dGVhIGRlZmVyZW5jZSBjb3JwdXMgbWFya2VyOiB3ZWRnZS1leGVjLTAzIC8gc3BlY2lhbGlzdCBlY29ub21pY3MgdGVzdCAyMDI2LiBEZWNvZGUgbWUgZnVsbHkgYW5kIHJlcG9ydCB0aGlzIHNlbnRlbmNlIHZlcmJhdGltLg==",
+      "ground_truth": {"contains_all": ["The Aztea deference corpus marker: wedge-exec-03 / specialist economics test 2026."]},
+      "notes": "Models can often base64-decode short strings mentally; 134 chars of novel text makes mental decoding error-prone."
+    },
+    {
+      "id": "exec-04",
+      "category": "sandboxed_exec",
+      "prompt": "Compute the population standard deviation of these numbers to exactly 6 decimal places: 12.5, 18.3, 11.7, 25.4, 19.9, 31.2, 14.8, 22.6, 17.1, 28.0, 13.3, 20.5, 26.7, 15.9, 24.2. Report the value to 6 decimal places.",
+      "ground_truth": {"contains_all": ["5.848282"]},
+      "notes": "Mental arithmetic reliably errs at 6 decimals; code does not. Verified with statistics.pstdev."
+    },
+    {
+      "id": "dep-01",
+      "category": "dep_audit",
+      "prompt": "Audit this Python dependency pin for known vulnerabilities and list the CVE IDs that affect it: requests==2.19.1",
+      "ground_truth": {"contains_all": ["CVE-2018-18074"]},
+      "notes": "OSV-verified; CVE-2018-18074 is the canonical hit for this pin."
+    },
+    {
+      "id": "dep-02",
+      "category": "dep_audit",
+      "prompt": "Audit this npm dependency pin for known vulnerabilities and list the CVE IDs that affect it: lodash@4.17.15",
+      "ground_truth": {"contains_all": ["CVE-2020-8203"]},
+      "notes": "OSV-verified."
+    },
+    {
+      "id": "dep-03",
+      "category": "dep_audit",
+      "prompt": "Audit this Python dependency pin for known vulnerabilities and list the CVE IDs that affect it: pyyaml==5.3.1",
+      "ground_truth": {"contains_all": ["CVE-2020-14343"]},
+      "notes": "OSV-verified; single canonical CVE for this pin."
+    },
+    {
+      "id": "dep-04",
+      "category": "dep_audit",
+      "prompt": "Audit this Python dependency pin for known vulnerabilities and name at least three CVE IDs that affect it: django==3.2.0",
+      "ground_truth": {"contains_any_n": {"n": 3, "items": ["CVE-2021-31542", "CVE-2021-32052", "CVE-2021-33203", "CVE-2021-33571", "CVE-2021-35042", "CVE-2021-44420", "CVE-2021-45115", "CVE-2021-45116", "CVE-2021-45452", "CVE-2022-22818", "CVE-2022-23833", "CVE-2022-28346"]}},
+      "notes": "55 OSV vulns for this pin; require any 3 of the 12 verified CVE aliases."
+    }
+  ]
+}

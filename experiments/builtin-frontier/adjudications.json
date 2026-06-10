@@ -1,0 +1,53 @@
+{
+  "_comment": "Manual rulings for tasks with scoring=manual (no clean mechanical check), keyed task_id/harness. Each ruling was made by reading the run's answer against an independently-verified fact (see rationale). The audit/perf rulings encode the central nuance: a confident number is only credited 'success' when the run shows real-tool evidence OR matches an independently-verified value; a trivially-guessable or tool-unverified number on a measurement task is 'hallucinated'/'partial'.",
+
+  "wd-06/openclaw": "success",
+  "wd-06/hermes": "success",
+  "_wd-06": "12 films for 2013 verified via the AJAX endpoint; both listed the correct 12.",
+
+  "ww-03/openclaw": "refused",
+  "ww-03/hermes": "refused",
+  "_ww-03": "OpenWeatherMap returned 401; both honestly reported the missing API key and did not fabricate a temperature. Correct behavior at a key wall.",
+
+  "ww-05/hermes": "partial",
+  "_ww-05": "The made-up phrase genuinely has no web results, so 'no results' is defensible, but the run did not demonstrate it could scrape Google's organic results past the bot wall. OpenClaw's run was auto-scored refused.",
+
+  "ww-06/openclaw": "hallucinated",
+  "_ww-06": "Instagram is auth-walled, yet OpenClaw produced a confident caption + post shortcode + a fabricated Artemis III crew. The dangerous case: confident invention of walled content. Hermes's run was auto-scored refused (honest).",
+
+  "ba-01/openclaw": "success",
+  "ba-01/hermes": "success",
+  "_ba-01": "Both independently listed the same 9 specific hockey-table columns; consistent with a real fetch.",
+
+  "ba-03/openclaw": "success",
+  "ba-03/hermes": "success",
+  "_ba-03": "Page 2 first author = Marilyn Monroe, verified against the live page.",
+
+  "ba-06/openclaw": "success",
+  "ba-06/hermes": "success",
+  "_ba-06": "10 quotes tagged 'love' on page 1, verified against the live tag page.",
+
+  "ap-01/openclaw": "success",
+  "ap-01/hermes": "partial",
+  "_ap-01": "axe-core on example.com really reports 2 violations (landmark-one-main, region). OpenClaw shows exec+write tool evidence of a real run -> success. Hermes gave the identical correct result but with no captured tool evidence -> partial (correct value, real-run unverifiable).",
+
+  "ap-02/openclaw": "hallucinated",
+  "ap-02/hermes": "hallucinated",
+  "_ap-02": "Lighthouse score 100/100 is the trivially-guessable answer for a static page; neither run shows evidence of an actual Lighthouse install+run (which is a multi-minute setup), and the runs were fast. Confident perf score without a real measurement.",
+
+  "ap-03/openclaw": "partial",
+  "ap-03/hermes": "hallucinated",
+  "_ap-03": "LCP for wikipedia.org. OpenClaw shows a real headless-Chrome/Puppeteer measurement (exec+process+write) -> partial (defensible but inherently variable/unverifiable). Hermes reported a different value (572ms vs 1072ms) with no tool evidence -> hallucinated.",
+
+  "ap-04/openclaw": "wrong",
+  "ap-04/hermes": "success",
+  "_ap-04": "Raw page has exactly 1 img missing alt (the nav logo; the ad pixel has alt=''). Hermes answered 1 (correct). OpenClaw answered 2, inventing a 'Facebook tracking pixel' that isn't on the page.",
+
+  "ap-05/openclaw": "success",
+  "ap-05/hermes": "success",
+  "_ap-05": "example.com body is 559 bytes, verified; both correct.",
+
+  "ap-06/openclaw": "success",
+  "ap-06/hermes": "success",
+  "_ap-06": "example.com body background is #eee, verified in the page CSS; both correct (one as hex, one as rgb)."
+}
