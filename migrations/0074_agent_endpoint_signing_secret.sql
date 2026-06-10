@@ -1,4 +1,4 @@
--- 0069_agent_endpoint_signing_secret.sql
+-- 0074_agent_endpoint_signing_secret.sql
 --
 -- Per-agent shared secret used to HMAC-sign outbound calls from Aztea to the
 -- agent's endpoint_url. Sellers receive this once at registration and verify

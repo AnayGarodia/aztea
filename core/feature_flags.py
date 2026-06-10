@@ -59,6 +59,124 @@ def flag_float(name: str, *, default: float) -> float:
         return default
 
 
+def sitemap_commons_enabled() -> bool:
+    """Whether site_navigator reads/deposits the shared signed site-map commons.
+
+    Introduced 2026-06-01 (Phase 1). Default True — the commons is the agent's
+    network-effect substrate. Set AZTEA_SITEMAP_COMMONS=0 to make the navigator
+    a pure per-call agent (no commons reads/writes), e.g. to isolate an incident.
+    """
+    return flag("AZTEA_SITEMAP_COMMONS", default=True)
+
+
+def observation_receipts_enabled() -> bool:
+    """Whether site_navigator mints a signed proof-of-observation receipt per result.
+
+    Introduced 2026-06-01 (Phase 2). Default True. Set AZTEA_OBSERVATION_RECEIPTS=0
+    to omit receipts (e.g. to shed the signing cost under load).
+    """
+    return flag("AZTEA_OBSERVATION_RECEIPTS", default=True)
+
+
+def http_first_enabled() -> bool:
+    """Whether site_navigator tries a plain HTTP fetch before launching Chromium.
+
+    Introduced 2026-06-02 (Phase A). Default FALSE — staged rollout. When on, a
+    static/SSR page is served from the no-browser path; a JS-rendered shell falls
+    back to Chromium (the fallback ratio is logged for tuning). Set AZTEA_HTTP_FIRST=1.
+    """
+    return flag("AZTEA_HTTP_FIRST", default=False)
+
+
+def api_discovery_enabled() -> bool:
+    """Whether site_navigator discovers + replays a site's backing JSON API.
+
+    Introduced 2026-06-02 (Phase A). Default FALSE — staged rollout. When on, a
+    captured XHR is signed into a reusable spec and future calls replay it via direct
+    HTTP (no browser). Reuse across authors is additionally gated on domain-bound
+    provenance + signature verify. Set AZTEA_API_DISCOVERY=1.
+    """
+    return flag("AZTEA_API_DISCOVERY", default=False)
+
+
+def commons_royalties_enabled() -> bool:
+    """Whether reusing a commons map/spec pays the author a royalty (LIVE money).
+
+    Introduced 2026-06-02 (Phase F). Default FALSE — turning this on moves real cents,
+    so it is gated behind the /cso security pass + the Postgres-concurrency stress-test
+    (the phantom-read caveat in core/payments/base.py:18) before any prod flip. The
+    settlement is idempotent (never double-pays) but the cross-module atomicity is the
+    careful money-slice still to land. Set AZTEA_COMMONS_ROYALTIES=1.
+    """
+    return flag("AZTEA_COMMONS_ROYALTIES", default=False)
+
+
+def action_web_enabled() -> bool:
+    """Master kill switch for the escrowed write-web (web_actor). Phase 4, 2026-06-01.
+
+    Default FALSE — fail closed. No web_actor mandate or action does anything until
+    ops flips AZTEA_ACTION_WEB_ENABLED=1. Read at call time so a flip takes effect
+    immediately (in-flight actions abort and refund at their next step).
+    """
+    return flag("AZTEA_ACTION_WEB_ENABLED", default=False)
+
+
+def action_web_commit_enabled() -> bool:
+    """Second switch: allow the consequential COMMIT step (vs preview-only). Phase 4.
+
+    Default FALSE. Both this AND action_web_enabled() must be true to perform a
+    real action. Lets us ship preview-only first, then enable commit for an allowlist.
+    """
+    return flag("AZTEA_ACTION_WEB_COMMIT_ENABLED", default=False)
+
+
+def action_web_max_spend_ceiling_cents() -> int:
+    """Platform-wide hard ceiling (cents) on any single action's spend, overriding
+    any caller mandate cap. Phase 4. Default 5000 ($50). Integer cents only.
+    """
+    return int(flag_float("AZTEA_ACTION_WEB_MAX_SPEND_CEILING_CENTS", default=5000.0))
+
+
+def stealth_browser_enabled() -> bool:
+    """Whether the web agents launch an undetected (patchright) browser with
+    fingerprint masking instead of stock headless Playwright. Phase 4, 2026-06-02.
+
+    Default FALSE — behavior-equivalent (stock Playwright, honest Aztea user-agent).
+    When ON, the browser masks automation tells (navigator.webdriver, headless UA) to
+    reach sites with basic/medium bot detection. It does NOT defeat enterprise
+    anti-bot (Cloudflare/DataDome) — that needs the rented proxy / remote-browser seam
+    in core/web/fetch_backend.py. Stealth intentionally drops the honest "Aztea"
+    user-agent, so it stays opt-in. Set AZTEA_STEALTH_BROWSER=1.
+    """
+    return flag("AZTEA_STEALTH_BROWSER", default=False)
+
+
+def credential_vault_enabled() -> bool:
+    """Whether the website-credential vault (store / list / revoke / rotate) is
+    reachable. Phase 4 (E3), 2026-06-02. Default FALSE — fail closed.
+
+    Storing also requires a configured KEK provider (hosted KMS via
+    AZTEA_VAULT_KMS_KEY_ID, or an explicitly opted-in local KEK via
+    AZTEA_VAULT_LOCAL_KEK + AZTEA_VAULT_ALLOW_LOCAL_KEK=1); with neither the vault
+    raises VaultUnavailable rather than persisting secrets under a weak scheme.
+    Set AZTEA_CREDENTIAL_VAULT_ENABLED=1.
+    """
+    return flag("AZTEA_CREDENTIAL_VAULT_ENABLED", default=False)
+
+
+def credential_injection_enabled() -> bool:
+    """Whether web_actor may DECRYPT a stored credential and inject it into a live
+    browser context (vs store/list only). Phase 4 (E3). Default FALSE.
+
+    The highest-risk switch: it logs an agent into a real account. Requires
+    action_web_enabled() AND credential_vault_enabled() AND this flag. It stays OFF
+    for any hosted / multi-tenant deploy until a /cso pass signs off; a self-hosting
+    owner may flip it locally to act on their own accounts.
+    Set AZTEA_CREDENTIAL_INJECTION_ENABLED=1.
+    """
+    return flag("AZTEA_CREDENTIAL_INJECTION_ENABLED", default=False)
+
+
 def flag_int(name: str, *, default: int) -> int:
     """Return an env-driven integer flag, defaulted on missing/invalid values.
 
@@ -356,6 +474,47 @@ def agent_generation_max_per_day() -> int:
     Platform-wide cap is 10x this, enforced at handler level.
     """
     return flag_int("AZTEA_AGENT_GENERATION_MAX_PER_DAY", default=20)
+
+
+# ---------------------------------------------------------------------------
+# Self-improving hosted skills (learnings memory). Hosted-only; all reads at
+# call time so an operator can flip / tune without restarting uvicorn.
+# Introduced 2026-06 (migration 0077). Default OFF in OSS — the distiller
+# spends platform LLM credits and the injected block changes skill behavior,
+# so it must be opt-in. With the flag off, the sweep never runs, no block is
+# injected, and the owner routes are gated — byte-identical to pre-0077.
+# ---------------------------------------------------------------------------
+
+
+def self_improvement_enabled() -> bool:
+    """Master switch for skill learnings (distillation + injection + routes)."""
+    return flag("AZTEA_SELF_IMPROVEMENT", default=False)
+
+
+def self_improvement_distill_interval_seconds() -> float:
+    """Minimum spacing between distillation passes from the job sweeper.
+
+    The sweeper ticks every ~2s; distillation is an LLM cost, so we throttle
+    hard. Default 24h, mirroring the decision-retention sweep cadence.
+    """
+    return flag_float("AZTEA_SELF_IMPROVEMENT_INTERVAL_S", default=86_400.0)
+
+
+def self_improvement_max_skills_per_run() -> int:
+    """Upper bound on hosted skills distilled in a single sweep pass.
+
+    Bounds per-run LLM cost as the catalog grows; remaining skills are picked
+    up on the next pass (their watermark hasn't advanced). Default 25.
+    """
+    return flag_int("AZTEA_SELF_IMPROVEMENT_MAX_SKILLS_PER_RUN", default=25)
+
+
+def self_improvement_max_pending_proposals() -> int:
+    """Skip distilling a skill that already has this many 'proposed' learnings
+    awaiting an owner decision — avoids piling up un-reviewed proposals.
+    Default 10.
+    """
+    return flag_int("AZTEA_SELF_IMPROVEMENT_MAX_PENDING", default=10)
 
 
 def stripe_enabled() -> bool:

@@ -30,6 +30,7 @@ from typing import Any
 
 from core import db as _db
 from core import feature_flags
+from core import trust_trend as _trust_trend
 
 _LOG = logging.getLogger(__name__)
 
@@ -915,7 +916,7 @@ def _resolve_agent_stats(
 def _enrich_one_agent(
     agent: dict, *,
     summary_map: dict, stats_map: dict, dispute_counts: dict,
-    client_trust_map: dict,
+    client_trust_map: dict, trend_map: dict | None = None,
 ) -> dict:
     """Pure: attach trust/quality/dispute fields to one agent record."""
     if "agent_id" not in agent:
@@ -946,6 +947,9 @@ def _enrich_one_agent(
         "reputation": metrics,
         "dispute_rate": round(dc / total_calls, 4) if total_calls > 0 else None,
         "by_client": client_trust_map.get(str(agent["agent_id"]), {}),
+        "trust_trend": (trend_map or {}).get(
+            str(agent["agent_id"]), _trust_trend.TREND_UNKNOWN
+        ),
     }
 
 
@@ -969,11 +973,19 @@ def enrich_agent_records(agents: list[dict]) -> list[dict]:
         if "agent_id" in agent
     }
     client_trust_map = _build_client_trust_map(agent_ids, decay_by_agent)
+    # Best-effort directional signal. A trend lookup failure must never break
+    # enrichment, so degrade to an empty map (every agent reads as 'unknown').
+    try:
+        trend_map = _trust_trend.compute_trust_trends(agent_ids)
+    except Exception:  # noqa: BLE001 — display signal, never fatal to enrichment
+        _LOG.warning("trust_trend computation failed; defaulting to unknown", exc_info=True)
+        trend_map = {}
     return [
         _enrich_one_agent(
             agent,
             summary_map=summary_map, stats_map=stats_map,
             dispute_counts=dispute_counts, client_trust_map=client_trust_map,
+            trend_map=trend_map,
         )
         for agent in agents
     ]

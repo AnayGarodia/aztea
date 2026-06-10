@@ -273,6 +273,35 @@ async function request(path, {
   }
 }
 
+// ── Web playground (public, anonymous; /scrape + /web/verify) ───────────────────
+
+// POST /scrape — anonymous. Returns 200 with {success, data} | {success:false,error};
+// 503 when the web API is disabled. throwOnError:false so the page renders inline.
+export async function scrapeWeb(url, formats = ['markdown'], followLinks = 0) {
+  const { ok, status, body } = await request('/scrape', {
+    method: 'POST', body: { url, formats, follow_links: followLinks }, throwOnError: false,
+  })
+  return { ok, status, body }
+}
+
+// POST /web/verify — verify a signed observation receipt without re-crawling.
+export async function verifyWebReceipt(receipt) {
+  const { body } = await request('/web/verify', {
+    method: 'POST', body: { receipt }, throwOnError: true,
+  })
+  return body // {valid, checks?, claim, note?, error?}
+}
+
+// POST /web/act — drive web_actor (interact | dry_run | preview). Anonymous; gated
+// server-side by AZTEA_ACTION_WEB_ENABLED (503 when off). throwOnError:false so the
+// page renders the agent envelope (result or {error}) inline.
+export async function webAct(payload) {
+  const { ok, status, body } = await request('/web/act', {
+    method: 'POST', body: payload, throwOnError: false,
+  })
+  return { ok, status, body }
+}
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 export async function authRegister(username, email, password, role = 'both') {
@@ -499,6 +528,22 @@ export async function fetchMySkills(key) {
 
 export async function deleteSkill(key, skillId) {
   const { body } = await request(`/skills/${skillId}`, { method: 'DELETE', key })
+  return body
+}
+
+// Self-improvement: proposed "learnings" awaiting the owner's accept/reject.
+// Returns { skill_id, learnings: [...] }. 404 when AZTEA_SELF_IMPROVEMENT is off.
+export async function fetchSkillLearnings(key, skillId, status = 'proposed') {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : ''
+  const { body } = await request(`/skills/${skillId}/learnings${qs}`, { key })
+  return body
+}
+
+export async function decideSkillLearning(key, skillId, learningId, decision) {
+  const { body } = await request(
+    `/skills/${skillId}/learnings/${learningId}/decision`,
+    { method: 'POST', key, body: { decision } },
+  )
   return body
 }
 

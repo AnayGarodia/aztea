@@ -2498,6 +2498,19 @@ app.include_router(
 )
 
 
+# Owner-facing hosted-skill learnings review (/skills/{id}/learnings...).
+# Mounted here so the worker-scope auth helpers (_require_api_key part_001,
+# _require_scope part_002) are already in scope. Gated by AZTEA_SELF_IMPROVEMENT
+# inside the router (404 when off). Router lives in
+# ``server/routes/skill_learnings.py``.
+app.include_router(
+    _skill_learnings_routes.create_router(
+        require_api_key=_require_api_key,
+        require_scope=_require_scope,
+    )
+)
+
+
 # Mount the anonymous public-integrations surface (/api/integrations/*).
 # 2026-05-26 platform-pivot wave 1: gives OpenAI Agents SDK / Codex /
 # Gemini Tools integrators a way to discover Aztea agents without an
@@ -2525,6 +2538,18 @@ app.include_router(
 # routes 503 with a structured pointer instead of dispatching.
 app.include_router(
     _playground_routes.create_router(
+        limiter=limiter,
+        optional_api_key=_optional_api_key,
+    )
+)
+
+
+# Public Firecrawl-shaped web API (POST /scrape /map /crawl /extract) + the public
+# receipt-verify endpoint (POST /web/verify). The fetch endpoints enforce the
+# AZTEA_WEB_API_ENABLED kill-switch (503 until set); /web/verify is always on (no
+# outbound, no money). Router lives in server/routes/web_api.py.
+app.include_router(
+    _web_api_routes.create_router(
         limiter=limiter,
         optional_api_key=_optional_api_key,
     )

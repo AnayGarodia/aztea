@@ -152,71 +152,15 @@ def _extract_protocol_output_artifacts(payload: dict[str, Any]) -> list[dict[str
     )
 
 
-_SENSITIVE_EXAMPLE_AGENT_IDS: frozenset[str] = frozenset(
-    {
-        # Secret Scanner — inputs are credentials/source code by definition.
-        # Recording any example would replay caller-submitted secrets to other buyers.
-        "1021c65c-d2bf-54ff-823a-897f9deb1029",
-        # Python Code Executor — caller-submitted source code routinely
-        # contains business logic, sandbox-escape probes, or private files.
-        # The 2026-05-07 eval surfaced indirect-import bypass attempts via
-        # the public examples surface; lock it down.
-        "040dc3f5-afe7-5db7-b253-4936090cc7af",
-        # DB Sandbox — caller schemas/queries leak business model details
-        # (table layouts, column names, sample rows).
-        "be4d6c18-629d-5b1c-8c46-f82c00db4995",
-        # Multi-language Executor — same rationale as the Python sandbox.
-        "d4b2c3e5-f6a7-5b8c-9d0e-1f2a3b4c5d6e",
-        # Dependency Auditor — the manifest itself can disclose private
-        # package names from internal registries.
-        "11fab82a-426e-513e-abf3-528d99ef2b87",
-    }
+# Sensitivity primitives moved to core/privacy.py (pure, so the hosted-skill
+# learnings distiller in core/observability.py can reuse the exact same gate +
+# redactor without core importing server). Bound here under their historical
+# private names so existing references across the shards + tests keep working.
+# See core/privacy.py for the per-agent / per-field rationale.
+from core.privacy import (
+    SENSITIVE_EXAMPLE_AGENT_IDS as _SENSITIVE_EXAMPLE_AGENT_IDS,
+    redact_sensitive as _redact_sensitive_for_example,
 )
-
-
-# F3 (red-team 2026-05-19): field-name-based redaction for the public
-# work-example recorder. Per-agent flags (examples_sensitive, Security
-# category) don't capture agents whose outputs are CONDITIONALLY
-# sensitive — e.g. live_sandbox.sandbox_share emits a join_token, but
-# live_sandbox.sandbox_exec doesn't. The right primitive is per-field.
-#
-# Names are matched case-insensitively. Substring matches on "token",
-# "secret", "password", "private_key", "join_token" catch most of the
-# leakage paths the red-team found (share_id, join_token, access,
-# public_url, signed_payload_b64, capture_url, auth_token).
-_SENSITIVE_FIELD_SUBSTRINGS: tuple[str, ...] = (
-    "token", "secret", "password", "passwd", "passphrase",
-    "private_key", "api_key", "auth", "credential",
-    "signed_payload", "signature_priv",
-    "join_token", "share_id", "session_cookie", "cookie",
-    "public_url", "capture_url", "tunnel_url", "webhook_url",
-    "x-aztea-signature",
-)
-
-
-def _is_sensitive_field_name(name: str) -> bool:
-    """Pure: True if a key name matches the redaction allowlist (case-insensitive)."""
-    lowered = str(name or "").lower()
-    return any(marker in lowered for marker in _SENSITIVE_FIELD_SUBSTRINGS)
-
-
-def _redact_sensitive_for_example(value: Any) -> Any:
-    """Pure: deep-walk a value and replace sensitive-named fields with '<redacted>'.
-
-    Lists are walked element-wise. Dicts are walked recursively. Scalars
-    pass through unchanged. The result is a new object — the input is
-    not mutated. Used by _record_public_work_example before writing to
-    the cross-tenant ring buffer.
-    """
-    if isinstance(value, dict):
-        return {
-            key: ("<redacted>" if _is_sensitive_field_name(key)
-                  else _redact_sensitive_for_example(val))
-            for key, val in value.items()
-        }
-    if isinstance(value, list):
-        return [_redact_sensitive_for_example(item) for item in value]
-    return value
 
 
 def _record_public_work_example(

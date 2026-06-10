@@ -28,7 +28,10 @@ def test_kill_switch_refunds_in_flight_jobs(client):
     owner = _register_user()
     caller = _register_user()
     _fund_user_wallet(caller, 300)  # 300 cents = $3.00
-    agent_id = _register_agent(client, owner["raw_api_key"], f"KS {uuid.uuid4().hex[:6]}")
+    # Title-case "Ks" prefix, not "KS": the agent-name validator rejects names whose
+    # letters are >=80% uppercase, and a uuid hex suffix is sometimes all-digits, which
+    # would leave "KS" as the only letters (100% caps) and flake ~6% of runs.
+    agent_id = _register_agent(client, owner["raw_api_key"], f"Ks {uuid.uuid4().hex[:6]}")
 
     # Submit a job — this pre-charges the caller wallet for the agent price.
     created = client.post(
@@ -74,7 +77,7 @@ def test_kill_switch_blocks_subsequent_calls(client):
     owner = _register_user()
     caller = _register_user()
     _fund_user_wallet(caller, 200)
-    agent_id = _register_agent(client, owner["raw_api_key"], f"KS2 {uuid.uuid4().hex[:6]}")
+    agent_id = _register_agent(client, owner["raw_api_key"], f"Ks2 {uuid.uuid4().hex[:6]}")
 
     suspended = client.post(
         f"/admin/agents/{agent_id}/suspend",
@@ -95,7 +98,7 @@ def test_kill_switch_requires_admin_scope(client):
     """A non-master, non-admin key must be refused 403. Defense-in-depth
     around the highest-blast-radius admin endpoint."""
     owner = _register_user()
-    agent_id = _register_agent(client, owner["raw_api_key"], f"KS3 {uuid.uuid4().hex[:6]}")
+    agent_id = _register_agent(client, owner["raw_api_key"], f"Ks3 {uuid.uuid4().hex[:6]}")
     # Use the owner's own (non-admin) key.
     resp = client.post(
         f"/admin/agents/{agent_id}/suspend",
