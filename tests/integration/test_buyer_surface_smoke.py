@@ -190,7 +190,7 @@ def test_claude_stdio_mcp_smoke_lists_and_calls_control_plane_tool(buyer_surface
                 "jsonrpc": "2.0",
                 "id": 3,
                 "method": "tools/call",
-                "params": {"name": "aztea_search", "arguments": {"query": "code"}},
+                "params": {"name": "aztea_search", "arguments": {"query": "audit dependencies for vulnerabilities"}},
             }
         )
         assert called is not None
@@ -206,7 +206,7 @@ def test_claude_stdio_mcp_smoke_lists_and_calls_control_plane_tool(buyer_surface
                 "jsonrpc": "2.0",
                 "id": 4,
                 "method": "tools/call",
-                "params": {"name": "search_specialists", "arguments": {"query": "code"}},
+                "params": {"name": "search_specialists", "arguments": {"query": "audit dependencies for vulnerabilities"}},
             }
         )
         assert called_canonical is not None
@@ -221,7 +221,7 @@ def test_claude_stdio_mcp_smoke_lists_and_calls_control_plane_tool(buyer_surface
         module._DEFAULT_CLIENT_ID = old_client_id
 
 
-def test_codex_tool_manifest_supports_meta_and_registry_execution(buyer_surface_server):
+def test_codex_tool_manifest_supports_meta_and_registry_execution(buyer_surface_server, monkeypatch):
     caller = _register_user_via_http(buyer_surface_server, prefix="codex-caller")
     _fund_wallet(buyer_surface_server, str(caller["raw_api_key"]), 500)
 
@@ -245,23 +245,38 @@ def test_codex_tool_manifest_supports_meta_and_registry_execution(buyer_surface_
     )
     assert ok_recipes is True
     # 2026-05-26 platform-pivot cull dropped two secret-scanner-fan-out recipes;
-    # curated catalog is now {audit-deps, domain-health}.
-    assert recipes["count"] >= 2
+    # 2026-06-21 frontier-evidence cull dropped domain-health (sunset
+    # dns_inspector). Curated catalog is now {audit-deps}.
+    assert recipes["count"] >= 1
 
+    # Registry-execution leg: dependency_auditor is the curated vehicle after
+    # the 2026-06-21 cull (python_executor is sunset → 410). The runner is
+    # stubbed so the smoke test stays offline and deterministic; the path it
+    # proves (manifest → registry call → settled output) is unchanged.
+    monkeypatch.setattr(
+        server.agent_dependency_auditor,
+        "run",
+        lambda payload: {
+            "ecosystem": "npm",
+            "total_packages": 1,
+            "packages": [],
+            "parse_warnings": [],
+            "summary": "codex smoke: 1 package audited",
+        },
+    )
     ok_run, result = _execute_platform_tool(
         manifest=manifest,
-        tool_name="python_code_executor",
-        arguments={"code": "print(2 + 2)", "explain": False, "timeout": 3},
+        tool_name="dependency_auditor",
+        arguments={"manifest": "lodash@4.17.21"},
         base_url=buyer_surface_server,
         api_key=str(caller["raw_api_key"]),
         client_id="codex",
     )
     assert ok_run is True
-    assert result["exit_code"] == 0
-    assert result["stdout"].strip() == "4"
+    assert result["summary"] == "codex smoke: 1 package audited"
 
 
-def test_gemini_tool_manifest_supports_meta_and_registry_execution(buyer_surface_server):
+def test_gemini_tool_manifest_supports_meta_and_registry_execution(buyer_surface_server, monkeypatch):
     caller = _register_user_via_http(buyer_surface_server, prefix="gemini-caller")
     _fund_wallet(buyer_surface_server, str(caller["raw_api_key"]), 500)
 
@@ -285,16 +300,30 @@ def test_gemini_tool_manifest_supports_meta_and_registry_execution(buyer_surface
         client_id="gemini-cli",
     )
     assert ok_recipes is True
-    assert recipes["count"] >= 2  # 2026-05-26 platform-pivot cull
+    assert recipes["count"] >= 1  # 2026-06-21 frontier cull → {audit-deps}
 
+    # Registry-execution leg: dependency_auditor is the curated vehicle after
+    # the 2026-06-21 cull (python_executor is sunset → 410). Runner stubbed for
+    # an offline, deterministic smoke; the manifest → registry call → settle
+    # path it proves is unchanged.
+    monkeypatch.setattr(
+        server.agent_dependency_auditor,
+        "run",
+        lambda payload: {
+            "ecosystem": "npm",
+            "total_packages": 1,
+            "packages": [],
+            "parse_warnings": [],
+            "summary": "gemini smoke: 1 package audited",
+        },
+    )
     ok_run, result = _execute_platform_tool(
         manifest=manifest,
-        tool_name="python_code_executor",
-        arguments={"code": "print(6 * 7)", "explain": False, "timeout": 3},
+        tool_name="dependency_auditor",
+        arguments={"manifest": "lodash@4.17.21"},
         base_url=buyer_surface_server,
         api_key=str(caller["raw_api_key"]),
         client_id="gemini-cli",
     )
     assert ok_run is True
-    assert result["exit_code"] == 0
-    assert result["stdout"].strip() == "42"
+    assert result["summary"] == "gemini smoke: 1 package audited"

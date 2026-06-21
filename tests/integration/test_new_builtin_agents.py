@@ -1,10 +1,12 @@
-"""Integration tests for dns_inspector and the curated demo built-ins
-(lighthouse_auditor, accessibility_auditor).
+"""Integration tests for the curated demo built-ins (lighthouse_auditor,
+accessibility_auditor) plus sunset-agent skip coverage.
 
 2026-05-26 platform-pivot cull: security_headers_grader,
 broken_link_crawler, pdf_document_parser, and web_search are now
-sunset. Tests for the sunset agents are skipped because direct calls
-to /registry/agents/{id}/call return 410 Gone for sunset agents; the
+sunset. 2026-06-21 frontier-evidence cull: dns_inspector joined them
+(a free frontier agent does live lookups equally well). Tests for the
+sunset agents are skipped because direct calls to
+/registry/agents/{id}/call return 410 Gone for sunset agents; the
 agent modules themselves still exist for old job-ID resolution.
 """
 
@@ -29,7 +31,15 @@ _CULL_SKIP_REASON = (
     "returns to CURATED_PUBLIC_BUILTIN_AGENT_IDS."
 )
 
+_FRONTIER_CULL_SKIP_REASON = (
+    "Sunset 2026-06-21 frontier-evidence cull: /registry/agents/{id}/call "
+    "returns 410 Gone for sunset agent IDs. A free frontier agent does live "
+    "lookups equally well (see experiments/builtin-frontier). Re-enable when "
+    "this agent returns to CURATED_PUBLIC_BUILTIN_AGENT_IDS."
+)
 
+
+@pytest.mark.skip(reason=_FRONTIER_CULL_SKIP_REASON)
 def test_dns_inspector_basic(client):
     caller = _register_user()
     _fund_user_wallet(caller, 200)

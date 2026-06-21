@@ -5,6 +5,29 @@ All notable changes to Aztea are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and Aztea follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-06-21
+
+### Changed
+
+- Frontier-evidence cull: the curated built-in marketplace narrows from 11
+  agents to **3** (`dependency_auditor`, `lighthouse_auditor`,
+  `accessibility_auditor`) — only the agents on the genuine capability
+  frontier a free agent can't do for itself. The other 8 (CVE Lookup, DNS
+  Inspector, Python Executor, Multi-Language Executor, Live Sandbox, DB
+  Sandbox, Browser Agent, Site Navigator) are sunset on the evidence of two
+  experiments (`experiments/builtin-frontier`, `experiments/deference`): a
+  modern harness does these commodity tasks as well or better, for free.
+  Sunset agents stay wired so old job IDs and signed receipts resolve, but a
+  new call returns `410 agent.sunset`.
+
+### Removed
+
+- The `domain-health` built-in recipe (it fanned out to the now-sunset DNS
+  Inspector). `audit-deps` remains the one curated recipe.
+- The discovery free-tier (`GATEWAY_FREE_TIER_AGENT_IDS`) is now empty —
+  CVE Lookup was its last member. Promoting a curated agent to a free
+  first-finding hook is a deferred product decision.
+
 ## [1.4.0] - 2026-06-10
 
 The agent-readable-web feature: `site_navigator` becomes a Firecrawl-class web

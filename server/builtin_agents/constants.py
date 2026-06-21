@@ -234,6 +234,36 @@ BUILTIN_AGENT_IDS = frozenset(BUILTIN_INTERNAL_ENDPOINTS.keys())
 #   - codebase_reviewer: LLM-only reasoning agent; not a platform primitive.
 #   - compliance_attestor: LLM reasoning + Ed25519 signing; signing is
 #     mechanical, value is in the prompt — not a platform primitive.
+#
+# 2026-06-21: frontier-evidence cull — eight more builtins sunsetted on the
+# evidence of experiments/builtin-frontier (144 runs, OpenClaw + Hermes,
+# built-in tools only) and experiments/deference (64 runs). The frontier
+# experiment showed a modern harness hits 86% built-in success and *routes
+# around* most "missing tool" gaps — it shells out, bootstraps toolchains,
+# and reads images with vision. The deference experiment showed push-routing
+# these commodity tasks was net-negative (equal-at-best correctness, slower in
+# 12/16 cells, ~2× tokens) and even introduced a wrong-answer mode. Both
+# experiments' "don't-build / don't-route" lists name exactly these eight as
+# commodity for a free frontier agent. Endpoints stay wired so old job IDs and
+# signed receipts still RESOLVE, but a NEW call to a sunset agent returns a
+# clean HTTP 410 ``agent.sunset`` from _assert_agent_callable (part_002.py) —
+# sunset means removed from the catalog AND no longer callable, not hidden.
+# The catalog now keeps only the three agents on the genuine frontier:
+# dependency_auditor (structural win — beat hand-rolled OSV probing 4.7× on
+# Hermes and dodged a timeout), and lighthouse_auditor + accessibility_auditor
+# (the verification frontier — built-ins confidently *fake* the measurement;
+# value is a real, reproducible run). Reasoning per sunset agent:
+#   - cve_lookup: live_lookups 6/6 both harnesses; on the "don't-build" list.
+#   - dns_inspector: `dig` + registry JSON is one command; commodity.
+#   - python_executor: numeric_compute 6/6; routing it is a pure tax and
+#     introduced the F4 wrong-answer mode in the deference run.
+#   - multi_language_executor: cross_language 12/12 — harnesses bootstrap the
+#     Rust/Go toolchain on the fly.
+#   - live_sandbox / db_sandbox: same exec frontier; built-in exec is correct,
+#     instant, and free.
+#   - browser_agent: web_stable + web_dynamic + browser_automation all 6/6.
+#   - site_navigator: plain web fetch is commodity for any harness with a
+#     working fetch/browser tool.
 SUNSET_DEPRECATED_AGENT_IDS: frozenset[str] = frozenset({
     DOCS_GROUNDER_AGENT_ID,
     DIFF_ANALYZER_AGENT_ID,
@@ -265,28 +295,32 @@ SUNSET_DEPRECATED_AGENT_IDS: frozenset[str] = frozenset({
     QUANT_PATCH_VALIDATOR_AGENT_ID,
     CODEBASE_REVIEWER_AGENT_ID,
     COMPLIANCE_ATTESTOR_AGENT_ID,
+    # 2026-06-21 frontier-evidence cull (see comment block above).
+    CVELOOKUP_AGENT_ID,
+    DNS_INSPECTOR_AGENT_ID,
+    PYTHON_EXECUTOR_AGENT_ID,
+    MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
+    LIVE_SANDBOX_AGENT_ID,
+    DB_SANDBOX_AGENT_ID,
+    BROWSER_AGENT_ID,
+    SITE_NAVIGATOR_AGENT_ID,
 })
 
-# The public catalog: agents that demonstrate the platform's unique
-# primitives — subprocess isolation (python_executor, multi_language_executor,
-# db_sandbox, live_sandbox), live external data (cve_lookup, dependency_auditor,
-# dns_inspector), or specialist headless runtimes (browser_agent,
-# lighthouse_auditor, accessibility_auditor). Sunsetted agents are NOT
-# listed here; see SUNSET_DEPRECATED_AGENT_IDS for the cull list and
-# reasoning. 2026-05-26 platform-pivot cull narrowed this to 10 agents
-# that block Claude in-session and showcase what third-party builders
-# can build on top of.
+# The public catalog: agents that sit on the genuine capability frontier a
+# free frontier agent (OpenClaw / Hermes / Claude Code) cannot cross on its
+# own. The 2026-06-21 frontier-evidence cull (see SUNSET_DEPRECATED_AGENT_IDS
+# above) narrowed this to 3 agents on the strength of two experiments:
+#   - dependency_auditor: structural win — multi-step OSV audit that the
+#     deference experiment showed beat a hand-rolled probe 4.7× on Hermes and
+#     dodged a timeout.
+#   - lighthouse_auditor + accessibility_auditor: the verification frontier —
+#     built-in harnesses confidently *fabricate* a Lighthouse score / axe
+#     result without measuring; the value is a real, reproducible run.
+# Everything else a modern harness does equally well or better for free, so it
+# would be a tax on the catalog. Sunsetted agents are NOT listed here.
 CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
     {
-        CVELOOKUP_AGENT_ID,
         DEPENDENCY_AUDITOR_AGENT_ID,
-        DNS_INSPECTOR_AGENT_ID,
-        PYTHON_EXECUTOR_AGENT_ID,
-        MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
-        LIVE_SANDBOX_AGENT_ID,
-        DB_SANDBOX_AGENT_ID,
-        BROWSER_AGENT_ID,
-        SITE_NAVIGATOR_AGENT_ID,
         LIGHTHOUSE_AUDITOR_AGENT_ID,
         ACCESSIBILITY_AUDITOR_AGENT_ID,
     }
@@ -347,11 +381,15 @@ CURATED_BUILTIN_AGENT_IDS = frozenset(
 # catalog for free-tier discovery. Their spec prices remain $0.00 so
 # direct-slug callers still hit the free path; the set just stops
 # pointing at hidden agents.
-GATEWAY_FREE_TIER_AGENT_IDS = frozenset(
-    {
-        CVELOOKUP_AGENT_ID,
-    }
-)
+#
+# 2026-06-21: cve_lookup — the last gateway member — was sunset in the
+# frontier-evidence cull, so the discovery free-tier now has NO agent. Its
+# spec price stays $0.00 (direct-slug callers keep the free path), but the
+# set is empty because subsidizing a hidden agent confuses readers (see the
+# assert below). PRODUCT DECISION DEFERRED: if the free first-finding
+# discovery hook is worth keeping, promote a curated agent (e.g.
+# dependency_auditor) here and zero its spec price in the same change.
+GATEWAY_FREE_TIER_AGENT_IDS: frozenset[str] = frozenset()
 # Sanity: a sunset agent must never appear in the discovery free-tier
 # set. Fires at import time so a regression is caught loudly.
 assert not (GATEWAY_FREE_TIER_AGENT_IDS & SUNSET_DEPRECATED_AGENT_IDS), (

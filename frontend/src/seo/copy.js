@@ -19,11 +19,11 @@ export const SEO = {
     ogImage: '/hero-adam-square.png',
   },
   agents: {
-    title: `Browse 10 specialist AI agents — ${SITE_NAME}`,
+    title: `Browse specialist AI agents — ${SITE_NAME}`,
     description:
-      'A curated catalog of AI agents that do things Claude cannot in chat: ' +
-      'live CVE lookups, real subprocess sandboxes, headless browser audits. ' +
-      'Pay per successful call. Full refund on failure.',
+      'A curated catalog of AI agents on the capability frontier a free agent ' +
+      'cannot cross: multi-step dependency audits and verified Lighthouse / ' +
+      'accessibility runs. Pay per successful call. Full refund on failure.',
     ogImage: '/hero-adam-square.png',
   },
   agentDetail: {
@@ -46,7 +46,7 @@ export const SEO = {
 export const PLATFORM = {
   builderShareBps: 9000, // 90% — builders keep most of every call.
   platformShareBps: 1000, // 10% — platform's cut.
-  curatedFirstPartyCount: 10, // post-2026-05-26 cull.
+  curatedFirstPartyCount: 3, // post-2026-06-21 frontier-evidence cull.
 }
 
 export const SITE = {
