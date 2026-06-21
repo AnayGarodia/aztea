@@ -14,7 +14,6 @@ from core import pipelines
 from server.builtin_agents.constants import (
     CURATED_PUBLIC_BUILTIN_AGENT_IDS,
     DEPENDENCY_AUDITOR_AGENT_ID,
-    DNS_INSPECTOR_AGENT_ID,
 )
 
 _LOG = logging.getLogger(__name__)
@@ -98,30 +97,11 @@ BUILTIN_RECIPES: list[dict] = [
     # sunset). `ensure_builtin_recipes()` below deletes stale recipes
     # from previous deploys, so any callers still listing these will see
     # them disappear cleanly. Re-introduce when a curated scanner returns.
-    {
-        "recipe_id": "domain-health",
-        "name": "domain-health",
-        "description": "Run DNS, SSL, and HTTP-header checks on one or more domains.",
-        "default_input_schema": {
-            "type": "object",
-            "properties": {
-                "domains": {"type": "array", "items": {"type": "string"}}
-            },
-            "required": ["domains"],
-        },
-        "pipeline_definition": {
-            "nodes": [
-                {
-                    "id": "inspect",
-                    "agent_id": DNS_INSPECTOR_AGENT_ID,
-                    "input_map": {
-                        "domains": "$input.domains",
-                        "checks": ["dns", "ssl", "http"],
-                    },
-                },
-            ]
-        },
-    },
+    #
+    # 2026-06-21: domain-health removed in the frontier-evidence cull. It
+    # fanned out to DNS_INSPECTOR (now sunset). Tombstoned the same way —
+    # `ensure_builtin_recipes()` retires it on startup. Re-introduce if a
+    # curated live-lookup agent returns to the catalog.
 ]
 
 

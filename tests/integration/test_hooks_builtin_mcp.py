@@ -219,17 +219,19 @@ def test_quality_gate_accepts_consistent_tool_outputs_without_live_judge(
 
 
 def test_builtin_worker_auto_completes_async_jobs(client, monkeypatch):
+    # Vehicle is dependency_auditor — a still-curated builtin after the
+    # 2026-06-21 frontier-evidence cull (python_executor is now sunset and
+    # returns 410 at the call gate). The runner is stubbed, so the agent's
+    # real behavior is irrelevant; this exercises the async worker loop.
     monkeypatch.setattr(
-        server.agent_python_executor,
+        server.agent_dependency_auditor,
         "run",
         lambda payload: {
-            "stdout": "processed by test builtin worker\n",
-            "stderr": "",
-            "exit_code": 0,
-            "timed_out": False,
-            "execution_time_ms": 10,
-            "explanation": "processed by test builtin worker",
-            "variables_captured": {},
+            "ecosystem": "npm",
+            "total_packages": 1,
+            "packages": [],
+            "parse_warnings": [],
+            "summary": "processed by test builtin worker",
         },
     )
 
@@ -240,8 +242,8 @@ def test_builtin_worker_auto_completes_async_jobs(client, monkeypatch):
         "/jobs",
         headers=_auth_headers(TEST_MASTER_KEY),
         json={
-            "agent_id": server._PYTHON_EXECUTOR_AGENT_ID,
-            "input_payload": {"code": "print('hello')"},
+            "agent_id": server._DEPENDENCY_AUDITOR_AGENT_ID,
+            "input_payload": {"manifest": "lodash@4.17.21"},
             "max_attempts": 2,
         },
     )
@@ -260,7 +262,7 @@ def test_builtin_worker_auto_completes_async_jobs(client, monkeypatch):
 
     assert terminal is not None
     assert terminal["status"] == "complete"
-    assert terminal["output_payload"]["explanation"] == "processed by test builtin worker"
+    assert terminal["output_payload"]["summary"] == "processed by test builtin worker"
 
 
 def _wait_for_job_terminal(client, api_key: str, job_id: str, *, attempts: int = 24) -> dict:
@@ -280,18 +282,19 @@ def _wait_for_job_terminal(client, api_key: str, job_id: str, *, attempts: int =
 @pytest.mark.parametrize(
     ("agent_id_attr", "runner_attr", "payload", "stub_output"),
     [
+        # Vehicle is dependency_auditor (still curated after the 2026-06-21
+        # cull). The runner is stubbed; this asserts sync and async dispatch
+        # return identical payloads, independent of the agent's real work.
         (
-            "_PYTHON_EXECUTOR_AGENT_ID",
-            "agent_python_executor",
-            {"code": "print(1)"},
+            "_DEPENDENCY_AUDITOR_AGENT_ID",
+            "agent_dependency_auditor",
+            {"manifest": "lodash@4.17.21"},
             {
-                "stdout": "1\n",
-                "stderr": "",
-                "exit_code": 0,
-                "timed_out": False,
-                "execution_time_ms": 4,
-                "explanation": "prints one",
-                "variables_captured": {},
+                "ecosystem": "npm",
+                "total_packages": 1,
+                "packages": [],
+                "parse_warnings": [],
+                "summary": "1 package checked",
             },
         ),
     ],
@@ -329,18 +332,14 @@ def test_builtin_sync_and_async_paths_return_identical_payloads(
 
 
 def test_registry_lists_new_builtin_agents(client):
-    """The 10 curated public agents after the 2026-05-26 platform-pivot cull
-    must show up in /registry/agents; the sunset agents (incl. the agents
-    dropped in that cull) must not surface."""
+    """The 3 curated public agents after the 2026-06-21 frontier-evidence cull
+    must show up in /registry/agents; the sunset agents (incl. the 8 dropped in
+    that cull) must not surface."""
     listed = client.get("/registry/agents", headers=_auth_headers(TEST_MASTER_KEY))
     assert listed.status_code == 200, listed.text
     names = {agent["name"] for agent in listed.json()["agents"]}
     assert {
-        "Python Code Executor",
-        "CVE Lookup Agent",
-        "DB Sandbox",
-        "Browser Agent",
-        "Multi-Language Executor",
+        "Dependency Auditor",
         "Lighthouse Auditor",
         "Accessibility Auditor",
     }.issubset(names)
@@ -357,6 +356,15 @@ def test_registry_lists_new_builtin_agents(client):
         "Secret Scanner",
         "SAST Scanner",
         "Quant Patch Validator",
+    }.isdisjoint(names)
+    # 2026-06-21 frontier-evidence cull — commodity tasks a free harness does
+    # as well or better; sunset, so no longer in the public catalog.
+    assert {
+        "Python Code Executor",
+        "CVE Lookup Agent",
+        "DB Sandbox",
+        "Browser Agent",
+        "Multi-Language Executor",
     }.isdisjoint(names)
 
 
@@ -388,9 +396,11 @@ def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(clien
     assert str(system_row["status"]).lower() == "suspended"
     system_owner = f"user:{system_row['user_id']}"
 
-    # CVE Lookup became a gateway free-tier agent on 2026-05-17 — its spec
-    # price is $0.00. The other builtins in this loop still ship priced.
-    from server.builtin_agents.constants import GATEWAY_FREE_TIER_AGENT_IDS
+    # CVE Lookup and Python Executor were moved to sunset in the 2026-06-21
+    # frontier-evidence cull, but their internal endpoints stay wired so they
+    # resolve via get_agent() (old job IDs / receipts). CVE Lookup keeps its
+    # historical $0.00 gateway price (spec unchanged; only catalog visibility
+    # changed); the other builtins in this loop still ship priced.
     for builtin_id in (
         server._CVELOOKUP_AGENT_ID,
         server._PYTHON_EXECUTOR_AGENT_ID,
@@ -400,7 +410,7 @@ def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(clien
         assert agent is not None
         assert agent["owner_id"] == system_owner
         assert str(agent["endpoint_url"]).startswith("internal://")
-        if builtin_id in GATEWAY_FREE_TIER_AGENT_IDS:
+        if builtin_id == server._CVELOOKUP_AGENT_ID:
             assert float(agent["price_per_call_usd"]) == 0.0
         else:
             assert float(agent["price_per_call_usd"]) > 0
@@ -410,14 +420,17 @@ def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(clien
 
 def test_suspended_internal_builtin_is_reactivated_at_call_gate(client):
     _ = client
-    registry.set_agent_status(server._CVELOOKUP_AGENT_ID, "suspended")
-    builtin = registry.get_agent(server._CVELOOKUP_AGENT_ID, include_unapproved=True)
+    # Vehicle is dependency_auditor — still curated. A sunset agent (e.g.
+    # cve_lookup post-2026-06-21) would short-circuit to 410 before the
+    # suspended→reactivate path could run.
+    registry.set_agent_status(server._DEPENDENCY_AUDITOR_AGENT_ID, "suspended")
+    builtin = registry.get_agent(server._DEPENDENCY_AUDITOR_AGENT_ID, include_unapproved=True)
     assert builtin is not None
     assert builtin["status"] == "suspended"
 
-    server._assert_agent_callable(server._CVELOOKUP_AGENT_ID, builtin)
+    server._assert_agent_callable(server._DEPENDENCY_AUDITOR_AGENT_ID, builtin)
 
-    refreshed = registry.get_agent(server._CVELOOKUP_AGENT_ID, include_unapproved=True)
+    refreshed = registry.get_agent(server._DEPENDENCY_AUDITOR_AGENT_ID, include_unapproved=True)
     assert refreshed is not None
     assert refreshed["status"] == "active"
 
@@ -426,8 +439,10 @@ def test_registry_call_routes_internal_builtin_without_http_and_records_job(clie
     caller = _register_user()
     _fund_user_wallet(caller, 100)
 
+    # Vehicle is dependency_auditor (still curated, $0.01/call) after the
+    # 2026-06-21 cull sunset cve_lookup. The runner is stubbed.
     monkeypatch.setattr(
-        server.agent_cve_lookup,
+        server.agent_dependency_auditor,
         "run",
         lambda payload: {"results": [], "total_vulnerable": 0, "total_packages_checked": 1, "summary": "internal::ok", "source": "nvd"},
     )
@@ -438,16 +453,16 @@ def test_registry_call_routes_internal_builtin_without_http_and_records_job(clie
     monkeypatch.setattr(server.http, "post", _fail_post)
 
     call = client.post(
-        f"/registry/agents/{server._CVELOOKUP_AGENT_ID}/call",
+        f"/registry/agents/{server._DEPENDENCY_AUDITOR_AGENT_ID}/call",
         headers=_auth_headers(caller["raw_api_key"]),
-        json={"packages": ["lodash@4.17.21"]},
+        json={"manifest": "lodash@4.17.21"},
     )
     assert call.status_code == 200, call.text
     assert call.json()["output"]["summary"] == "internal::ok"
 
     caller_owner = f"user:{caller['user_id']}"
     jobs_for_caller = jobs.list_jobs_for_owner(caller_owner, limit=20)
-    synced = [item for item in jobs_for_caller if item["agent_id"] == server._CVELOOKUP_AGENT_ID]
+    synced = [item for item in jobs_for_caller if item["agent_id"] == server._DEPENDENCY_AUDITOR_AGENT_ID]
     assert synced
     assert synced[0]["status"] == "complete"
     assert synced[0]["output_payload"]["summary"] == "internal::ok"
@@ -455,13 +470,12 @@ def test_registry_call_routes_internal_builtin_without_http_and_records_job(clie
     assert settled["settled_at"] is not None
 
     caller_wallet = payments.get_or_create_wallet(caller_owner)
-    agent_wallet = payments.get_or_create_wallet(f"agent:{server._CVELOOKUP_AGENT_ID}")
-    # CVE Lookup became a gateway free-tier agent on 2026-05-17 — its
-    # spec price is $0.00, so neither wallet moves. The job + settlement
-    # rows above are what this test cares about; pre-2026-05-17 it also
-    # asserted balance_cents < 100 / >= 1 when the call charged $0.07.
-    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 100
-    assert payments.get_wallet(agent_wallet["wallet_id"])["balance_cents"] == 0
+    agent_wallet = payments.get_or_create_wallet(f"agent:{server._DEPENDENCY_AUDITOR_AGENT_ID}")
+    # Dependency Auditor charges $0.01: the caller is debited 1¢ and the
+    # agent receives the payout (platform's 10% of 1¢ floors to 0¢). The
+    # job + settlement rows above are the primary subject of this test.
+    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 99
+    assert payments.get_wallet(agent_wallet["wallet_id"])["balance_cents"] == 1
 
 
 def test_registry_call_normalizes_protocol_envelope_for_builtin_responses(client, monkeypatch):
@@ -484,12 +498,13 @@ def test_registry_call_normalizes_protocol_envelope_for_builtin_responses(client
             ],
         }
 
-    monkeypatch.setattr(server.agent_python_executor, "run", _run)
+    # Vehicle is dependency_auditor (still curated after the 2026-06-21 cull).
+    monkeypatch.setattr(server.agent_dependency_auditor, "run", _run)
     response = client.post(
-        f"/registry/agents/{server._PYTHON_EXECUTOR_AGENT_ID}/call",
+        f"/registry/agents/{server._DEPENDENCY_AUDITOR_AGENT_ID}/call",
         headers=_auth_headers(caller["raw_api_key"]),
         json={
-            "code": "print('test')",
+            "manifest": "lodash@4.17.21",
             "protocol": {
                 "input_artifacts": [
                     {
@@ -605,18 +620,19 @@ def test_mcp_tools_defaults_input_schema_when_null(client, monkeypatch):
 def test_mcp_invoke_delegates_to_registry_call_path(client, monkeypatch):
     caller = _register_user()
     _fund_user_wallet(caller, 100)
+    # Vehicle is dependency_auditor (still curated after the 2026-06-21 cull);
+    # its MCP tool name is "dependency_auditor". The runner is stubbed.
     monkeypatch.setattr(
-        server.agent_python_executor,
+        server.agent_dependency_auditor,
         "run",
-        lambda payload: {"stdout": "mcp::ok\n", "stderr": "", "exit_code": 0, "timed_out": False,
-                         "execution_time_ms": 5, "explanation": "mcp::ok", "variables_captured": {}},
+        lambda payload: {"summary": "mcp::ok", "explanation": "mcp::ok"},
     )
 
     response = client.post(
         "/mcp/invoke",
         json={
-            "tool_name": "python_code_executor",
-            "input": {"code": "print('mcp::ok')"},
+            "tool_name": "dependency_auditor",
+            "input": {"manifest": "lodash@4.17.21"},
             "api_key": caller["raw_api_key"],
         },
     )
@@ -628,36 +644,36 @@ def test_mcp_invoke_delegates_to_registry_call_path(client, monkeypatch):
     assert body["structuredContent"]["explanation"] == "mcp::ok"
 
     caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
-    # python_executor is a deterministic sandbox, so it stays at the 1¢ floor.
+    # Dependency Auditor charges $0.01, so the caller drops to the 99¢ floor.
     assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 99
 
 
-def test_python_executor_builtin_runs_code_and_returns_output(client, monkeypatch):
+def test_sunset_python_executor_call_returns_410_gone(client, monkeypatch):
+    """python_executor was sunset in the 2026-06-21 frontier-evidence cull —
+    a free frontier agent runs code as well or better, so it left the public
+    catalog. Its endpoint stays wired for receipt/job-ID resolution, but a new
+    call to it must return a clean 410 ``agent.sunset`` rather than executing.
+
+    The runner stub asserts the dispatch never even reaches the agent: the
+    410 short-circuits at the call gate.
+    """
     caller = _register_user()
     _fund_user_wallet(caller, 200)
-    monkeypatch.setattr(
-        server.agent_python_executor,
-        "run",
-        lambda payload: {
-            "stdout": "1024\n",
-            "stderr": "",
-            "exit_code": 0,
-            "timed_out": False,
-            "execution_time_ms": 12,
-            "explanation": "2**10 equals 1024.",
-            "variables_captured": {},
-        },
-    )
+
+    def _must_not_run(payload):
+        raise AssertionError("sunset agent must not execute — the call gate should 410")
+
+    monkeypatch.setattr(server.agent_python_executor, "run", _must_not_run)
     response = client.post(
         f"/registry/agents/{server._PYTHON_EXECUTOR_AGENT_ID}/call",
         headers=_auth_headers(caller["raw_api_key"]),
         json={"code": "print(2**10)", "explain": True},
     )
-    assert response.status_code == 200, response.text
-    body = response.json()["output"]
-    assert body["stdout"] == "1024\n"
-    assert body["exit_code"] == 0
-    assert "1024" in body["explanation"]
+    assert response.status_code == 410, response.text
+    assert response.json()["error"] == "agent.sunset"
+    # The caller is not charged for a call that never ran.
+    caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
+    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 200
 
 
 def test_mcp_manifest_returns_server_manifest_shape(client):

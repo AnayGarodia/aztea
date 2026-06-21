@@ -16,9 +16,11 @@ from tests.integration.support import *  # noqa: F403
 
 # Built-in recipes live in ``core/recipes.py``. The 2026-05-26 platform-pivot
 # cull dropped secret-scan-and-audit + security-audit-sealed (both fanned
-# out to the now-sunset secret_scanner agent). Pin the source of truth
-# here so this test fails loudly the day someone adds or removes a built-in.
-_EXPECTED_BUILTIN_SLUGS = {"audit-deps", "domain-health"}
+# out to the now-sunset secret_scanner agent). The 2026-06-21 frontier-evidence
+# cull dropped domain-health too (it fanned to the now-sunset dns_inspector).
+# Pin the source of truth here so this test fails loudly the day someone adds
+# or removes a built-in.
+_EXPECTED_BUILTIN_SLUGS = {"audit-deps"}
 
 
 def _fetch_recipes(client, raw_api_key: str):

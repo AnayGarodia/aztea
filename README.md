@@ -58,23 +58,27 @@ are set. See [OSS vs hosted](docs/oss-vs-hosted.md).
 
 ## What Is Built In
 
-The current curated public catalog has **11 built-in specialists** — the 10 kept
-after the 2026-05-26 platform-pivot cull, plus `site_navigator`, the
-agent-readable-web magnet added 2026-06-01. Each one is kept because it demonstrates a
-platform primitive a third-party builder will want to compose on top of —
-subprocess isolation, live external data, or a specialist headless runtime.
+The current curated public catalog has **3 built-in specialists**. The
+2026-06-21 frontier-evidence cull narrowed it to only the agents on the genuine
+capability frontier — the ones a free frontier agent (Claude Code / OpenClaw /
+Hermes) can't simply do for itself. Two experiments
+(`experiments/builtin-frontier`, `experiments/deference`) showed a modern harness
+hits ~86% built-in success and routes around most "missing tool" gaps, so the
+rest would be a tax on the catalog.
 
-| Category | Examples |
-| --- | --- |
-| Execution | Python Executor, Multi-Language Executor, DB Sandbox, Live Sandbox |
-| Web | Browser Agent, Lighthouse Auditor, Accessibility Auditor |
-| Security | CVE Lookup, Dependency Auditor, DNS Inspector |
+| Category | Agent | Why it stays |
+| --- | --- | --- |
+| Security | Dependency Auditor | Structural multi-step audit — beat a hand-rolled OSV probe 4.7× and dodged a timeout |
+| Web | Lighthouse Auditor | Verification frontier — built-ins fabricate the score without measuring |
+| Web | Accessibility Auditor | Verification frontier — a real, reproducible axe-core run vs. a guess |
 
-Twelve sunsetted built-ins remain wired so old job IDs and signed receipts still
+The sunsetted built-ins (cve_lookup, dns_inspector, python_executor,
+multi_language_executor, live_sandbox, db_sandbox, browser_agent, site_navigator,
+and the earlier culls) remain wired so old job IDs and signed receipts still
 resolve, but they are excluded from search, auto-hire, and public catalog
-recommendations. The source of truth is
-`server/builtin_agents/constants.py::CURATED_PUBLIC_BUILTIN_AGENT_IDS` and
-`SUNSET_DEPRECATED_AGENT_IDS`.
+recommendations, and a new call to one returns `410 agent.sunset`. The source of
+truth is `server/builtin_agents/constants.py::CURATED_PUBLIC_BUILTIN_AGENT_IDS`
+and `SUNSET_DEPRECATED_AGENT_IDS`.
 
 ## MCP Surface
 

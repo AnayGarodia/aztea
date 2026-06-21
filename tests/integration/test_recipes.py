@@ -14,10 +14,11 @@ def test_recipes_list_and_run_audit_deps(client, monkeypatch):
 
     2026-05-26 platform-pivot cull: the previous multi-step coverage
     (``secret-scan-and-audit``) was removed because the secret_scanner
-    agent it fanned to is now sunset. The current curated catalog is
-    ``audit-deps`` and ``domain-health``; both are single-step. This test
-    keeps the recipes execution contract (list → start → poll → complete
-    → step_results populated) on the single recipe shape we still ship.
+    agent it fanned to is now sunset. 2026-06-21 frontier-evidence cull:
+    ``domain-health`` was removed too (it fanned to the now-sunset
+    dns_inspector). The current curated catalog is the single ``audit-deps``
+    recipe. This test keeps the recipes execution contract (list → start →
+    poll → complete → step_results populated) on the recipe shape we still ship.
     """
     caller = _register_user()
     _fund_user_wallet(caller, 1000)
@@ -26,7 +27,8 @@ def test_recipes_list_and_run_audit_deps(client, monkeypatch):
     assert listed.status_code == 200, listed.text
     payload = listed.json()
     recipe_ids = {item["pipeline_id"] for item in payload["recipes"]}
-    assert {"audit-deps", "domain-health"} <= recipe_ids
+    assert "audit-deps" in recipe_ids
+    assert "domain-health" not in recipe_ids
     audit_recipe = next(
         item
         for item in payload["recipes"]

@@ -21,38 +21,28 @@ from __future__ import annotations
 
 from server.builtin_agents.constants import (
     ACCESSIBILITY_AUDITOR_AGENT_ID,
-    BROWSER_AGENT_ID,
     CURATED_PUBLIC_BUILTIN_AGENT_IDS,
-    CVELOOKUP_AGENT_ID,
-    DB_SANDBOX_AGENT_ID,
     DEPENDENCY_AUDITOR_AGENT_ID,
-    DNS_INSPECTOR_AGENT_ID,
     LIGHTHOUSE_AUDITOR_AGENT_ID,
-    LIVE_SANDBOX_AGENT_ID,
-    MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
-    PYTHON_EXECUTOR_AGENT_ID,
-    SITE_NAVIGATOR_AGENT_ID,
     SUNSET_DEPRECATED_AGENT_IDS,
 )
 
-# WHY: post-2026-05-26 platform-pivot cull (10) + 2026-06-01 site_navigator, the
-# agent-readable-web magnet, added to the curated set (→11). See the comment block
-# above SUNSET_DEPRECATED_AGENT_IDS in constants.py for the per-agent reasoning.
+# WHY: the 2026-06-21 frontier-evidence cull narrowed the curated set to the 3
+# agents on the genuine capability frontier — dependency_auditor (structural
+# multi-step audit win) and lighthouse_auditor + accessibility_auditor (the
+# verification frontier; built-ins fabricate the measurement). The other 8
+# (cve_lookup, dns_inspector, python_executor, multi_language_executor,
+# live_sandbox, db_sandbox, browser_agent, site_navigator) were sunset because
+# experiments/builtin-frontier and experiments/deference showed a free frontier
+# agent does them as well or better. See the comment block above
+# SUNSET_DEPRECATED_AGENT_IDS in constants.py for the per-agent reasoning.
 _CURATED_EXPECTED = frozenset({
-    CVELOOKUP_AGENT_ID,
     DEPENDENCY_AUDITOR_AGENT_ID,
-    DNS_INSPECTOR_AGENT_ID,
-    PYTHON_EXECUTOR_AGENT_ID,
-    MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
-    LIVE_SANDBOX_AGENT_ID,
-    DB_SANDBOX_AGENT_ID,
-    BROWSER_AGENT_ID,
     LIGHTHOUSE_AUDITOR_AGENT_ID,
     ACCESSIBILITY_AUDITOR_AGENT_ID,
-    SITE_NAVIGATOR_AGENT_ID,
 })
 
-_CURATED_EXPECTED_COUNT = 11
+_CURATED_EXPECTED_COUNT = 3
 
 
 def test_curated_catalog_count_matches_snapshot() -> None:
