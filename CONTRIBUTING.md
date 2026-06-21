@@ -49,7 +49,7 @@ These will be rejected in review even if they "pass":
 - **All outbound URLs go through `core/url_security.py`.** SSRF protection is non-negotiable.
 - **Never hardcode `aztea.ai`.** All hosted-service calls go through `core/hosted_client.py`. The OSS build must run fully self-contained when `AZTEA_HOSTED_API_URL` is unset.
 
-Full list in [`CLAUDE.md` → "Critical invariants"](CLAUDE.md#critical-invariants--never-violate-these).
+Full list in [`.agents/reference/invariants.md`](.agents/reference/invariants.md) (the resolver index `CLAUDE.md` points here).
 
 ---
 
@@ -76,7 +76,7 @@ Use the PR template. CI will run the full suite + line-budget check. Reviews tar
 
 ## Adding a new specialist agent
 
-See [`CLAUDE.md` → "Adding a new built-in agent"](CLAUDE.md#adding-a-new-built-in-agent). Short version:
+See [`.agents/reference/contributing.md` → "Adding a new built-in agent"](.agents/reference/contributing.md). Short version:
 
 1. `agents/{slug}.py` with a `run(payload) -> dict` function and module docstring.
 2. Mint UUIDv5 in `server/builtin_agents/constants.py`.

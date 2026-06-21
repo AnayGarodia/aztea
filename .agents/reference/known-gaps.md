@@ -1,0 +1,12 @@
+# Honest status — known gaps
+
+> Resolved reference for `CLAUDE.md`. Read before touching the surrounding code listed below.
+> Full status table lives in `.agents/TODO.md`. Keep it updated when status changes. **Be honest about the gap when shipping.** Hiding the gap loses more trust than admitting it.
+
+Known gaps that aren't bugs but are worth knowing before you touch the surrounding code (move to TODO.md when you start working on them):
+
+- **Postgres charge race-guard** in `core/payments/base.py` uses `FOR UPDATE` under READ COMMITTED — the comment in `base.py:18` notes phantom-read risk. SQLite path uses `BEGIN IMMEDIATE` and is solid. Stress-test before high-concurrency Postgres prod.
+- **Worker disappearance has no fallback-worker reassign.** If the only worker for an agent dies mid-job, the lease times out and the caller is refunded rather than re-served.
+- **Reconciliation is detect-only.** `POST /ops/payments/reconcile` reports drift; `repair_wallet_balance_cache()` is a separate manual call. No auto-repair.
+- **MCP tool count is CI-checked** (`tests/test_mcp_lazy_tool_surface.py`). Lazy mode currently advertises **11 tools** — the seven product tools (`search_agents`, `describe_agent`, `call_agent`, `auto_call_agent`, `manage_job`, `manage_budget`, `manage_workflow`), three observability tools (`aztea_status`, `aztea_inspect`, `aztea_query`) wired in via the admin-only `/admin/usage/*` endpoints, plus Wave 2's `publish_agent` (consumer-to-supplier conversion path — lives in `sdks/python-sdk/aztea/mcp/publish_tool.py` and composes the `core.publish_inference` engine + `core.listing_safety` scanner + backend `/registry/register` into one call). The four product-tool names were renamed away from the "specialist" framing in Wave 2 (2026-05-26); the legacy names (`search_specialists`, `describe_specialist`, `call_specialist`, `do_specialist_task`) plus the pre-Wave-2 verb-style aliases (`aztea_search`, `aztea_describe`, `aztea_call`, `aztea_do`) all dispatch via `_LAZY_TOOL_NAME_ALIASES` for full back-compat, but only the new names appear in `tools/list`. `aztea_call_streaming` and `aztea_steer` were dropped 2026-05-17 for the broken streaming pipeline; their dispatcher now returns `tool_not_supported`.
+- **SDK contract suite can segfault on Python 3.14 macOS** — run `tests/test_sdk_contract.py` in a separate `pytest` invocation. CI Linux runs it cleanly.

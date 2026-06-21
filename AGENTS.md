@@ -1,6 +1,6 @@
 # AGENTS.md — Universal AI Brief for Aztea
 
-Read this file first. Then read `.agents/` files relevant to your task. Full dev rules are in `CLAUDE.md` — read it before touching money, migrations, or auth.
+Read this file first. Then read `.agents/` files relevant to your task. `CLAUDE.md` is the resolver index — a decision tree of pointers into `.agents/reference/*`; open it and follow the pointer for whatever you're about to touch (money, migrations, auth, etc.).
 
 ---
 
@@ -76,15 +76,15 @@ migrations/                  SQL migrations — never delete, always add new
 
 | You're about to… | Read this first |
 |---|---|
-| Touch any money path | `CLAUDE.md` → "Critical invariants — money" + `core/payments/base.py` docstring |
-| Add a new built-in agent | `CLAUDE.md` → "Adding a new built-in agent" checklist |
-| List a third-party agent (no server change) | `aztea publish <path>` — see `CLAUDE.md` → "Adding a third-party agent" |
+| Touch any money path | `.agents/reference/invariants.md` → Money + `core/payments/base.py` docstring |
+| Add a new built-in agent | `.agents/reference/contributing.md` → "Adding a new built-in agent" checklist |
+| List a third-party agent (no server change) | `aztea publish <path>` — see `.agents/reference/contributing.md` → "Adding a third-party agent" |
 | Build a frontend component or page | `.agents/DESIGN.md` — product feeling, design system, copy voice |
 | Pick what to work on | `.agents/TODO.md` |
 | Understand the product direction | `.agents/VISION.md` |
 | Check what's been shipped | `.agents/TODO.md` or `.agents/SESSIONS.md` |
-| Change a migration | `CLAUDE.md` → migrations are idempotent, never deleted |
-| Change an auth or MCP route | `CLAUDE.md` → auth & MCP surface invariants |
+| Change a migration | `.agents/reference/invariants.md` → Database (idempotent, never deleted) |
+| Change an auth or MCP route | `.agents/reference/invariants.md` → Auth & security / MCP surface |
 
 ## Available tools — quick reference
 
@@ -110,11 +110,11 @@ Design and copy direction live in `.agents/DESIGN.md`.
 
 ## Working rules for AI sessions
 
-1. Read `CLAUDE.md` end-to-end before any non-trivial change.
+1. Open `CLAUDE.md` (the resolver index) before any non-trivial change and read the `.agents/reference/*` doc it points to for the area you're touching.
 2. Match existing style: 4-space Python, type hints, ES modules, PascalCase components, camelCase helpers, kebab-case CSS classes.
 3. Every module with business logic needs an OWNS / NOT OWNS / INVARIANTS / DECISIONS / KNOWN DEBT block at the top. No narrative prose.
 4. Test the full failure path. Refunds must fire on agent failures. If you change a money path without a test, the PR is incomplete.
-5. **Before ending your session:** move completed items in `.agents/TODO.md` and update the status table in `CLAUDE.md` if something shipped.
+5. **Before ending your session:** move completed items in `.agents/TODO.md` (the status table lives there) and update `.agents/reference/known-gaps.md` if a known gap changed.
 
 Don't ship features that tie to neither the local nor the global goal. Don't add third-party deps without strong reason. Don't add LLM-only wrapper agents — the 2026-05-15 cleanup and the 2026-05-20 catalog cull removed all of those; `SUNSET_DEPRECATED_AGENT_IDS` now holds 12 sunsetted agents (still callable for old job IDs / signed receipts, but excluded from the curated public catalog).
 
@@ -130,4 +130,4 @@ npm --prefix frontend run build   # frontend prod build
 python scripts/check_file_line_budget.py   # enforce <1000-line rule
 ```
 
-Current test status: see `CLAUDE.md` → "Dev commands" for the canonical pytest invocation and the most recent counted run. Don't claim a specific count here — it drifts; the numbers in `CLAUDE.md` are dated and updated when the suite is re-run.
+Current test status: see `.agents/reference/contributing.md` → "Dev commands" for the canonical pytest invocation and the most recent counted run. Don't claim a specific count here — it drifts; the numbers in `CLAUDE.md` are dated and updated when the suite is re-run.
