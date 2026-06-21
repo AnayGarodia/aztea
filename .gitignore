@@ -70,13 +70,16 @@ scripts/release_publish_local.sh
 .qwen/
 # /cso security reports — narrate the attack surface in plain text; keep local.
 .gstack/
-# .agents/ is user-local, EXCEPT TODO.md — that file is the team-tracked source
-# of truth for launch blockers and is referenced from every agent-onboarding
-# doc (CLAUDE.md, AGENTS.md, CODEX.md, GEMINI.md). To make the negation work,
-# we cannot wholesale-ignore the directory; instead ignore its contents and
-# carve out TODO.md.
+# .agents/ is user-local, EXCEPT TODO.md and reference/ — those are team-tracked.
+# TODO.md is the source of truth for launch blockers; reference/ holds the deep
+# contributor docs that CLAUDE.md (the resolver index) points into. Both are
+# referenced from every agent-onboarding doc (CLAUDE.md, AGENTS.md, CODEX.md,
+# GEMINI.md). To make the negation work, we cannot wholesale-ignore the
+# directory; instead ignore its contents and carve out the tracked paths.
 .agents/*
 !.agents/TODO.md
+!.agents/reference/
+!.agents/reference/*.md
 .superpowers/
 skills/
 skills-lock.json
