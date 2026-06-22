@@ -38,6 +38,7 @@ const IntegrationsPage = lazy(() => import('./pages/IntegrationsPage'))
 const BuilderProfilePage = lazy(() => import('./pages/BuilderProfile'))
 const BuildPage = lazy(() => import('./pages/BuildPage'))
 const WebActorPlaygroundPage = lazy(() => import('./pages/WebActorPlaygroundPage'))
+const OttoPage = lazy(() => import('./pages/OttoPage'))
 
 function PublicMarketApp({ children }) {
   const { apiKey, booting } = useAuth()
@@ -173,6 +174,7 @@ export default function App() {
                 <Route path="/pricing" element={<LandingPage />} />
                 <Route path="/terms"   element={<TermsPage />} />
                 <Route path="/privacy" element={<PrivacyPage />} />
+                <Route path="/otto"    element={<OttoPage />} />
                 <Route path="/docs" element={<DocsGate />} />
                 <Route path="/docs/:docSlug" element={<DocsGate />} />
                 <Route path="/marketplace" element={<PublicMarketApp><AgentsPage /></PublicMarketApp>} />
