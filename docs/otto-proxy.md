@@ -1,51 +1,46 @@
 # Otto proxy — `POST /otto/chat`
 
-A thin authenticated passthrough to Anthropic's Messages API for the **Otto**
-desktop app (`server/application_parts/part_015.py`).
+A **self-contained** authenticated passthrough to Anthropic's Messages API for
+the **Otto** desktop app (`server/application_parts/part_015.py`). It deliberately
+does **not** use aztea's user/wallet/payments framework — it's a standalone
+shortcut so no Anthropic key ships in the downloadable app.
 
-The app authenticates with a shared **"Otto app"** API key
-(`Authorization: Bearer az_...`). The endpoint forwards the request to Anthropic
-using the **server-side `ANTHROPIC_API_KEY`**, so no Anthropic key ships inside
-the downloadable app. The standard `/v1/messages` body (tools included) is passed
-through unchanged; the response is returned verbatim.
+- **Auth:** the app sends `Authorization: Bearer <T>`; the endpoint checks `T`
+  against the `OTTO_APP_TOKEN` env var (constant-time). The token is baked into
+  the app and is therefore extractable — that's expected; the **budget** below is
+  the real protection, not the token's secrecy.
+- **Upstream:** forwards the `/v1/messages` body unchanged to Anthropic using the
+  **server-side `ANTHROPIC_API_KEY`**, and returns the response verbatim.
+- **Budget:** a single **shared spend pool**, tracked in a tiny SQLite counter and
+  priced at real Anthropic rates. Each call reserves an upper-bound estimate, then
+  reconciles to actual token cost, so the cap maps to real dollars. When the pool
+  is exhausted → **HTTP 402** for every caller until it's reset/raised.
 
-## Spend cap (metered on the wallet balance)
+## Server config (env vars)
 
-Spend is metered against the Otto service wallet's **balance**, reconciled to the
-**actual** token cost of each call — so the balance is the true running spend, and
-**$200 of balance = $200 of real spend**. When the balance can't cover the next
-call, `pre_call_charge` raises `InsufficientBalanceError` → **HTTP 402** for every
-caller sharing the key ("at capacity"). The cap is a **single shared pool** — all
-users draw from the same balance.
+| Var | Purpose | Default |
+|---|---|---|
+| `OTTO_APP_TOKEN` | shared bearer secret — **must equal the app's baked-in token** | (required) |
+| `ANTHROPIC_API_KEY` | the real Anthropic key (already used by aztea) | (required) |
+| `OTTO_BUDGET_CAP_CENTS` | spend cap in cents | `20000` ($200) |
+| `OTTO_BUDGET_DB` | sqlite path for the counter | `~/.otto-proxy-budget.sqlite3` |
 
-> We meter on balance, not the per-key `max_spend_cents`, because
-> `post_call_refund` does not carry `charged_by_key_id`, so a refund would not net
-> against the per-key cap (it counts gross charges). Balance nets correctly.
+**No provisioning, no DB migration, no aztea account needed.** Set
+`OTTO_APP_TOKEN` (same value the app ships with) and `ANTHROPIC_API_KEY`, deploy,
+done.
 
-## Prerequisites (server)
+## Operating the cap
 
-- `ANTHROPIC_API_KEY` must be set in the production environment (the endpoint
-  reads it via `os.environ`). aztea already uses Anthropic, so this is likely
-  already present — confirm it's set for the API service.
-
-## One-time provisioning (the $200 "Otto app" key)
-
-Create, via your existing admin/signup path (or a one-off script using
-`core.auth` + `core.payments`):
-
-1. A service **user** (e.g. `otto-app`).
-2. An **API key** for that user with scope **`caller`** and **no** per-key
-   `max_spend_cents` (leave it NULL — the wallet balance is the cap).
-3. **Credit that user's wallet to `20000` cents ($200)** via
-   `payments.get_or_create_wallet(owner_id)` + your credit/top-up function. This
-   balance is the cap; **to raise the cap, top up the balance.**
-4. Hand the resulting `az_...` key to the Otto build as `OTTO_APP_TOKEN` (it gets
-   baked into `AppToken.swift` at build time and never committed).
-
-When the $200 is spent, calls return 402 until the wallet is topped up.
+- **Raise the cap:** set `OTTO_BUDGET_CAP_CENTS` (e.g. `50000` = $500) and restart.
+- **Reset / top up the pool:** `sqlite3 ~/.otto-proxy-budget.sqlite3 \
+  'UPDATE otto_budget SET spent_cents = 0;'`
+- **Check current spend:** `sqlite3 ~/.otto-proxy-budget.sqlite3 \
+  'SELECT spent_cents FROM otto_budget;'`
 
 ## Notes
 
 - Otto currently requests `claude-opus-4-8`. Switching the app to
   `claude-sonnet-4-6` roughly halves cost (same proxy, no server change).
 - Rate limit: `120/minute` per client (slowapi). Tune in `part_015.py`.
+- The budget is a flat shared total (no daily reset). Add a periodic
+  `UPDATE … SET spent_cents = 0` (cron) if you want it to refill.
