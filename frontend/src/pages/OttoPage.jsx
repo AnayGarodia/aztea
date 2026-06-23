@@ -4,7 +4,7 @@ import Button from '../ui/Button'
 import { usePageMeta } from '../seo/usePageMeta'
 import './OttoPage.css'
 
-const VERSION = '0.1.0'
+const VERSION = '0.2.0'
 const DMG_HREF = `/otto/Otto-${VERSION}.dmg`
 
 const FEATURES = [
