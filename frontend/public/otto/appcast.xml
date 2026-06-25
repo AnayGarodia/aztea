@@ -3,14 +3,14 @@
     <channel>
         <title>Otto</title>
         <item>
-            <title>0.3.0</title>
-            <pubDate>Wed, 24 Jun 2026 23:24:46 -0700</pubDate>
+            <title>0.4.0</title>
+            <pubDate>Thu, 25 Jun 2026 01:22:24 -0700</pubDate>
             <link>https://aztea.ai/otto</link>
-            <sparkle:version>1782368646</sparkle:version>
-            <sparkle:shortVersionString>0.3.0</sparkle:shortVersionString>
+            <sparkle:version>1782375695</sparkle:version>
+            <sparkle:shortVersionString>0.4.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://aztea.ai/otto/Otto-0.3.0.dmg" length="1954031" type="application/octet-stream" sparkle:edSignature="wXrWFcU3iFBCtlsOGv39B523Xo1GiV0xyBUlmOvp172GNg8+5s0SUWbRq7UOlO0SuBYhwYCC8TNV6pJHGHRmCA=="/>
+            <enclosure url="https://aztea.ai/otto/Otto-0.4.0.dmg" length="1957899" type="application/octet-stream" sparkle:edSignature="p88Enila1qzszXdbcB2m/ZqBrR9TZEig/3eqbWLh8Fh/hawBOiffHL7rSJqo5KGfwfDCemaBTDmwweBJIL7GDw=="/>
         </item>
     </channel>
 </rss>
