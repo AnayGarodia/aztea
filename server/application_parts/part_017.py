@@ -168,3 +168,13 @@ def otto_composio(request: Request, path: str, body: dict | None = Body(default=
             status_code=upstream.status_code,
             content=error_codes.make_error("upstream.error", (upstream.text or "")[:300] or "Upstream error."),
         )
+
+
+# The SPA catch-all (GET /{full_path:path}, registered in an earlier part) is matched before
+# this route — FastAPI/Starlette evaluate routes in registration order — so a GET to
+# /otto/composio/* would otherwise return index.html instead of reaching this handler. Move
+# this route to the front so it wins. It only matches /otto/composio/, so it shadows nothing else.
+for _i, _r in enumerate(list(app.router.routes)):  # noqa: F821
+    if getattr(_r, "path", None) == "/otto/composio/{path:path}":
+        app.router.routes.insert(0, app.router.routes.pop(_i))  # noqa: F821
+        break
