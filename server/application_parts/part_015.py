@@ -142,7 +142,12 @@ def otto_chat(request: Request, body: dict = Body(...)) -> Response:
             ),
         )
 
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    # Dedicated key for the Otto proxy so the $150 Otto budget stays isolated from the
+    # main app's own Anthropic usage (core/llm/providers/anthropic_provider.py also reads
+    # ANTHROPIC_API_KEY). Falls back to ANTHROPIC_API_KEY for back-compat.
+    anthropic_key = (
+        os.environ.get("OTTO_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY", "")
+    ).strip()
     if not anthropic_key:
         raise HTTPException(
             status_code=503,
