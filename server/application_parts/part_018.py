@@ -59,6 +59,10 @@ def _otto_resp_budget_cap_cents() -> float:
 
 def _otto_resp_budget_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(_otto_resp_budget_db(), timeout=10)
+    # WAL + a short busy_timeout: writes are fast and a contended lock waits at most 2s instead
+    # of holding a threadpool worker for 10s (see the composio proxy for the full rationale).
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=2000")
     conn.execute(
         "CREATE TABLE IF NOT EXISTS otto_responses_budget ("
         "  id INTEGER PRIMARY KEY CHECK(id = 1),"

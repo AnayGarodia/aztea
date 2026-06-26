@@ -58,6 +58,11 @@ def _otto_composio_daily_cap() -> int:
 def _otto_composio_db() -> sqlite3.Connection:
     path = os.environ.get("OTTO_BUDGET_DB") or os.path.expanduser("~/.otto-proxy-budget.sqlite3")
     conn = sqlite3.connect(path, timeout=10)
+    # WAL = writers don't block readers and commits are fast; busy_timeout caps a lock wait at
+    # 2s so a sync (threadpooled) handler can never hold a worker thread for the full 10s on
+    # contention — that pile-up is what starved the pool and hung every /otto/* route.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=2000")
     conn.execute(
         "CREATE TABLE IF NOT EXISTS otto_composio_calls ("
         "  day TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0)"

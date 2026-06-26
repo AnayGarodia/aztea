@@ -81,18 +81,18 @@ export default function OttoPage() {
                 <strong>Applications</strong> folder.
               </li>
               <li>
-                Open <strong>Otto</strong> from Applications. macOS shows{' '}
-                <em>“Apple could not verify Otto is free of malware.”</em> — click <strong>Done</strong>.
-              </li>
-              <li>
-                Open <strong>System&nbsp;Settings → Privacy&nbsp;&amp;&nbsp;Security</strong>, scroll to
-                the message about Otto, and click <strong>Open&nbsp;Anyway</strong>. Confirm with
-                Touch&nbsp;ID or your password.
+                In <strong>Applications</strong>, <strong>right-click&nbsp;Otto</strong> (or
+                Control-click) and choose <strong>Open</strong>, then click <strong>Open</strong> in
+                the dialog. Opening it this way gives you the <strong>Open</strong> button — a plain
+                double-click only offers <em>Move&nbsp;to&nbsp;Bin</em>. You do this once; after that
+                Otto opens normally.
               </li>
             </ol>
             <p className="otto__muted otto__alt">
-              Comfortable in the terminal? Run{' '}
-              <code>xattr -dr com.apple.quarantine /Applications/Otto.app</code>, then open Otto normally.
+              Didn’t see an <strong>Open</strong> button? Open{' '}
+              <strong>System&nbsp;Settings → Privacy&nbsp;&amp;&nbsp;Security</strong>, scroll to the
+              message about Otto, and click <strong>Open&nbsp;Anyway</strong>. Or, in the terminal, run{' '}
+              <code>xattr -dr com.apple.quarantine /Applications/Otto.app</code> and open Otto normally.
             </p>
           </section>
 

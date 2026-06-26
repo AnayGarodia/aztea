@@ -85,6 +85,10 @@ def _otto_rt_max_concurrent() -> int:
 
 def _otto_rt_budget_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(_otto_rt_budget_db(), timeout=10)
+    # WAL + short busy_timeout, matching the composio/responses budget DBs: keep lock waits brief
+    # so the realtime meter's asyncio.to_thread calls can't pile up under contention.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=2000")
     conn.execute(
         "CREATE TABLE IF NOT EXISTS otto_rt_budget ("
         "  id INTEGER PRIMARY KEY CHECK(id = 1),"
