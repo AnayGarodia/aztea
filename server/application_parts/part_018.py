@@ -18,16 +18,27 @@
 #             upper-bound estimate, then reconciles to the response's actual token
 #             usage. Exhausted → HTTP 402 for everyone until reset/raised.
 #
+# Two upstream paths, selected by OTTO_USE_LITELLM:
+#   • LiteLLM gateway (OTTO_USE_LITELLM=1, preferred): forward the Responses body to a
+#     local LiteLLM proxy (/v1/responses). LiteLLM holds the Azure key, provides provider
+#     routing/fallback + observability, and enforces the $150 cap via the virtual key's
+#     max_budget. aztea only validates the app token and maps LiteLLM's budget rejection
+#     back to the 402 at-capacity contract. The SQLite reserve below is bypassed here.
+#   • Direct Azure (flag off, legacy/rollback): the original passthrough + SQLite cap.
+#
 # Server env:
 #   OTTO_APP_TOKEN                shared bearer secret (must match the app's baked token;
-#                                 the SAME one /otto/chat + /otto/realtime use)
-#   AZURE_RESPONSES_URL          Azure resource base, e.g.
-#                                 https://aztea-foundry.services.ai.azure.com
-#   AZURE_RESPONSES_KEY          the Azure resource key (server-side ONLY)
-#   AZURE_RESPONSES_API_VERSION  api-version query (default 2025-04-01-preview)
-#   AZURE_RESPONSES_MODEL        optional deployment pin; overrides the body's model when set
-#   OTTO_RESPONSES_BUDGET_CAP_CENTS  spend cap in cents (default 15000 = $150)
-#   OTTO_BUDGET_DB               sqlite path (shared with the other Otto proxies)
+#                                 the SAME one /otto/realtime uses)
+#   OTTO_USE_LITELLM             "1" → route via the LiteLLM gateway (below); else direct Azure
+#   OTTO_RESPONSES_LITELLM_URL   LiteLLM base, e.g. http://127.0.0.1:4001
+#   OTTO_RESPONSES_LITELLM_KEY   LiteLLM virtual key (max_budget=$150; server-side ONLY)
+#   OTTO_RESPONSES_LITELLM_MODEL LiteLLM model alias to pin (default otto-responses)
+#   AZURE_RESPONSES_URL          [legacy/rollback] Azure resource base
+#   AZURE_RESPONSES_KEY          [legacy/rollback] the Azure resource key (server-side ONLY)
+#   AZURE_RESPONSES_API_VERSION  [legacy/rollback] api-version query (default 2025-04-01-preview)
+#   AZURE_RESPONSES_MODEL        [legacy/rollback] optional deployment pin
+#   OTTO_RESPONSES_BUDGET_CAP_CENTS  [legacy/rollback] SQLite spend cap in cents (default 15000 = $150)
+#   OTTO_BUDGET_DB               [legacy/rollback] sqlite path (shared with the other Otto proxies)
 import hmac
 import json
 import os
@@ -102,6 +113,52 @@ def _otto_resp_budget_adjust(delta_cents: float) -> None:
         conn.close()
 
 
+def _otto_resp_use_litellm() -> bool:
+    return (os.environ.get("OTTO_USE_LITELLM") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _otto_resp_via_litellm(body: dict) -> Response:  # noqa: F821
+    """Forward the Responses body to the local LiteLLM gateway (OTTO_USE_LITELLM path).
+
+    LiteLLM holds the Azure key, handles routing/fallback, and enforces the $150 cap via the
+    virtual key's max_budget — so the SQLite reserve is bypassed here. A budget rejection is
+    mapped back to the app's 402 at-capacity contract; other upstream errors pass through.
+    """
+    gw_base = (os.environ.get("OTTO_RESPONSES_LITELLM_URL") or "").strip().rstrip("/")
+    gw_key = (os.environ.get("OTTO_RESPONSES_LITELLM_KEY") or "").strip()
+    if not gw_base or not gw_key:
+        raise HTTPException(  # noqa: F821
+            status_code=503,
+            detail=error_codes.make_error("server.unavailable", "Otto service is not configured (no gateway)."),  # noqa: F821
+        )
+    # Pin to the budgeted virtual key's model alias so routing + spend attribution resolve.
+    body["model"] = (os.environ.get("OTTO_RESPONSES_LITELLM_MODEL") or "otto-responses").strip()
+    headers = {"authorization": f"Bearer {gw_key}", "content-type": "application/json"}
+    try:
+        gw = http.post(f"{gw_base}/v1/responses", json=body, headers=headers, timeout=120)  # noqa: F821
+    except Exception:
+        raise HTTPException(  # noqa: F821
+            status_code=502,
+            detail=error_codes.make_error("upstream.unavailable", "Could not reach the model service. Please try again."),  # noqa: F821
+        )
+    if gw.status_code == 200:
+        return JSONResponse(status_code=200, content=gw.json())  # noqa: F821
+    try:
+        gw_err = gw.json()
+    except Exception:
+        gw_err = error_codes.make_error("upstream.unavailable", (gw.text or "")[:500] or "Upstream error.")  # noqa: F821
+    blob = json.dumps(gw_err, default=str).lower()
+    if gw.status_code in (400, 402, 429) and "budget" in blob and ("exceed" in blob or "limit" in blob):
+        raise HTTPException(  # noqa: F821
+            status_code=402,
+            detail=error_codes.make_error(
+                "payment.spend_limit_exceeded",
+                "Otto is at capacity (shared budget reached). Please try again later.",
+            ),
+        )
+    return JSONResponse(status_code=gw.status_code, content=gw_err)  # noqa: F821
+
+
 @app.post(  # noqa: F821  (app/limiter/etc are provided by the shared shard namespace)
     "/otto/responses",
     responses=_error_responses(400, 401, 402, 429, 502, 503),  # noqa: F821
@@ -133,6 +190,10 @@ def otto_responses(request: Request, body: dict = Body(...)) -> Response:  # noq
                 "Request body must be a Responses API request including 'input'.",
             ),
         )
+
+    # 1b. LiteLLM gateway path (see module header). One env toggle reverts to direct Azure.
+    if _otto_resp_use_litellm():
+        return _otto_resp_via_litellm(body)
 
     # 2. Upstream config must be present.
     azure_base = (os.environ.get("AZURE_RESPONSES_URL") or "").strip().rstrip("/")

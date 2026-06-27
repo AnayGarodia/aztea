@@ -8,24 +8,30 @@
 #             `Authorization: Bearer <T>` (or `?token=<T>`); checked against the
 #             OTTO_APP_TOKEN env. The token is baked into the app and extractable —
 #             that's fine; the budget below is the real protection.
-#   • Upstream: opens a server-side WS to Azure using AZURE_REALTIME_KEY and relays
-#             every frame in both directions unchanged. The deployment/model and
-#             api-version are server-pinned (env), so a client can't switch to a
-#             pricier model.
-#   • Budget: a single shared spend pool, separate from /otto/chat, tracked in the
-#             same tiny SQLite counter and priced at Azure realtime rates. Usage is
-#             metered from each `response.done` event's token counts (text vs audio).
-#             When the pool is exhausted → the session is closed and new connections
-#             are refused (close code 4402) until it's reset/raised.
+#   • Upstream: opens a server-side WS to the realtime backend and relays every frame in
+#             both directions unchanged. With OTTO_USE_LITELLM=1 the backend is the local
+#             LiteLLM proxy (/v1/realtime — it holds the Azure key + pins the deployment);
+#             otherwise it's Azure directly (legacy/rollback). A client can't switch to a
+#             pricier model either way (deployment is server-pinned).
+#   • Budget: a single shared spend pool tracked in a tiny SQLite counter, priced at Azure
+#             realtime rates, metered from each `response.done` event's token counts (text
+#             vs audio). IMPORTANT: this meter reads the relayed frames, so it works
+#             identically whether upstream is Azure or LiteLLM — it does NOT rely on the
+#             gateway tracking audio spend. (The LiteLLM realtime virtual key's max_budget
+#             is a secondary backstop.) When the pool is exhausted → the session is closed
+#             and new connections are refused (close code 4402) until it's reset/raised.
 #
 # Server env:
-#   OTTO_APP_TOKEN              shared bearer secret (must match the app's baked-in token;
-#                               same one /otto/chat uses)
-#   AZURE_REALTIME_URL          full upstream wss base, e.g.
+#   OTTO_APP_TOKEN              shared bearer secret (must match the app's baked-in token)
+#   OTTO_USE_LITELLM            "1" → relay via the LiteLLM gateway (below); else direct Azure
+#   OTTO_REALTIME_LITELLM_URL   LiteLLM ws base, e.g. ws://127.0.0.1:4001
+#   OTTO_REALTIME_LITELLM_KEY   LiteLLM virtual key (max_budget=$300 backstop; server-side only)
+#   OTTO_REALTIME_LITELLM_MODEL LiteLLM model alias to pin (default otto-realtime)
+#   AZURE_REALTIME_URL          [legacy/rollback] full upstream wss base, e.g.
 #                               wss://<resource>.openai.azure.com/openai/v1/realtime
-#   AZURE_REALTIME_KEY          the Azure OpenAI resource key (server-side only)
-#   AZURE_REALTIME_MODEL        deployment/model name (default gpt-realtime-2)
-#   AZURE_REALTIME_API_VERSION  api-version query (default 2025-04-01-preview)
+#   AZURE_REALTIME_KEY          [legacy/rollback] the Azure OpenAI resource key (server-side only)
+#   AZURE_REALTIME_MODEL        [legacy/rollback] deployment/model name (default gpt-realtime-2)
+#   AZURE_REALTIME_API_VERSION  [legacy/rollback] api-version query (default 2025-04-01-preview)
 #   OTTO_RT_BUDGET_CAP_CENTS    realtime spend cap in cents (default 30000 = $300)
 #   OTTO_RT_BUDGET_DB           sqlite path (default = OTTO_BUDGET_DB or ~/.otto-proxy-budget.sqlite3)
 #   OTTO_RT_MAX_SESSION_SECONDS hard per-session duration cap (default 900 = 15 min)
@@ -172,6 +178,27 @@ def _otto_rt_upstream_url() -> str | None:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
+def _otto_rt_resolve_upstream() -> tuple[str, dict] | None:
+    """Resolve (upstream_url, headers) for the realtime relay.
+
+    OTTO_USE_LITELLM → the local LiteLLM gateway's /v1/realtime (Bearer the realtime virtual
+    key); otherwise the server-pinned Azure URL (api-key). Returns None when the chosen
+    backend is unconfigured, so the caller refuses the session.
+    """
+    if (os.environ.get("OTTO_USE_LITELLM") or "").strip().lower() in ("1", "true", "yes", "on"):
+        base = (os.environ.get("OTTO_REALTIME_LITELLM_URL") or "").strip().rstrip("/")
+        key = (os.environ.get("OTTO_REALTIME_LITELLM_KEY") or "").strip()
+        model = (os.environ.get("OTTO_REALTIME_LITELLM_MODEL") or "otto-realtime").strip()
+        if not base or not key:
+            return None
+        return f"{base}/v1/realtime?model={model}", {"authorization": f"Bearer {key}"}
+    url = _otto_rt_upstream_url()
+    key = (os.environ.get("AZURE_REALTIME_KEY") or "").strip()
+    if not url or not key:
+        return None
+    return url, {"api-key": key}
+
+
 def _otto_rt_bearer(websocket: WebSocket) -> str:
     auth = websocket.headers.get("authorization", "")
     if auth.startswith("Bearer "):
@@ -243,12 +270,16 @@ async def otto_realtime(websocket: WebSocket) -> None:
         await websocket.close(code=4401)  # invalid token
         return
 
-    # 2. Upstream config must be present.
-    upstream_url = _otto_rt_upstream_url()
-    azure_key = (os.environ.get("AZURE_REALTIME_KEY") or "").strip()
-    if not upstream_url or not azure_key:
+    # 2. Upstream config must be present. Resolve (url, headers) for either the LiteLLM
+    #    gateway (OTTO_USE_LITELLM) or direct Azure. Either way aztea stays the frame meter:
+    #    the cap below reads the relayed `response.done` usage frames, which flow through
+    #    unchanged regardless of upstream — it does NOT depend on LiteLLM tracking audio
+    #    spend (the realtime virtual key's max_budget is a secondary backstop).
+    resolved = _otto_rt_resolve_upstream()
+    if resolved is None:
         await websocket.close(code=4503)  # voice not configured
         return
+    upstream_url, upstream_headers = resolved
 
     # 3. Budget gate — refuse new sessions once the shared pool is spent.
     cap_cents = _otto_rt_budget_cap_cents()
@@ -266,7 +297,7 @@ async def otto_realtime(websocket: WebSocket) -> None:
     try:
         upstream_cm = websockets.connect(
             upstream_url,
-            additional_headers={"api-key": azure_key},
+            additional_headers=upstream_headers,
             max_size=None,        # realtime audio frames can exceed the 1 MiB default
             open_timeout=20,
             ping_interval=20,
