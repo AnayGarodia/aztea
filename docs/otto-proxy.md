@@ -1,46 +1,76 @@
-# Otto proxy — `POST /otto/chat`
+# Otto proxies — `/otto/*`
 
-A **self-contained** authenticated passthrough to Anthropic's Messages API for
-the **Otto** desktop app (`server/application_parts/part_015.py`). It deliberately
-does **not** use aztea's user/wallet/payments framework — it's a standalone
-shortcut so no Anthropic key ships in the downloadable app.
+Authenticated proxies for the **Otto** desktop app, so no provider keys ship in the
+downloadable app. aztea is the public front door (validates the app's baked
+`OTTO_APP_TOKEN`); the LLM paths forward to a **private LiteLLM gateway** on the VM that
+holds the real Azure keys, routes/falls back across providers, and enforces budgets.
 
-- **Auth:** the app sends `Authorization: Bearer <T>`; the endpoint checks `T`
-  against the `OTTO_APP_TOKEN` env var (constant-time). The token is baked into
-  the app and is therefore extractable — that's expected; the **budget** below is
-  the real protection, not the token's secrecy.
-- **Upstream:** forwards the `/v1/messages` body unchanged to Anthropic using the
-  **server-side `ANTHROPIC_API_KEY`**, and returns the response verbatim.
-- **Budget:** a single **shared spend pool**, tracked in a tiny SQLite counter and
-  priced at real Anthropic rates. Each call reserves an upper-bound estimate, then
-  reconciles to actual token cost, so the cap maps to real dollars. When the pool
-  is exhausted → **HTTP 402** for every caller until it's reset/raised.
+```
+Otto app ──Bearer OTTO_APP_TOKEN──▶ aztea (auth) ──▶ LiteLLM (127.0.0.1:4001) ──▶ Azure
+```
+
+| Route | Purpose | Upstream |
+|---|---|---|
+| `POST /otto/responses` | GPT-5.5 acting (Azure Responses API) — `part_018.py` | LiteLLM `/v1/responses` |
+| `WS /otto/realtime` | Voice (Azure realtime) — `part_016.py` | LiteLLM `/v1/realtime` (aztea relays the socket) |
+| `POST /otto/composio/{path}` | Composio connector relay — `part_017.py` | Composio (direct; not an LLM call) |
+| ~~`POST /otto/chat`~~ | **Removed** — the app no longer ships an Anthropic client | — |
+
+The LLM cutover is gated by **`OTTO_USE_LITELLM`**: `1` routes via LiteLLM, unset/`0` uses the
+legacy direct-Azure path (rollback = one env toggle + aztea restart). Standing up LiteLLM and
+minting the budgeted virtual keys is documented in **[`deploy/litellm/README.md`](../deploy/litellm/README.md)**.
 
 ## Server config (env vars)
+
+Shared:
 
 | Var | Purpose | Default |
 |---|---|---|
 | `OTTO_APP_TOKEN` | shared bearer secret — **must equal the app's baked-in token** | (required) |
-| `ANTHROPIC_API_KEY` | the real Anthropic key (already used by aztea) | (required) |
-| `OTTO_BUDGET_CAP_CENTS` | spend cap in cents | `20000` ($200) |
-| `OTTO_BUDGET_DB` | sqlite path for the counter | `~/.otto-proxy-budget.sqlite3` |
+| `OTTO_USE_LITELLM` | `1` → route LLM paths via LiteLLM; else legacy direct-Azure | unset |
 
-**No provisioning, no DB migration, no aztea account needed.** Set
-`OTTO_APP_TOKEN` (same value the app ships with) and `ANTHROPIC_API_KEY`, deploy,
-done.
+LiteLLM gateway path (`OTTO_USE_LITELLM=1`):
 
-## Operating the cap
+| Var | Purpose | Default |
+|---|---|---|
+| `OTTO_RESPONSES_LITELLM_URL` | LiteLLM base for responses | `http://127.0.0.1:4001` |
+| `OTTO_RESPONSES_LITELLM_KEY` | LiteLLM virtual key, `max_budget=$150` | (required) |
+| `OTTO_RESPONSES_LITELLM_MODEL` | model alias to pin | `otto-responses` |
+| `OTTO_REALTIME_LITELLM_URL` | LiteLLM ws base for realtime | `ws://127.0.0.1:4001` |
+| `OTTO_REALTIME_LITELLM_KEY` | LiteLLM virtual key, `max_budget=$300` (backstop) | (required) |
+| `OTTO_REALTIME_LITELLM_MODEL` | model alias to pin | `otto-realtime` |
 
-- **Raise the cap:** set `OTTO_BUDGET_CAP_CENTS` (e.g. `50000` = $500) and restart.
-- **Reset / top up the pool:** `sqlite3 ~/.otto-proxy-budget.sqlite3 \
-  'UPDATE otto_budget SET spent_cents = 0;'`
-- **Check current spend:** `sqlite3 ~/.otto-proxy-budget.sqlite3 \
-  'SELECT spent_cents FROM otto_budget;'`
+Azure creds (`AZURE_RESPONSES_*`, `AZURE_REALTIME_*`) move **off aztea** and into the LiteLLM
+stack (`deploy/litellm/.env`) on this path. They remain on aztea only for the legacy/rollback
+path below.
+
+Legacy / rollback path (`OTTO_USE_LITELLM` off):
+
+| Var | Purpose | Default |
+|---|---|---|
+| `AZURE_RESPONSES_URL` / `AZURE_RESPONSES_KEY` | Azure Responses upstream (server-side) | (required) |
+| `AZURE_RESPONSES_API_VERSION` / `AZURE_RESPONSES_MODEL` | api-version / deployment pin | `2025-04-01-preview` / — |
+| `AZURE_REALTIME_URL` / `AZURE_REALTIME_KEY` | Azure realtime upstream (server-side) | (required) |
+| `OTTO_RESPONSES_BUDGET_CAP_CENTS` | SQLite responses cap | `15000` ($150) |
+| `OTTO_RT_BUDGET_CAP_CENTS` | realtime cap (always active — see below) | `30000` ($300) |
+| `OTTO_BUDGET_DB` | sqlite path for the counters | `~/.otto-proxy-budget.sqlite3` |
+
+## Budgets
+
+- **Responses ($150):** on the LiteLLM path the cap is the responses virtual key's
+  `max_budget`; LiteLLM rejects over-budget calls and aztea maps that to the app's
+  `402 payment.spend_limit_exceeded` contract. On the legacy path it's the SQLite
+  `otto_responses_budget` counter.
+- **Realtime ($300):** aztea **always** meters realtime spend itself from the relayed
+  `response.done` usage frames (`part_016.py`), independent of upstream — so the voice cap
+  holds whether or not LiteLLM tracks audio spend. The realtime virtual key's `max_budget`
+  is a secondary backstop.
+- **Inspect/reset legacy SQLite counters:**
+  `sqlite3 ~/.otto-proxy-budget.sqlite3 'SELECT * FROM otto_responses_budget; SELECT * FROM otto_rt_budget;'`
+  The retired `otto_budget` (Anthropic/chat) table is now orphaned and can be dropped.
 
 ## Notes
 
-- Otto currently requests `claude-opus-4-8`. Switching the app to
-  `claude-sonnet-4-6` roughly halves cost (same proxy, no server change).
-- Rate limit: `120/minute` per client (slowapi). Tune in `part_015.py`.
-- The budget is a flat shared total (no daily reset). Add a periodic
-  `UPDATE … SET spent_cents = 0` (cron) if you want it to refill.
+- Rate limit: `120/minute` per client (slowapi) on `/otto/responses`. Tune in `part_018.py`.
+- `part_015.py` is kept as a tombstone (no route) because `server/application.py` requires the
+  `part_*.py` shards to be contiguous; renumbering is left for a dedicated cleanup.

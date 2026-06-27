@@ -1,0 +1,42 @@
+# LiteLLM gateway config for the Otto proxies.
+#
+# Sits PRIVATELY behind aztea on the VM (bound to 127.0.0.1:4000 — never public). aztea's
+# /otto/responses and /otto/realtime routes forward here; LiteLLM holds the Azure key,
+# routes/falls back across providers, and enforces per-virtual-key budgets.
+#
+# Model aliases are what aztea pins via OTTO_RESPONSES_LITELLM_MODEL / OTTO_REALTIME_LITELLM_MODEL.
+# Real Azure creds come from the environment (see deploy/litellm/.env), so no secret lives
+# in this file.
+
+model_list:
+  # GPT-5.5 acting backend — Azure Responses API. aztea POSTs to /v1/responses with the
+  # responses virtual key; this alias resolves the deployment + budget attribution.
+  - model_name: otto-responses
+    litellm_params:
+      model: azure/responses/gpt-5.5
+      api_base: os.environ/AZURE_RESPONSES_URL
+      api_key: os.environ/AZURE_RESPONSES_KEY
+      api_version: "2025-04-01-preview"
+    # Add fallback providers here later, e.g. a second Azure region or openai/gpt-5.5,
+    # then list them under router_settings.fallbacks.
+
+  # Realtime voice — Azure realtime over WebSocket. aztea relays its upstream socket to
+  # /v1/realtime?model=otto-realtime with the realtime virtual key.
+  - model_name: otto-realtime
+    litellm_params:
+      model: azure/gpt-realtime-2
+      api_base: os.environ/AZURE_REALTIME_URL
+      api_key: os.environ/AZURE_REALTIME_KEY
+      api_version: "2025-04-01-preview"
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  # Hard-fail budgeted requests if the spend store is unreachable, so a degraded DB can't
+  # silently disable the cap.
+  fail_closed_budget_enforcement: true
+
+litellm_settings:
+  # Keep request bodies intact — the Otto Responses payload carries reasoning/tool fields
+  # we must not strip on passthrough.
+  drop_params: false
