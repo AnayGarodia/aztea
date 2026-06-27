@@ -114,7 +114,14 @@ def _otto_resp_budget_adjust(delta_cents: float) -> None:
 
 
 def _otto_resp_use_litellm() -> bool:
-    return (os.environ.get("OTTO_USE_LITELLM") or "").strip().lower() in ("1", "true", "yes", "on")
+    # Per-path flag (OTTO_RESPONSES_USE_LITELLM) with OTTO_USE_LITELLM as a shared fallback,
+    # so responses can cut over to the gateway independently of realtime.
+    v = (
+        os.environ.get("OTTO_RESPONSES_USE_LITELLM")
+        or os.environ.get("OTTO_USE_LITELLM")
+        or ""
+    ).strip().lower()
+    return v in ("1", "true", "yes", "on")
 
 
 def _otto_resp_via_litellm(body: dict) -> Response:  # noqa: F821

@@ -27,7 +27,14 @@ Shared:
 | Var | Purpose | Default |
 |---|---|---|
 | `OTTO_APP_TOKEN` | shared bearer secret — **must equal the app's baked-in token** | (required) |
-| `OTTO_USE_LITELLM` | `1` → route LLM paths via LiteLLM; else legacy direct-Azure | unset |
+| `OTTO_USE_LITELLM` | `1` → route **both** LLM paths via LiteLLM (shared fallback flag) | unset |
+| `OTTO_RESPONSES_USE_LITELLM` | `1` → route only `/otto/responses` via LiteLLM (overrides shared) | unset |
+| `OTTO_REALTIME_USE_LITELLM` | `1` → route only `/otto/realtime` via LiteLLM (overrides shared) | unset |
+
+> Current production: `OTTO_RESPONSES_USE_LITELLM=1` (responses via gateway), realtime left on
+> direct Azure — LiteLLM's Azure-realtime upstream WS is not yet working (Azure rejects it
+> with HTTP 400; api_base/path-format mismatch). Re-enable realtime via the gateway once that
+> is fixed.
 
 LiteLLM gateway path (`OTTO_USE_LITELLM=1`):
 

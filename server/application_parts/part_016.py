@@ -185,7 +185,14 @@ def _otto_rt_resolve_upstream() -> tuple[str, dict] | None:
     key); otherwise the server-pinned Azure URL (api-key). Returns None when the chosen
     backend is unconfigured, so the caller refuses the session.
     """
-    if (os.environ.get("OTTO_USE_LITELLM") or "").strip().lower() in ("1", "true", "yes", "on"):
+    # Per-path flag (OTTO_REALTIME_USE_LITELLM) with OTTO_USE_LITELLM as a shared fallback,
+    # so realtime can stay on direct Azure while responses route via the gateway.
+    _rt_flag = (
+        os.environ.get("OTTO_REALTIME_USE_LITELLM")
+        or os.environ.get("OTTO_USE_LITELLM")
+        or ""
+    ).strip().lower()
+    if _rt_flag in ("1", "true", "yes", "on"):
         base = (os.environ.get("OTTO_REALTIME_LITELLM_URL") or "").strip().rstrip("/")
         key = (os.environ.get("OTTO_REALTIME_LITELLM_KEY") or "").strip()
         model = (os.environ.get("OTTO_REALTIME_LITELLM_MODEL") or "otto-realtime").strip()
