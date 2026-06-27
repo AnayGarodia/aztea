@@ -39,12 +39,27 @@
 #   AZURE_RESPONSES_MODEL        [legacy/rollback] optional deployment pin
 #   OTTO_RESPONSES_BUDGET_CAP_CENTS  [legacy/rollback] SQLite spend cap in cents (default 15000 = $150)
 #   OTTO_BUDGET_DB               [legacy/rollback] sqlite path (shared with the other Otto proxies)
+import asyncio
 import hmac
 import json
 import os
 import sqlite3
 
+import httpx
+
 _OTTO_RESP_FALLBACK_MAX_TOKENS = 4096
+
+# Async upstream + concurrency cap. /otto/responses is an ASYNC handler using httpx, so the
+# upstream round-trip never blocks a worker threadpool slot — a slow upstream used to drain
+# the ~40-thread pool and hang EVERY sync route (/health, /otto, ...) until restart
+# (2026-06-27 incident). The semaphore bounds concurrent upstream calls so a burst can't
+# exhaust sockets/threads; excess requests await cheaply on the event loop.
+_OTTO_RESP_UPSTREAM_TIMEOUT = float(os.environ.get("OTTO_RESPONSES_TIMEOUT_S") or 60)
+try:
+    _OTTO_RESP_MAX_CONCURRENCY = int(os.environ.get("OTTO_RESPONSES_MAX_CONCURRENCY") or 24)
+except (TypeError, ValueError):
+    _OTTO_RESP_MAX_CONCURRENCY = 24
+_OTTO_RESP_SEM = asyncio.Semaphore(_OTTO_RESP_MAX_CONCURRENCY)
 
 # Approximate Azure gpt-5.x list prices, (input, output) cents per 1,000,000 tokens.
 # This only sizes the shared spend cap — TUNE to your actual Azure rate card. Rounding
@@ -124,12 +139,13 @@ def _otto_resp_use_litellm() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
-def _otto_resp_via_litellm(body: dict) -> Response:  # noqa: F821
-    """Forward the Responses body to the local LiteLLM gateway (OTTO_USE_LITELLM path).
+async def _otto_resp_via_litellm(body: dict) -> Response:  # noqa: F821
+    """Forward the Responses body to the local LiteLLM gateway (async; OTTO_USE_LITELLM path).
 
     LiteLLM holds the Azure key, handles routing/fallback, and enforces the $150 cap via the
     virtual key's max_budget — so the SQLite reserve is bypassed here. A budget rejection is
     mapped back to the app's 402 at-capacity contract; other upstream errors pass through.
+    Async httpx so a slow gateway never blocks the worker's threadpool.
     """
     gw_base = (os.environ.get("OTTO_RESPONSES_LITELLM_URL") or "").strip().rstrip("/")
     gw_key = (os.environ.get("OTTO_RESPONSES_LITELLM_KEY") or "").strip()
@@ -142,7 +158,8 @@ def _otto_resp_via_litellm(body: dict) -> Response:  # noqa: F821
     body["model"] = (os.environ.get("OTTO_RESPONSES_LITELLM_MODEL") or "otto-responses").strip()
     headers = {"authorization": f"Bearer {gw_key}", "content-type": "application/json"}
     try:
-        gw = http.post(f"{gw_base}/v1/responses", json=body, headers=headers, timeout=120)  # noqa: F821
+        async with httpx.AsyncClient(timeout=_OTTO_RESP_UPSTREAM_TIMEOUT) as client:
+            gw = await client.post(f"{gw_base}/v1/responses", json=body, headers=headers)
     except Exception:
         raise HTTPException(  # noqa: F821
             status_code=502,
@@ -166,13 +183,94 @@ def _otto_resp_via_litellm(body: dict) -> Response:  # noqa: F821
     return JSONResponse(status_code=gw.status_code, content=gw_err)  # noqa: F821
 
 
+def _otto_resp_via_azure_sync(body: dict) -> Response:  # noqa: F821
+    """Legacy/rollback path: direct Azure passthrough + the SQLite shared-budget cap.
+
+    Blocking (requests + sqlite), so the async handler runs it via asyncio.to_thread. Kept only
+    for OTTO_USE_LITELLM rollback; the live path is the async _otto_resp_via_litellm.
+    """
+    azure_base = (os.environ.get("AZURE_RESPONSES_URL") or "").strip().rstrip("/")
+    azure_key = (os.environ.get("AZURE_RESPONSES_KEY") or "").strip()
+    api_version = (os.environ.get("AZURE_RESPONSES_API_VERSION") or "2025-04-01-preview").strip()
+    if not azure_base or not azure_key:
+        raise HTTPException(  # noqa: F821
+            status_code=503,
+            detail=error_codes.make_error("server.unavailable", "Otto service is not configured (no upstream model key)."),  # noqa: F821
+        )
+
+    # Optionally pin the deployment server-side so a bearer-holder can't request a pricier model.
+    pinned = (os.environ.get("AZURE_RESPONSES_MODEL") or "").strip()
+    if pinned:
+        body["model"] = pinned
+
+    try:
+        max_tokens = int(body.get("max_output_tokens") or _OTTO_RESP_FALLBACK_MAX_TOKENS)
+    except (TypeError, ValueError):
+        max_tokens = _OTTO_RESP_FALLBACK_MAX_TOKENS
+    prompt_chars = (
+        len(json.dumps(body.get("instructions") or "", default=str))
+        + len(json.dumps(body.get("input") or [], default=str))
+        + len(json.dumps(body.get("tools") or [], default=str))
+    )
+
+    # Reserve an upper-bound estimate against the shared pool. 402 if the pool can't cover it.
+    estimate_cents = _otto_resp_cost_cents(prompt_chars / 4.0, max_tokens)
+    if not _otto_resp_budget_try_reserve(estimate_cents):
+        raise HTTPException(  # noqa: F821
+            status_code=402,
+            detail=error_codes.make_error(
+                "payment.spend_limit_exceeded",
+                "Otto is at capacity (shared budget reached). Please try again later.",
+            ),
+        )
+
+    url = f"{azure_base}/openai/responses?api-version={api_version}"
+    headers = {"api-key": azure_key, "content-type": "application/json"}
+    try:
+        upstream = http.post(url, json=body, headers=headers, timeout=120)  # noqa: F821
+    except Exception:
+        _otto_resp_budget_adjust(-estimate_cents)  # refund the reservation
+        raise HTTPException(  # noqa: F821
+            status_code=502,
+            detail=error_codes.make_error("upstream.unavailable", "Could not reach the model service. Please try again."),  # noqa: F821
+        )
+
+    if upstream.status_code != 200:
+        _otto_resp_budget_adjust(-estimate_cents)
+        try:
+            err_body = upstream.json()
+        except Exception:
+            err_body = error_codes.make_error("upstream.unavailable", (upstream.text or "")[:500] or "Upstream error.")  # noqa: F821
+        return JSONResponse(status_code=upstream.status_code, content=err_body)  # noqa: F821
+
+    data = upstream.json()
+
+    # Reconcile the reservation to actual usage. Never fail the request over settlement.
+    try:
+        usage = data.get("usage") or {}
+        actual_cents = _otto_resp_cost_cents(
+            float(usage.get("input_tokens") or 0),
+            float(usage.get("output_tokens") or 0),
+        )
+        _otto_resp_budget_adjust(actual_cents - estimate_cents)
+    except Exception:
+        pass
+
+    return JSONResponse(status_code=200, content=data)  # noqa: F821
+
+
 @app.post(  # noqa: F821  (app/limiter/etc are provided by the shared shard namespace)
     "/otto/responses",
     responses=_error_responses(400, 401, 402, 429, 502, 503),  # noqa: F821
 )
 @limiter.limit("120/minute")  # noqa: F821
-def otto_responses(request: Request, body: dict = Body(...)) -> Response:  # noqa: F821
-    """Standalone authenticated Azure Responses (gpt-5.x) proxy for the Otto app."""
+async def otto_responses(request: Request, body: dict = Body(...)) -> Response:  # noqa: F821
+    """Authenticated Azure Responses (gpt-5.x) proxy for the Otto app.
+
+    ASYNC so the upstream round-trip never blocks the worker's threadpool, and bounded by a
+    concurrency semaphore so a slow upstream can't exhaust sockets/threads and wedge the whole
+    process (the 2026-06-27 hang). Auth + validation happen BEFORE taking a slot.
+    """
     # 1. Auth: shared bearer secret (constant-time compare).
     expected = os.environ.get("OTTO_APP_TOKEN", "").strip()
     if not expected:
@@ -198,79 +296,10 @@ def otto_responses(request: Request, body: dict = Body(...)) -> Response:  # noq
             ),
         )
 
-    # 1b. LiteLLM gateway path (see module header). One env toggle reverts to direct Azure.
-    if _otto_resp_use_litellm():
-        return _otto_resp_via_litellm(body)
-
-    # 2. Upstream config must be present.
-    azure_base = (os.environ.get("AZURE_RESPONSES_URL") or "").strip().rstrip("/")
-    azure_key = (os.environ.get("AZURE_RESPONSES_KEY") or "").strip()
-    api_version = (os.environ.get("AZURE_RESPONSES_API_VERSION") or "2025-04-01-preview").strip()
-    if not azure_base or not azure_key:
-        raise HTTPException(  # noqa: F821
-            status_code=503,
-            detail=error_codes.make_error("server.unavailable", "Otto service is not configured (no upstream model key)."),  # noqa: F821
-        )
-
-    # Optionally pin the deployment server-side so a bearer-holder can't request a pricier model.
-    pinned = (os.environ.get("AZURE_RESPONSES_MODEL") or "").strip()
-    if pinned:
-        body["model"] = pinned
-
-    try:
-        max_tokens = int(body.get("max_output_tokens") or _OTTO_RESP_FALLBACK_MAX_TOKENS)
-    except (TypeError, ValueError):
-        max_tokens = _OTTO_RESP_FALLBACK_MAX_TOKENS
-    prompt_chars = (
-        len(json.dumps(body.get("instructions") or "", default=str))
-        + len(json.dumps(body.get("input") or [], default=str))
-        + len(json.dumps(body.get("tools") or [], default=str))
-    )
-
-    # 3. Reserve an upper-bound estimate against the shared pool (~4 chars/token in;
-    #    max_output_tokens out). 402 if the pool can't cover it.
-    estimate_cents = _otto_resp_cost_cents(prompt_chars / 4.0, max_tokens)
-    if not _otto_resp_budget_try_reserve(estimate_cents):
-        raise HTTPException(  # noqa: F821
-            status_code=402,
-            detail=error_codes.make_error(
-                "payment.spend_limit_exceeded",
-                "Otto is at capacity (shared budget reached). Please try again later.",
-            ),
-        )
-
-    # 4. Forward to Azure with the server-side key.
-    url = f"{azure_base}/openai/responses?api-version={api_version}"
-    headers = {"api-key": azure_key, "content-type": "application/json"}
-    try:
-        upstream = http.post(url, json=body, headers=headers, timeout=120)  # noqa: F821
-    except Exception:
-        _otto_resp_budget_adjust(-estimate_cents)  # refund the reservation
-        raise HTTPException(  # noqa: F821
-            status_code=502,
-            detail=error_codes.make_error("upstream.unavailable", "Could not reach the model service. Please try again."),  # noqa: F821
-        )
-
-    if upstream.status_code != 200:
-        _otto_resp_budget_adjust(-estimate_cents)
-        try:
-            err_body = upstream.json()
-        except Exception:
-            err_body = error_codes.make_error("upstream.unavailable", (upstream.text or "")[:500] or "Upstream error.")  # noqa: F821
-        return JSONResponse(status_code=upstream.status_code, content=err_body)  # noqa: F821
-
-    data = upstream.json()
-
-    # 5. Reconcile the reservation to actual usage. Responses API reports
-    #    usage.input_tokens / usage.output_tokens. Never fail the request over settlement.
-    try:
-        usage = data.get("usage") or {}
-        actual_cents = _otto_resp_cost_cents(
-            float(usage.get("input_tokens") or 0),
-            float(usage.get("output_tokens") or 0),
-        )
-        _otto_resp_budget_adjust(actual_cents - estimate_cents)
-    except Exception:
-        pass
-
-    return JSONResponse(status_code=200, content=data)  # noqa: F821
+    # 2. Upstream call, concurrency-bounded. LiteLLM path is fully async; the legacy Azure path
+    #    runs in a worker thread. Either way the semaphore caps in-flight upstream work so one
+    #    slow upstream can't starve the threadpool/sockets and hang every other route.
+    async with _OTTO_RESP_SEM:
+        if _otto_resp_use_litellm():
+            return await _otto_resp_via_litellm(body)
+        return await asyncio.to_thread(_otto_resp_via_azure_sync, body)
