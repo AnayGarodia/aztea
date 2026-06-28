@@ -1275,6 +1275,90 @@ def _otto_google_redirect_uri() -> str:
     return f"{base}/auth/otto/google/callback"
 
 
+def _otto_google_landing(state: str, *, key: str = "", key_id: str = "", error: str = ""):
+    """Render the browser landing page shown after Google consent.
+
+    A bare 302 to otto:// opens the app but strands the browser tab on a dead
+    page. Instead we serve a real page that (a) fires the otto:// deep link to
+    hand the key to the app and (b) tells the user they can close the tab —
+    the standard desktop-OAuth pattern (gcloud, gh, etc.). Browsers refuse to
+    auto-close a tab they didn't script-open, so a clean confirmation + a
+    manual 'Open Otto' button is the best achievable."""
+    import html as _html, json as _json
+    from fastapi.responses import HTMLResponse
+
+    deep = _otto_google_deep_link(state, key=key, key_id=key_id, error=error)
+    deep_attr = _html.escape(deep, quote=True)   # safe in href=""
+    deep_js = _json.dumps(deep)                   # safe in a <script> string
+    ok = bool(key)
+    if ok:
+        accent = "#6ea8fe"
+        glyph = "&#10003;"           # check
+        heading = "You&rsquo;re signed in"
+        sub = "Otto is opening on your Mac. You can close this tab."
+        btn = "Open Otto"
+    else:
+        accent = "#ff6b6b"
+        glyph = "&#33;"             # !
+        reason = _html.escape((error or "unknown").replace("_", " "))
+        heading = "Sign-in didn&rsquo;t finish"
+        sub = f"Return to Otto and try again. ({reason})"
+        btn = "Back to Otto"
+    page = f"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Otto &middot; Sign in</title>
+<style>
+  :root {{ color-scheme: dark; }}
+  * {{ box-sizing: border-box; }}
+  html,body {{ height:100%; margin:0; }}
+  body {{
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: radial-gradient(1200px 600px at 50% -10%, #1a1b22 0%, #0b0b0f 60%);
+    color: #e9e9ee; display:flex; align-items:center; justify-content:center; padding:24px;
+  }}
+  .card {{
+    width:100%; max-width:420px; text-align:center;
+    background: rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08);
+    border-radius:18px; padding:40px 32px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+  }}
+  .badge {{
+    width:64px; height:64px; margin:0 auto 22px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    font-size:30px; font-weight:700; color:#0b0b0f;
+    background:{accent}; box-shadow:0 0 0 8px rgba(110,168,254,0.10);
+  }}
+  h1 {{ font-size:21px; font-weight:600; margin:0 0 8px; letter-spacing:-0.01em; }}
+  p  {{ margin:0 0 24px; color:#a6a6b2; }}
+  .btn {{
+    display:inline-block; text-decoration:none; font-weight:600;
+    color:#0b0b0f; background:{accent}; padding:11px 22px; border-radius:11px;
+    transition: filter .15s ease;
+  }}
+  .btn:hover {{ filter:brightness(1.08); }}
+  .hint {{ margin-top:18px; font-size:12.5px; color:#6c6c78; }}
+</style>
+</head><body>
+  <div class="card">
+    <div class="badge">{glyph}</div>
+    <h1>{heading}</h1>
+    <p>{sub}</p>
+    <a class="btn" href="{deep_attr}">{btn}</a>
+    <div class="hint">This window is safe to close.</div>
+  </div>
+  <script>
+    // Fire the deep link so the app opens. Setting location to a custom scheme
+    // hands off to the OS and leaves THIS document in place, so the message stays.
+    try {{ window.location.href = {deep_js}; }} catch (e) {{}}
+    // Best-effort auto-close (browsers block this for tabs they didn't open).
+    setTimeout(function () {{ try {{ window.close(); }} catch (e) {{}} }}, 1400);
+  </script>
+</body></html>"""
+    return HTMLResponse(content=page, status_code=200)
+
+
 @app.get("/auth/otto/google", responses=_error_responses(503))
 @limiter.limit(_AUTH_RATE_LIMIT, key_func=get_remote_address)
 def auth_otto_google_start(request: Request, state: str = ""):
@@ -1307,13 +1391,12 @@ def auth_otto_google_callback(
     request: Request, state: str = "", code: str = "", error: str = ""
 ):
     """Google redirects here after consent. Exchange the code, verify the
-    id_token, find-or-create the account, mint a fresh session key, and bounce
-    back into the app via the otto:// deep link (key on success, error on
-    failure — the app shows the failure reason and lets the user retry)."""
-    from fastapi.responses import RedirectResponse
+    id_token, find-or-create the account, mint a fresh session key, and render
+    a landing page that bounces back into the app via the otto:// deep link
+    (key on success, error on failure — the app shows the reason and retries)."""
 
     def _back(**kw):
-        return RedirectResponse(_otto_google_deep_link(state, **kw), status_code=302)
+        return _otto_google_landing(state, **kw)
 
     if error or not code:
         return _back(error=error or "no_code")
