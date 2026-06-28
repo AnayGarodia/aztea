@@ -5,6 +5,34 @@ const VERSION = '0.5.1'
 const DMG = `Otto-${VERSION}.dmg`
 const DMG_HREF = `/otto/${DMG}`
 
+// Brand colours
+const BRAND = '#F5A623'   // otto orange
+const INK   = '#22183C'   // dark purple-ink
+
+function OttoCreature({ size = 64 }) {
+  const r = size * 0.28  // squircle corner radius
+  const eyeD = size * 0.22
+  const gap  = size * 0.09
+  const totalW = eyeD * 2 + gap
+  const ex0 = (size - totalW) / 2
+  const ex1 = ex0 + eyeD + gap
+  const ey  = (size - eyeD) / 2 + size * 0.025
+  const pupilD = eyeD * 0.5
+  const pd = (eyeD - pupilD) / 2
+
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} fill="none">
+      <rect width={size} height={size} rx={r} ry={r} fill={BRAND} />
+      {[ex0, ex1].map((x, i) => (
+        <g key={i}>
+          <ellipse cx={x + eyeD / 2} cy={ey + eyeD / 2} rx={eyeD / 2} ry={eyeD / 2} fill="white" />
+          <ellipse cx={x + pd + pupilD / 2} cy={ey + pd + pupilD / 2} rx={pupilD / 2} ry={pupilD / 2} fill={INK} />
+        </g>
+      ))}
+    </svg>
+  )
+}
+
 export default function OttoPage() {
   useEffect(() => { document.title = 'Otto – AI agent for your Mac' }, [])
 
@@ -21,20 +49,9 @@ export default function OttoPage() {
       padding: '2rem',
       textAlign: 'center',
     }}>
-      <svg width="64" height="64" viewBox="0 0 64 64" fill="none" style={{ marginBottom: '1.5rem' }}>
-        <circle cx="32" cy="32" r="32" fill="#1a1a1a" />
-        {/* Octagram: two squares rotated 0° and 45° */}
-        {[0, 45].map(deg => {
-          const rad = deg * Math.PI / 180
-          const r = 22
-          const pts = [0, 1, 2, 3].map(i => {
-            const a = rad + i * Math.PI / 2
-            return `${32 + r * Math.cos(a)},${32 + r * Math.sin(a)}`
-          }).join(' ')
-          return <polygon key={deg} points={pts} fill="none" stroke="#2dd4bf" strokeWidth="3" strokeLinejoin="round" />
-        })}
-        <circle cx="32" cy="32" r="5" fill="#c05a3a" />
-      </svg>
+      <div style={{ marginBottom: '1.5rem' }}>
+        <OttoCreature size={72} />
+      </div>
 
       <h1 style={{ fontSize: '2rem', fontWeight: 700, margin: '0 0 0.5rem' }}>Otto</h1>
       <p style={{ fontSize: '1.1rem', color: '#a0978a', margin: '0 0 2rem', maxWidth: '380px' }}>
@@ -47,8 +64,8 @@ export default function OttoPage() {
         style={{
           display: 'inline-block',
           padding: '0.75rem 2rem',
-          background: '#2dd4bf',
-          color: '#0f0f0f',
+          background: BRAND,
+          color: INK,
           borderRadius: '8px',
           fontWeight: 600,
           fontSize: '1rem',
