@@ -52,3 +52,16 @@ async def test_spa_fallback_404_for_missing_assets(monkeypatch, tmp_path):
         r = await c.get("/spaonly/jane.doe")
         assert r.status_code == 200
         assert "text/html" in r.headers.get("content-type", "")
+
+        # Static EXTENSION but OUTSIDE an asset dir (e.g. a future SPA slug like /builders/jane.js)
+        # → index.html, NOT 404 (prefix-scoping protects SPA routes anywhere outside asset dirs).
+        r = await c.get("/builders/jane.js")
+        assert r.status_code == 200
+        assert "text/html" in r.headers.get("content-type", "")
+
+        # Under an asset dir (otto/) a missing asset still 404s (the Sparkle appcast/DMG path)...
+        assert (await c.get("/otto/appcast.xml")).status_code == 404
+        # ...but the extension-less /otto landing route still serves the SPA shell.
+        r = await c.get("/otto")
+        assert r.status_code == 200
+        assert "text/html" in r.headers.get("content-type", "")

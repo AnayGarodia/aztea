@@ -1833,6 +1833,10 @@ _SPA_STATIC_EXTENSIONS = frozenset({
     ".gif", ".svg", ".ico", ".webp", ".avif", ".woff", ".woff2", ".ttf", ".eot", ".txt",
     ".pdf", ".zip", ".gz", ".wasm", ".webmanifest", ".csv", ".mp4", ".webm", ".wav",
 })
+# Directories that only ever hold static files. The 404 below requires BOTH a prefix here AND a
+# static extension, so it can never collide with an extension-less SPA route (e.g. /otto landing)
+# or a dotted SPA slug (e.g. /builders/jane.doe) anywhere outside these dirs.
+_SPA_STATIC_PREFIXES = ("assets", "releases", "otto", "downloads", "static")
 
 
 @app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
@@ -1900,9 +1904,11 @@ def spa_fallback(full_path: str, request: Request) -> _SpaFileResponse:
         candidate = _FRONTEND_DIST_DIR / safe_fragment
         if candidate.is_file() and _resolved_under(_FRONTEND_DIST_DIR, candidate):
             return _SpaFileResponse(str(candidate))
-        # Missing file with a known static-asset extension → real 404 (don't mask it as the SPA
-        # shell). HEAD is handled the same way (Starlette runs this handler for HEAD).
-        if candidate.suffix.lower() in _SPA_STATIC_EXTENSIONS:
+        # Missing static asset → real 404 (don't mask it as the SPA shell). Require BOTH a known
+        # static dir AND a static extension, so SPA routes (extension-less, or dotted slugs
+        # outside these dirs) still fall through to index.html. HEAD is handled identically.
+        _seg0 = safe_fragment.split("/", 1)[0].lower()
+        if _seg0 in _SPA_STATIC_PREFIXES and candidate.suffix.lower() in _SPA_STATIC_EXTENSIONS:
             raise HTTPException(
                 status_code=404,
                 detail=error_codes.make_error("not_found", f"{full_path} not found."),

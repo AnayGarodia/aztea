@@ -267,37 +267,46 @@ def _background_worker_multi_worker() -> bool:
     return web > 1 or bool(os.environ.get("AZTEA_MULTI_WORKER", "").strip())
 
 
+def _background_worker_lock_setup_failed(reason: str) -> bool:
+    """Handle a lock-SETUP error (NOT normal contention).
+
+    Under multi-worker we ABORT startup loudly: failing open risks split-brain duplicate
+    workers, and silently failing closed would leave the whole fleet with NO background worker
+    (sweeper/jobs/hooks dead) behind a green /health. A crash is the visible, correct outcome
+    for a lock misconfiguration. Under a single worker / dev, fail OPEN so background tasks run.
+    NOTE: multi-worker detection needs AZTEA_MULTI_WORKER=1 (raw `uvicorn --workers N` does not
+    set WEB_CONCURRENCY) — the deploy sets it, matching the SQLite multi-worker guard.
+    """
+    if _background_worker_multi_worker():
+        raise RuntimeError(
+            f"background-worker leader lock unavailable under multi-worker ({reason}); "
+            "aborting startup rather than risk split-brain or a leaderless fleet"
+        )
+    return True
+
+
 def _acquire_background_worker_lock() -> bool:
     global _background_worker_lock_handle
     if _background_worker_lock_handle is not None:
         return True
-    # Fail CLOSED under multi-worker: if we can't take a real exclusive lock we refuse
-    # leadership (run no background threads) rather than risk split-brain duplicate workers.
-    # Under a single worker, fail OPEN so background tasks still run.
-    fail_open = not _background_worker_multi_worker()
     if fcntl is None:
-        if not fail_open:
-            _LOG.error("fcntl unavailable under multi-worker; refusing background-worker leadership (fail-closed).")
-        return fail_open
+        return _background_worker_lock_setup_failed("fcntl unavailable")
     lock_path = _background_worker_lock_path()
     try:
         handle = open(lock_path, "a+", encoding="utf-8")
     except OSError as exc:
         _LOG.warning("Failed to open background worker lock file %s: %s", lock_path, exc)
-        if not fail_open:
-            _LOG.error("lock file unavailable under multi-worker; refusing leadership (fail-closed).")
-        return fail_open
+        return _background_worker_lock_setup_failed(f"cannot open lock file: {exc}")
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
+        # Normal contention — another worker holds the lock. Run as a follower (no bg threads).
         handle.close()
         return False
     except OSError as exc:
         _LOG.warning("Failed to acquire background worker lock %s: %s", lock_path, exc)
         handle.close()
-        if not fail_open:
-            _LOG.error("flock failed under multi-worker; refusing leadership (fail-closed).")
-        return fail_open
+        return _background_worker_lock_setup_failed(f"flock error: {exc}")
     _background_worker_lock_handle = handle
     return True
 

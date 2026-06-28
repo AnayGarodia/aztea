@@ -67,11 +67,17 @@ _OTTO_RESP_SEM = asyncio.Semaphore(_OTTO_RESP_MAX_CONCURRENCY)
 # and FDs under bursts). Created + closed by the lifespan (part_001); _otto_http() lazily creates
 # one if the lifespan hasn't (tests / standalone). Per-request `timeout=` keeps the per-path caps.
 _OTTO_HTTP_CLIENT = None
+_OTTO_HTTP_CLOSED = False
 
 
 def _otto_http():  # -> httpx.AsyncClient
     global _OTTO_HTTP_CLIENT
     if _OTTO_HTTP_CLIENT is None:
+        if _OTTO_HTTP_CLOSED:
+            # Shutdown already closed the shared client — do NOT spawn a replacement that
+            # would never be aclose()d (orphaned sockets/FDs). Surface as unavailable; the
+            # caller's try/except turns it into the normal 502/503 path.
+            raise RuntimeError("otto http client is closed (server shutting down)")
         try:
             _mc = int(os.environ.get("OTTO_HTTP_MAX_CONNECTIONS") or 100)
             _mk = int(os.environ.get("OTTO_HTTP_MAX_KEEPALIVE") or 20)
@@ -84,8 +90,10 @@ def _otto_http():  # -> httpx.AsyncClient
 
 
 async def _otto_http_close() -> None:
-    """Close the shared client on shutdown (called from the lifespan finally)."""
-    global _OTTO_HTTP_CLIENT
+    """Close the shared client on shutdown (called from the lifespan finally, AFTER the
+    in-flight drain). Sets a sticky closed flag so _otto_http() won't re-create an orphan."""
+    global _OTTO_HTTP_CLIENT, _OTTO_HTTP_CLOSED
+    _OTTO_HTTP_CLOSED = True
     client = _OTTO_HTTP_CLIENT
     _OTTO_HTTP_CLIENT = None
     if client is not None:

@@ -840,15 +840,18 @@ async def lifespan(app: FastAPI):
             _outbound_session_mod.close()
         except Exception as exc:
             _LOG.debug("outbound_session: close failed: %s", exc)
-        try:
-            await _otto_http_close()
-        except Exception as exc:
-            _LOG.debug("otto http client: close failed: %s", exc)
         drain_deadline = time.monotonic() + _SHUTDOWN_DRAIN_TIMEOUT_SECONDS
         while time.monotonic() < drain_deadline:
             if _inflight_requests_count() <= 0:
                 break
             await asyncio.sleep(0.05)
+        # Close the shared httpx client only AFTER in-flight requests drain — closing it
+        # before the drain loop tears the connection pool out from under in-flight
+        # /otto/responses and /otto/composio handlers (502s on every worker recycle).
+        try:
+            await _otto_http_close()
+        except Exception as exc:
+            _LOG.debug("otto http client: close failed: %s", exc)
         if stop_event is not None:
             stop_event.set()
         if sweeper_thread is not None:

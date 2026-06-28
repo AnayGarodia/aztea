@@ -95,8 +95,8 @@ def _otto_composio_try_count() -> bool:
     day = time.strftime("%Y-%m-%d", time.gmtime())
     try:
         conn = _otto_composio_db()
-    except sqlite3.OperationalError:
-        return True
+    except sqlite3.OperationalError as exc:
+        return _otto_composio_cap_failopen(exc)
     try:
         conn.execute("INSERT OR IGNORE INTO otto_composio_calls (day, n) VALUES (?, 0)", (day,))
         cur = conn.execute(
@@ -104,13 +104,29 @@ def _otto_composio_try_count() -> bool:
         )
         conn.commit()
         return cur.rowcount == 1
-    except sqlite3.OperationalError:
-        return True
+    except sqlite3.OperationalError as exc:
+        return _otto_composio_cap_failopen(exc)
     finally:
         try:
             conn.close()
         except Exception:
             pass
+
+
+def _otto_composio_cap_failopen(exc) -> bool:
+    """Fail OPEN on a sqlite cap error, but distinguish transient from persistent.
+
+    Transient `database is locked/busy` (concurrent writers) is expected and quiet. A persistent
+    error (corrupt / unwritable / disk-full) is logged at ERROR so ops notices the cap is
+    effectively disabled — the 120/minute per-client rate-limit still bounds abuse meanwhile.
+    """
+    msg = str(exc).lower()
+    if "locked" in msg or "busy" in msg:
+        return True
+    _otto_composio_log.error(
+        "composio cap db unhealthy (failing open; 120/min per-client limit still applies): %s", exc
+    )
+    return True
 
 
 def _otto_composio_valid_userid(v) -> bool:
