@@ -840,7 +840,17 @@ async def lifespan(app: FastAPI):
             _outbound_session_mod.close()
         except Exception as exc:
             _LOG.debug("outbound_session: close failed: %s", exc)
-        drain_deadline = time.monotonic() + _SHUTDOWN_DRAIN_TIMEOUT_SECONDS
+        # Drain in-flight requests before tearing down the shared httpx client. Cover the otto
+        # upstream timeouts (responses 60s / composio 30s) so a slow in-flight /otto/* request
+        # finishes instead of getting its client aclose()d mid-await — that was an avoidable 502
+        # on every rolling restart under load (review 2026-06-28). The loop still breaks the
+        # instant in-flight hits 0, so a quiet restart stays fast; cap at 120s either way.
+        _otto_upstream_max = max(
+            float(globals().get("_OTTO_RESP_UPSTREAM_TIMEOUT", 0) or 0),
+            float(globals().get("_OTTO_COMPOSIO_UPSTREAM_TIMEOUT", 0) or 0),
+        )
+        _drain_seconds = min(120.0, max(float(_SHUTDOWN_DRAIN_TIMEOUT_SECONDS), _otto_upstream_max + 2.0))
+        drain_deadline = time.monotonic() + _drain_seconds
         while time.monotonic() < drain_deadline:
             if _inflight_requests_count() <= 0:
                 break

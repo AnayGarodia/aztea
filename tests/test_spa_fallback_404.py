@@ -65,3 +65,9 @@ async def test_spa_fallback_404_for_missing_assets(monkeypatch, tmp_path):
         r = await c.get("/otto")
         assert r.status_code == 200
         assert "text/html" in r.headers.get("content-type", "")
+
+        # HEAD is handled identically (Sparkle HEADs the appcast/DMG before GET): missing
+        # asset → 404, real asset → 200. This is the exact Sparkle precondition path.
+        assert (await c.head("/otto/appcast.xml")).status_code == 404
+        assert (await c.head("/releases/appcast.xml")).status_code == 404
+        assert (await c.head("/real.js")).status_code == 200

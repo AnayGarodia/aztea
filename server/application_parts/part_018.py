@@ -208,7 +208,16 @@ async def _otto_resp_via_litellm(body: dict) -> Response:  # noqa: F821
             detail=error_codes.make_error("upstream.unavailable", "Could not reach the model service. Please try again."),  # noqa: F821
         )
     if gw.status_code == 200:
-        return JSONResponse(status_code=200, content=gw.json())  # noqa: F821
+        try:
+            return JSONResponse(status_code=200, content=gw.json())  # noqa: F821
+        except Exception:
+            # 200 with a non-JSON body (empty / truncated / HTML error page / SSE) — a bare
+            # gw.json() here raised JSONDecodeError → unhandled 500 in prod (2026-06-27). Degrade
+            # to a clean 502 instead of crashing the request.
+            raise HTTPException(  # noqa: F821
+                status_code=502,
+                detail=error_codes.make_error("upstream.unavailable", "Malformed response from the model service. Please try again."),  # noqa: F821
+            )
     try:
         gw_err = gw.json()
     except Exception:
