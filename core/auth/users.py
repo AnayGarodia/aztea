@@ -107,8 +107,10 @@ def _register_user_db(params: tuple) -> "Result[dict, str]":
         except _db.IntegrityError as exc:
             message = str(exc).lower()
             if (
-                "users.email" in message
-                or "unique constraint failed: users.email" in message
+                "users.email" in message                       # sqlite
+                or "unique constraint failed: users.email" in message  # sqlite
+                or "users_email_key" in message                # postgres unique-constraint name
+                or ("duplicate key" in message and "email" in message)  # postgres, generic
             ):
                 return Err("An account with that email already exists.")
             raise  # unexpected — let it propagate as 500
@@ -1381,8 +1383,10 @@ def consume_signup_verification(email: str, otp: str) -> dict:
         except _db.IntegrityError as exc:
             message = str(exc).lower()
             if (
-                "users.email" in message
-                or "unique constraint failed: users.email" in message
+                "users.email" in message                       # sqlite
+                or "unique constraint failed: users.email" in message  # sqlite
+                or "users_email_key" in message                # postgres unique-constraint name
+                or ("duplicate key" in message and "email" in message)  # postgres, generic
             ):
                 raise SignupVerificationError(
                     "An account with that email already exists."
