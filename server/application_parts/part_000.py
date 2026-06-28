@@ -258,20 +258,35 @@ def _background_worker_lock_path() -> str:
     return f"/tmp/aztea-background-worker-{digest}.lock"
 
 
+def _background_worker_multi_worker() -> bool:
+    """True when configured for >1 worker (WEB_CONCURRENCY>1 or AZTEA_MULTI_WORKER set)."""
+    try:
+        web = int(os.environ.get("WEB_CONCURRENCY", "1") or "1")
+    except (TypeError, ValueError):
+        web = 1
+    return web > 1 or bool(os.environ.get("AZTEA_MULTI_WORKER", "").strip())
+
+
 def _acquire_background_worker_lock() -> bool:
     global _background_worker_lock_handle
     if _background_worker_lock_handle is not None:
         return True
+    # Fail CLOSED under multi-worker: if we can't take a real exclusive lock we refuse
+    # leadership (run no background threads) rather than risk split-brain duplicate workers.
+    # Under a single worker, fail OPEN so background tasks still run.
+    fail_open = not _background_worker_multi_worker()
     if fcntl is None:
-        return True
+        if not fail_open:
+            _LOG.error("fcntl unavailable under multi-worker; refusing background-worker leadership (fail-closed).")
+        return fail_open
     lock_path = _background_worker_lock_path()
     try:
         handle = open(lock_path, "a+", encoding="utf-8")
     except OSError as exc:
-        _LOG.warning(
-            "Failed to open background worker lock file %s: %s", lock_path, exc
-        )
-        return True
+        _LOG.warning("Failed to open background worker lock file %s: %s", lock_path, exc)
+        if not fail_open:
+            _LOG.error("lock file unavailable under multi-worker; refusing leadership (fail-closed).")
+        return fail_open
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -280,7 +295,9 @@ def _acquire_background_worker_lock() -> bool:
     except OSError as exc:
         _LOG.warning("Failed to acquire background worker lock %s: %s", lock_path, exc)
         handle.close()
-        return True
+        if not fail_open:
+            _LOG.error("flock failed under multi-worker; refusing leadership (fail-closed).")
+        return fail_open
     _background_worker_lock_handle = handle
     return True
 

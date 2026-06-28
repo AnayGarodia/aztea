@@ -91,6 +91,13 @@ DB_PATH = os.environ.get("DB_PATH", _DEFAULT_DB_PATH)
 _MAX_CONNECTIONS = max(1, int(os.environ.get("DB_MAX_CONNECTIONS", "96")))
 _conn_semaphore = threading.BoundedSemaphore(_MAX_CONNECTIONS)
 
+# Fail-FAST timeouts. An unbounded `_conn_semaphore.acquire()` + a `psycopg2.connect()` with no
+# timeout means that when the per-process pool (or Postgres `max_connections`) is exhausted,
+# threads block INDEFINITELY — which turns a transient slow-DB spell into an "all routes hung"
+# outage. Bound both so an exhausted pool surfaces a fast error instead of a hang.
+_DB_ACQUIRE_TIMEOUT_S = float(os.environ.get("DB_ACQUIRE_TIMEOUT_S") or 10)
+_DB_CONNECT_TIMEOUT_S = max(1, int(float(os.environ.get("DB_CONNECT_TIMEOUT_S") or 10)))
+
 _local = threading.local()
 
 
@@ -342,11 +349,17 @@ def _get_postgres_connection() -> DbConnection:
                 # Idempotent release — see _get_sqlite_connection comment.
                 pass
 
-    _conn_semaphore.acquire()
+    if not _conn_semaphore.acquire(timeout=_DB_ACQUIRE_TIMEOUT_S):
+        # Fail fast instead of blocking forever when the per-process pool is exhausted.
+        raise psycopg2.OperationalError(
+            f"database connection pool exhausted (DB_MAX_CONNECTIONS={_MAX_CONNECTIONS}) "
+            f"after {_DB_ACQUIRE_TIMEOUT_S:.0f}s; failing fast instead of blocking"
+        )
     try:
         raw = psycopg2.connect(
             _DATABASE_URL,
             cursor_factory=psycopg2.extras.RealDictCursor,
+            connect_timeout=_DB_CONNECT_TIMEOUT_S,
         )
         raw.autocommit = False
     except Exception:

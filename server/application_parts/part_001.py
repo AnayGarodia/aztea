@@ -812,6 +812,13 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         _LOG.warning("deferred: start failed: %s", exc)
 
+    # Shared per-worker httpx client for the Otto async proxies (defined in part_018; the
+    # shards share one namespace). Eager-create so it binds to this worker's event loop.
+    try:
+        _otto_http()
+    except Exception as exc:
+        _LOG.debug("otto http client: init failed: %s", exc)
+
     try:
         yield
     finally:
@@ -833,6 +840,10 @@ async def lifespan(app: FastAPI):
             _outbound_session_mod.close()
         except Exception as exc:
             _LOG.debug("outbound_session: close failed: %s", exc)
+        try:
+            await _otto_http_close()
+        except Exception as exc:
+            _LOG.debug("otto http client: close failed: %s", exc)
         drain_deadline = time.monotonic() + _SHUTDOWN_DRAIN_TIMEOUT_SECONDS
         while time.monotonic() < drain_deadline:
             if _inflight_requests_count() <= 0:
