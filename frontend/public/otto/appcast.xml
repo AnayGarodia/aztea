@@ -6,6 +6,16 @@
             <title>0.4.0</title>
             <pubDate>Sat, 27 Jun 2026 19:18:30 -0700</pubDate>
             <link>https://aztea.ai/otto</link>
+            <sparkle:version>1782613348</sparkle:version>
+            <sparkle:shortVersionString>0.4.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://aztea.ai/otto/Otto-0.4.0.dmg" length="2620734" type="application/octet-stream" sparkle:edSignature="qMsfW+B1rLS5k8iTzQpr4YaYiDHDh7yR8pB8V+Gkni81nK0wxaEP1jQTXQkEwzlokVc/TdiOz3Sb0Z57lIGADw=="/>
+        </item>
+        <item>
+            <title>0.4.0</title>
+            <pubDate>Sat, 27 Jun 2026 19:18:30 -0700</pubDate>
+            <link>https://aztea.ai/otto</link>
             <sparkle:version>1782613201</sparkle:version>
             <sparkle:shortVersionString>0.4.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
