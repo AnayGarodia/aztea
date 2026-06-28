@@ -22,6 +22,7 @@
 #   COMPOSIO_API_KEY          the Composio project key (server-side ONLY)
 #   OTTO_COMPOSIO_DAILY_CAP   max forwarded calls/day (default 5000)
 #   OTTO_BUDGET_DB            sqlite path (shared with the other Otto proxies)
+import asyncio
 import hmac
 import logging
 import os
@@ -33,6 +34,17 @@ from urllib.parse import parse_qsl, urlencode
 _otto_composio_log = logging.getLogger("otto.composio")
 _COMPOSIO_BASE = "https://backend.composio.dev/api/v3"
 _OTTO_USERID_RE = re.compile(r"^otto-[0-9a-fA-F-]{36}$")
+
+# Async + concurrency cap (mirrors part_018). The handler is async + uses the shared httpx
+# client (_otto_http, part_018) so a slow Composio upstream never blocks a worker threadpool
+# slot; the semaphore bounds in-flight upstream calls. The sqlite daily-cap runs via
+# asyncio.to_thread so it doesn't block the event loop.
+_OTTO_COMPOSIO_UPSTREAM_TIMEOUT = float(os.environ.get("OTTO_COMPOSIO_TIMEOUT_S") or 30)
+try:
+    _OTTO_COMPOSIO_MAX_CONCURRENCY = int(os.environ.get("OTTO_COMPOSIO_MAX_CONCURRENCY") or 24)
+except (TypeError, ValueError):
+    _OTTO_COMPOSIO_MAX_CONCURRENCY = 24
+_OTTO_COMPOSIO_SEM = asyncio.Semaphore(_OTTO_COMPOSIO_MAX_CONCURRENCY)
 
 # Exactly the (method, path-under-/api/v3) pairs Composio.swift + the cherry-picked
 # listToolkits/listActions call. Anything else → 403.
@@ -72,10 +84,19 @@ def _otto_composio_db() -> sqlite3.Connection:
 
 
 def _otto_composio_try_count() -> bool:
-    """Atomically bump today's (UTC) counter iff under the cap. False when exhausted."""
+    """Atomically bump today's (UTC) counter iff under the cap. False when exhausted.
+
+    FAIL OPEN on a transient SQLite lock: under concurrent writers (24-deep semaphore × 3
+    workers all hammering one local file) `database is locked` can outlast busy_timeout. The
+    daily cap is a soft abuse ceiling, not a correctness gate — a contended counter must never
+    turn a legitimate call into a 500. Worst case a few calls slip past the cap.
+    """
     cap = _otto_composio_daily_cap()
     day = time.strftime("%Y-%m-%d", time.gmtime())
-    conn = _otto_composio_db()
+    try:
+        conn = _otto_composio_db()
+    except sqlite3.OperationalError as exc:
+        return _otto_composio_cap_failopen(exc)
     try:
         conn.execute("INSERT OR IGNORE INTO otto_composio_calls (day, n) VALUES (?, 0)", (day,))
         cur = conn.execute(
@@ -83,8 +104,29 @@ def _otto_composio_try_count() -> bool:
         )
         conn.commit()
         return cur.rowcount == 1
+    except sqlite3.OperationalError as exc:
+        return _otto_composio_cap_failopen(exc)
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _otto_composio_cap_failopen(exc) -> bool:
+    """Fail OPEN on a sqlite cap error, but distinguish transient from persistent.
+
+    Transient `database is locked/busy` (concurrent writers) is expected and quiet. A persistent
+    error (corrupt / unwritable / disk-full) is logged at ERROR so ops notices the cap is
+    effectively disabled — the 120/minute per-client rate-limit still bounds abuse meanwhile.
+    """
+    msg = str(exc).lower()
+    if "locked" in msg or "busy" in msg:
+        return True
+    _otto_composio_log.error(
+        "composio cap db unhealthy (failing open; 120/min per-client limit still applies): %s", exc
+    )
+    return True
 
 
 def _otto_composio_valid_userid(v) -> bool:
@@ -93,8 +135,8 @@ def _otto_composio_valid_userid(v) -> bool:
 
 @app.api_route("/otto/composio/{path:path}", methods=["GET", "POST"])  # noqa: F821
 @limiter.limit("120/minute")  # noqa: F821
-def otto_composio(request: Request, path: str, body: dict | None = Body(default=None)) -> Response:  # noqa: F821
-    """Allowlisted, authenticated relay to Composio v3 for the Otto app."""
+async def otto_composio(request: Request, path: str, body: dict | None = Body(default=None)) -> Response:  # noqa: F821
+    """Allowlisted, authenticated relay to Composio v3 for the Otto app (async + sem-capped)."""
     # 1. Auth — shared bearer (constant-time).
     expected = os.environ.get("OTTO_APP_TOKEN", "").strip()
     if not expected:
@@ -135,29 +177,33 @@ def otto_composio(request: Request, path: str, body: dict | None = Body(default=
     if isinstance(body, dict) and "user_id" in body and not _otto_composio_valid_userid(body["user_id"]):
         raise HTTPException(status_code=400, detail=error_codes.make_error(error_codes.INVALID_INPUT, "Bad user_id."))  # noqa: F821
 
-    # 4. Daily cap (abuse ceiling; Composio isn't per-token billed).
-    if not _otto_composio_try_count():
-        raise HTTPException(  # noqa: F821
-            status_code=429,
-            detail=error_codes.make_error("payment.spend_limit_exceeded", "Otto app integrations are at today's capacity. Please try again later."),  # noqa: F821
-        )
+    # 4-5. Daily cap + upstream forward, concurrency-bounded. The sqlite cap runs in a thread
+    #      (it's blocking) and the upstream uses the shared async client, so neither blocks the
+    #      event loop and a slow Composio can't exhaust the worker.
+    async with _OTTO_COMPOSIO_SEM:
+        # 4. Daily cap (abuse ceiling; Composio isn't per-token billed).
+        if not await asyncio.to_thread(_otto_composio_try_count):
+            raise HTTPException(  # noqa: F821
+                status_code=429,
+                detail=error_codes.make_error("payment.spend_limit_exceeded", "Otto app integrations are at today's capacity. Please try again later."),  # noqa: F821
+            )
 
-    # 5. Forward to Composio with the server-side key.
-    url = _COMPOSIO_BASE + norm
-    if q:
-        url += "?" + urlencode(q)
-    headers = {"x-api-key": composio_key, "content-type": "application/json"}
-    t0 = time.time()
-    try:
-        if method == "GET":
-            upstream = http.get(url, headers=headers, timeout=30)  # noqa: F821
-        else:
-            upstream = http.post(url, json=(body or {}), headers=headers, timeout=30)  # noqa: F821
-    except Exception:
-        raise HTTPException(  # noqa: F821
-            status_code=502,
-            detail=error_codes.make_error("upstream.unavailable", "Could not reach the app-integration service. Please try again."),  # noqa: F821
-        )
+        # 5. Forward to Composio with the server-side key (shared httpx client).
+        url = _COMPOSIO_BASE + norm
+        if q:
+            url += "?" + urlencode(q)
+        headers = {"x-api-key": composio_key, "content-type": "application/json"}
+        t0 = time.time()
+        try:
+            if method == "GET":
+                upstream = await _otto_http().get(url, headers=headers, timeout=_OTTO_COMPOSIO_UPSTREAM_TIMEOUT)  # noqa: F821
+            else:
+                upstream = await _otto_http().post(url, json=(body or {}), headers=headers, timeout=_OTTO_COMPOSIO_UPSTREAM_TIMEOUT)  # noqa: F821
+        except Exception:
+            raise HTTPException(  # noqa: F821
+                status_code=502,
+                detail=error_codes.make_error("upstream.unavailable", "Could not reach the app-integration service. Please try again."),  # noqa: F821
+            )
 
     uid = str(q.get("user_id") or (body or {}).get("user_id") or "-")[:18]
     _otto_composio_log.info(

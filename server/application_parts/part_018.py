@@ -61,6 +61,47 @@ except (TypeError, ValueError):
     _OTTO_RESP_MAX_CONCURRENCY = 24
 _OTTO_RESP_SEM = asyncio.Semaphore(_OTTO_RESP_MAX_CONCURRENCY)
 
+# ── Shared httpx client (one per worker process) ──────────────────────────────
+# All Otto async proxies (responses, composio) reuse ONE AsyncClient per worker with explicit
+# connection limits, instead of building/tearing a client per request (which churns TCP/TLS pools
+# and FDs under bursts). Created + closed by the lifespan (part_001); _otto_http() lazily creates
+# one if the lifespan hasn't (tests / standalone). Per-request `timeout=` keeps the per-path caps.
+_OTTO_HTTP_CLIENT = None
+_OTTO_HTTP_CLOSED = False
+
+
+def _otto_http():  # -> httpx.AsyncClient
+    global _OTTO_HTTP_CLIENT
+    if _OTTO_HTTP_CLIENT is None:
+        if _OTTO_HTTP_CLOSED:
+            # Shutdown already closed the shared client — do NOT spawn a replacement that
+            # would never be aclose()d (orphaned sockets/FDs). Surface as unavailable; the
+            # caller's try/except turns it into the normal 502/503 path.
+            raise RuntimeError("otto http client is closed (server shutting down)")
+        try:
+            _mc = int(os.environ.get("OTTO_HTTP_MAX_CONNECTIONS") or 100)
+            _mk = int(os.environ.get("OTTO_HTTP_MAX_KEEPALIVE") or 20)
+        except (TypeError, ValueError):
+            _mc, _mk = 100, 20
+        _OTTO_HTTP_CLIENT = httpx.AsyncClient(
+            limits=httpx.Limits(max_connections=_mc, max_keepalive_connections=_mk)
+        )
+    return _OTTO_HTTP_CLIENT
+
+
+async def _otto_http_close() -> None:
+    """Close the shared client on shutdown (called from the lifespan finally, AFTER the
+    in-flight drain). Sets a sticky closed flag so _otto_http() won't re-create an orphan."""
+    global _OTTO_HTTP_CLIENT, _OTTO_HTTP_CLOSED
+    _OTTO_HTTP_CLOSED = True
+    client = _OTTO_HTTP_CLIENT
+    _OTTO_HTTP_CLIENT = None
+    if client is not None:
+        try:
+            await client.aclose()
+        except Exception:
+            pass
+
 # Approximate Azure gpt-5.x list prices, (input, output) cents per 1,000,000 tokens.
 # This only sizes the shared spend cap — TUNE to your actual Azure rate card. Rounding
 # UP means the cap trips slightly early rather than overshooting the dollar budget.
@@ -158,15 +199,25 @@ async def _otto_resp_via_litellm(body: dict) -> Response:  # noqa: F821
     body["model"] = (os.environ.get("OTTO_RESPONSES_LITELLM_MODEL") or "otto-responses").strip()
     headers = {"authorization": f"Bearer {gw_key}", "content-type": "application/json"}
     try:
-        async with httpx.AsyncClient(timeout=_OTTO_RESP_UPSTREAM_TIMEOUT) as client:
-            gw = await client.post(f"{gw_base}/v1/responses", json=body, headers=headers)
+        gw = await _otto_http().post(
+            f"{gw_base}/v1/responses", json=body, headers=headers, timeout=_OTTO_RESP_UPSTREAM_TIMEOUT
+        )
     except Exception:
         raise HTTPException(  # noqa: F821
             status_code=502,
             detail=error_codes.make_error("upstream.unavailable", "Could not reach the model service. Please try again."),  # noqa: F821
         )
     if gw.status_code == 200:
-        return JSONResponse(status_code=200, content=gw.json())  # noqa: F821
+        try:
+            return JSONResponse(status_code=200, content=gw.json())  # noqa: F821
+        except Exception:
+            # 200 with a non-JSON body (empty / truncated / HTML error page / SSE) — a bare
+            # gw.json() here raised JSONDecodeError → unhandled 500 in prod (2026-06-27). Degrade
+            # to a clean 502 instead of crashing the request.
+            raise HTTPException(  # noqa: F821
+                status_code=502,
+                detail=error_codes.make_error("upstream.unavailable", "Malformed response from the model service. Please try again."),  # noqa: F821
+            )
     try:
         gw_err = gw.json()
     except Exception:

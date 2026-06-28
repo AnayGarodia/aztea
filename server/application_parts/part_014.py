@@ -1824,6 +1824,21 @@ def _looks_like_api_client(request: Request) -> bool:
     return "application/json" in accept and "text/html" not in accept
 
 
+# Known static-asset extensions. A request for one of these that doesn't exist on disk is a
+# real 404 — serving index.html (200 text/html) for it masks missing assets (e.g. a stale Otto
+# appcast.xml / DMG → breaks Sparkle, which expects XML/binary). Extension-less paths and dotted
+# SPA deep links (e.g. /users/jane.doe) are NOT in this set, so they still serve the SPA shell.
+_SPA_STATIC_EXTENSIONS = frozenset({
+    ".xml", ".dmg", ".js", ".mjs", ".cjs", ".css", ".map", ".json", ".png", ".jpg", ".jpeg",
+    ".gif", ".svg", ".ico", ".webp", ".avif", ".woff", ".woff2", ".ttf", ".eot", ".txt",
+    ".pdf", ".zip", ".gz", ".wasm", ".webmanifest", ".csv", ".mp4", ".webm", ".wav",
+})
+# Directories that only ever hold static files. The 404 below requires BOTH a prefix here AND a
+# static extension, so it can never collide with an extension-less SPA route (e.g. /otto landing)
+# or a dotted SPA slug (e.g. /builders/jane.doe) anywhere outside these dirs.
+_SPA_STATIC_PREFIXES = ("assets", "releases", "otto", "downloads", "static")
+
+
 @app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
 def spa_fallback(full_path: str, request: Request) -> _SpaFileResponse:
     """Serve static assets or the React SPA shell for any non-API path.
@@ -1889,6 +1904,15 @@ def spa_fallback(full_path: str, request: Request) -> _SpaFileResponse:
         candidate = _FRONTEND_DIST_DIR / safe_fragment
         if candidate.is_file() and _resolved_under(_FRONTEND_DIST_DIR, candidate):
             return _SpaFileResponse(str(candidate))
+        # Missing static asset → real 404 (don't mask it as the SPA shell). Require BOTH a known
+        # static dir AND a static extension, so SPA routes (extension-less, or dotted slugs
+        # outside these dirs) still fall through to index.html. HEAD is handled identically.
+        _seg0 = safe_fragment.split("/", 1)[0].lower()
+        if _seg0 in _SPA_STATIC_PREFIXES and candidate.suffix.lower() in _SPA_STATIC_EXTENSIONS:
+            raise HTTPException(
+                status_code=404,
+                detail=error_codes.make_error("not_found", f"{full_path} not found."),
+            )
 
     index_file = _FRONTEND_DIST_DIR / "index.html"
     if index_file.is_file():

@@ -91,6 +91,19 @@ DB_PATH = os.environ.get("DB_PATH", _DEFAULT_DB_PATH)
 _MAX_CONNECTIONS = max(1, int(os.environ.get("DB_MAX_CONNECTIONS", "96")))
 _conn_semaphore = threading.BoundedSemaphore(_MAX_CONNECTIONS)
 
+# Fail-FAST timeouts. An unbounded `_conn_semaphore.acquire()` + a `psycopg2.connect()` with no
+# timeout means that when the per-process pool (or Postgres `max_connections`) is exhausted,
+# threads block INDEFINITELY — which turns a transient slow-DB spell into an "all routes hung"
+# outage. Bound both so an exhausted pool surfaces a fast error instead of a hang.
+_DB_ACQUIRE_TIMEOUT_S = float(os.environ.get("DB_ACQUIRE_TIMEOUT_S") or 10)
+_DB_CONNECT_TIMEOUT_S = max(1, int(float(os.environ.get("DB_CONNECT_TIMEOUT_S") or 10)))
+# Server-side query guards (ms). lock_timeout aborts a statement that waits too long for a lock;
+# idle_in_transaction aborts a transaction left idle — both release the held connection slot, so a
+# stuck lock-wait or leaked transaction can't pin the pool toward an "all routes hung" outage.
+# Deliberately NO blanket statement_timeout (that would abort legitimately slow queries/migrations).
+_DB_LOCK_TIMEOUT_MS = max(0, int(float(os.environ.get("DB_LOCK_TIMEOUT_MS") or 10000)))
+_DB_IDLE_TX_TIMEOUT_MS = max(0, int(float(os.environ.get("DB_IDLE_TX_TIMEOUT_MS") or 60000)))
+
 _local = threading.local()
 
 
@@ -267,7 +280,13 @@ def _release_sqlite_wrapper(wrapper: DbConnection) -> None:
 
 
 def _open_sqlite_connection(db_path: str) -> DbConnection:
-    _conn_semaphore.acquire()
+    if not _conn_semaphore.acquire(timeout=_DB_ACQUIRE_TIMEOUT_S):
+        # Same fail-fast as the Postgres path — don't block forever on an exhausted pool
+        # (matters for the OSS/Docker SQLite backend).
+        raise sqlite3.OperationalError(
+            f"database connection pool exhausted (DB_MAX_CONNECTIONS={_MAX_CONNECTIONS}) "
+            f"after {_DB_ACQUIRE_TIMEOUT_S:.0f}s; failing fast instead of blocking"
+        )
     try:
         path_key = _sqlite_path_key(db_path)
         raw = sqlite3.connect(path_key, check_same_thread=False, timeout=15)
@@ -337,16 +356,33 @@ def _get_postgres_connection() -> DbConnection:
             _LOG.warning("postgres liveness check failed; recycling connection: %s", exc)
             _local.conn = None
             try:
+                # Close the dead raw connection BEFORE returning its slot to the semaphore —
+                # otherwise a transient liveness failure leaks the socket/FD while handing
+                # capacity back, slowly defeating the connection cap.
+                wrapper._conn.close()
+            except Exception:
+                pass
+            try:
                 _conn_semaphore.release()
             except ValueError:
                 # Idempotent release — see _get_sqlite_connection comment.
                 pass
 
-    _conn_semaphore.acquire()
+    if not _conn_semaphore.acquire(timeout=_DB_ACQUIRE_TIMEOUT_S):
+        # Fail fast instead of blocking forever when the per-process pool is exhausted.
+        raise psycopg2.OperationalError(
+            f"database connection pool exhausted (DB_MAX_CONNECTIONS={_MAX_CONNECTIONS}) "
+            f"after {_DB_ACQUIRE_TIMEOUT_S:.0f}s; failing fast instead of blocking"
+        )
     try:
         raw = psycopg2.connect(
             _DATABASE_URL,
             cursor_factory=psycopg2.extras.RealDictCursor,
+            connect_timeout=_DB_CONNECT_TIMEOUT_S,
+            options=(
+                f"-c lock_timeout={_DB_LOCK_TIMEOUT_MS} "
+                f"-c idle_in_transaction_session_timeout={_DB_IDLE_TX_TIMEOUT_MS}"
+            ),
         )
         raw.autocommit = False
     except Exception:
