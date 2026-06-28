@@ -1250,6 +1250,163 @@ def auth_google(
     return JSONResponse(content={**result, **_auth_legal_payload(result)})
 
 
+
+# --- Desktop Google OAuth (Otto macOS app) -------------------------------
+# The app opens GET /auth/otto/google?state=<nonce> in the user's DEFAULT
+# browser (no embedded webview, no consent popup), we bounce to Google's
+# consent screen, Google returns to /auth/otto/google/callback, and we hand
+# the minted session key back to the app via the otto:// deep link. The
+# `state` nonce is generated and verified by the app (URL-scheme injection
+# guard) — we only echo it back unchanged.
+def _otto_google_deep_link(state: str, *, key: str = "", key_id: str = "", error: str = "") -> str:
+    from urllib.parse import urlencode
+    q = {"state": state or ""}
+    if key:
+        q["key"] = key
+        if key_id:
+            q["key_id"] = key_id
+    else:
+        q["error"] = error or "unknown"
+    return "otto://auth/callback?" + urlencode(q)
+
+
+def _otto_google_redirect_uri() -> str:
+    base = (os.environ.get("SERVER_BASE_URL", "") or "https://aztea.ai").strip().rstrip("/")
+    return f"{base}/auth/otto/google/callback"
+
+
+@app.get("/auth/otto/google", responses=_error_responses(503))
+@limiter.limit(_AUTH_RATE_LIMIT, key_func=get_remote_address)
+def auth_otto_google_start(request: Request, state: str = ""):
+    """Begin the desktop Google OAuth flow by redirecting to Google's consent
+    screen. Called by the Otto macOS app in the user's default browser."""
+    from fastapi.responses import RedirectResponse
+    from urllib.parse import urlencode
+    client_id = (os.environ.get("GOOGLE_CLIENT_ID", "") or "").strip()
+    if not client_id:
+        raise HTTPException(
+            status_code=503, detail="Google sign-in is not configured on this server."
+        )
+    params = {
+        "client_id": client_id,
+        "redirect_uri": _otto_google_redirect_uri(),
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "prompt": "select_account",
+        "access_type": "online",
+        "include_granted_scopes": "true",
+    }
+    url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
+    return RedirectResponse(url, status_code=302)
+
+
+@app.get("/auth/otto/google/callback")
+@limiter.limit(_AUTH_RATE_LIMIT, key_func=get_remote_address)
+def auth_otto_google_callback(
+    request: Request, state: str = "", code: str = "", error: str = ""
+):
+    """Google redirects here after consent. Exchange the code, verify the
+    id_token, find-or-create the account, mint a fresh session key, and bounce
+    back into the app via the otto:// deep link (key on success, error on
+    failure — the app shows the failure reason and lets the user retry)."""
+    from fastapi.responses import RedirectResponse
+
+    def _back(**kw):
+        return RedirectResponse(_otto_google_deep_link(state, **kw), status_code=302)
+
+    if error or not code:
+        return _back(error=error or "no_code")
+    client_id = (os.environ.get("GOOGLE_CLIENT_ID", "") or "").strip()
+    client_secret = (os.environ.get("GOOGLE_CLIENT_SECRET", "") or "").strip()
+    if not client_id or not client_secret:
+        return _back(error="not_configured")
+    # 1. Exchange the authorization code for tokens.
+    try:
+        token_resp = http.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code": code,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "redirect_uri": _otto_google_redirect_uri(),
+                "grant_type": "authorization_code",
+            },
+            timeout=8.0,
+        )
+    except Exception:
+        _LOG.exception("Google token exchange request failed")
+        return _back(error="google_unreachable")
+    if token_resp.status_code != 200:
+        _LOG.warning("Google token exchange non-200: %s %s", token_resp.status_code, token_resp.text[:200])
+        return _back(error="token_exchange_failed")
+    try:
+        id_token = (token_resp.json() or {}).get("id_token", "")
+    except ValueError:
+        id_token = ""
+    if not id_token:
+        return _back(error="no_id_token")
+    # 2. Verify the id_token + read claims (same tokeninfo path as POST /auth/google).
+    try:
+        info = http.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"id_token": id_token},
+            timeout=5.0,
+        )
+    except Exception:
+        _LOG.exception("Google tokeninfo request failed")
+        return _back(error="google_unreachable")
+    if info.status_code != 200:
+        return _back(error="verify_failed")
+    try:
+        claims = info.json()
+    except ValueError:
+        return _back(error="verify_failed")
+    if claims.get("aud") != client_id:
+        return _back(error="wrong_audience")
+    if str(claims.get("email_verified")).lower() != "true":
+        return _back(error="email_unverified")
+    email = (claims.get("email") or "").strip().lower()
+    name = (claims.get("name") or "").strip()
+    if not email:
+        return _back(error="no_email")
+    # 3. Find-or-create the account.
+    try:
+        _auth.init_auth_db()
+        result, created = _auth.login_or_register_via_google(email, name)
+    except _auth.AccountSuspendedError:
+        return _back(error="account_suspended")
+    except _db.OperationalError:
+        _LOG.exception("Google desktop sign-in DB error")
+        return _back(error="server_error")
+    if created:
+        _credit_starter_balance(result)
+        try:
+            _email.send_welcome(
+                result.get("email", ""),
+                result.get("username", "there"),
+                role=result.get("role", "both"),
+            )
+        except Exception:  # pragma: no cover - welcome email is non-fatal
+            _LOG.exception("Welcome email failed for Google desktop signup")
+    # 4. Hand a USABLE raw key back. For an existing user with a live session
+    #    key, login_or_register_via_google reuses it and returns raw_api_key=None
+    #    (the raw value can't be recovered) — the desktop app needs a real key,
+    #    so mint a fresh session key here, matching password login's rotate=true.
+    raw_key = result.get("raw_api_key") or ""
+    key_id = result.get("key_id") or ""
+    if not raw_key:
+        try:
+            minted = _auth._create_key_for_user(result["user_id"], "Session key")
+            raw_key = minted["raw_key"]
+            key_id = minted["key_id"]
+        except Exception:
+            _LOG.exception("Failed to mint fresh session key for Google desktop sign-in")
+            return _back(error="server_error")
+    return _back(key=raw_key, key_id=key_id)
+# --- end desktop Google OAuth -------------------------------------------
+
+
 @app.get(
     "/auth/me",
     response_model=core_models.AuthMeResponse,
