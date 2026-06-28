@@ -331,7 +331,7 @@ async def otto_responses(request: Request, body: dict = Body(...)) -> Response: 
         )
     auth = request.headers.get("Authorization", "")
     token = auth[len("Bearer ") :].strip() if auth.startswith("Bearer ") else ""
-    if not token or not hmac.compare_digest(token, expected):
+    if not _otto_proxy_auth_ok(token):
         raise HTTPException(  # noqa: F821
             status_code=401,
             detail=error_codes.make_error("auth.invalid_or_expired_token", "Invalid Otto app token."),  # noqa: F821

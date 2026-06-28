@@ -261,6 +261,23 @@ async def _otto_rt_pump_upstream_to_client(client: WebSocket, upstream, cap_cent
             return
 
 
+
+def _otto_proxy_auth_ok(token: str) -> bool:
+    """Authorize an /otto/* proxy request. Accepts EITHER the shared app token
+    (OTTO_APP_TOKEN — legacy / unsigned clients) OR a valid signed-in user's
+    API key (az_...). The Otto macOS app sends the user's own key after
+    sign-in, so real users authenticate as themselves, not a shared secret."""
+    if not token:
+        return False
+    expected = os.environ.get("OTTO_APP_TOKEN", "").strip()
+    if expected and hmac.compare_digest(token, expected):
+        return True
+    try:
+        return _auth.verify_api_key(token) is not None
+    except Exception:
+        _LOG.exception("otto proxy: user-key verification raised")
+        return False
+
 @app.websocket("/otto/realtime")  # noqa: F821  (app is provided by part_000's shared namespace)
 async def otto_realtime(websocket: WebSocket) -> None:
     """Authenticated, budget-metered relay to Azure OpenAI Realtime for the Otto app."""
@@ -273,7 +290,7 @@ async def otto_realtime(websocket: WebSocket) -> None:
         await websocket.close(code=4503)  # service not configured
         return
     token = _otto_rt_bearer(websocket)
-    if not token or not hmac.compare_digest(token, expected):
+    if not _otto_proxy_auth_ok(token):
         await websocket.close(code=4401)  # invalid token
         return
 
