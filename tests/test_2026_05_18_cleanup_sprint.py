@@ -14,7 +14,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-
 # ---------------------------------------------------------------------------
 # C3 — hire_async wall-clock budget is separate from the sync 8s budget.
 # Previously regressed: the async worker dispatched through the sync budget
@@ -415,9 +414,10 @@ def test_c11_search_catalog_only_lists_real_recipes():
     src = Path("sdks/python-sdk/aztea/mcp/server.py").read_text()
     idx = src.find("_BUILTIN_RECIPE_CATALOG_ENTRIES")
     assert idx >= 0
-    # Pull each "id": "<slug>" from the catalog block.
-    catalog_block = src[idx : idx + 4000]
-    listed_slugs = set(re.findall(r'"id":\s*"([\w-]+)"', catalog_block))
+    # Pull each recipe_id from the catalog block. The catalog uses
+    # `recipe_id`, not a generic `id`; this must catch stale recipe entries.
+    catalog_block = src[idx : idx + 12000]
+    listed_slugs = set(re.findall(r'"recipe_id":\s*"([\w-]+)"', catalog_block))
     real_slugs = {r["recipe_id"] for r in recipes.BUILTIN_RECIPES}
     # Every listed slug must back a real recipe — surfacing a slug that
     # doesn't resolve is worse than not advertising it.
@@ -426,6 +426,10 @@ def test_c11_search_catalog_only_lists_real_recipes():
         f"search catalog lists {missing} which have no recipe backing — "
         "the modernize-python regression: callers see a slug in search "
         "but run_recipe returns 'Pipeline not found'"
+    )
+    unsurfaced = real_slugs - listed_slugs
+    assert not unsurfaced, (
+        f"recipes {unsurfaced} exist but are absent from the MCP search catalog"
     )
 
 

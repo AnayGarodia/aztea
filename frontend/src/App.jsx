@@ -170,11 +170,11 @@ export default function App() {
           <ErrorBoundary>
             <Suspense fallback={<AppBoot />}>
               <Routes>
+                <Route path="/otto" element={<OttoPage />} />
                 <Route path="/welcome" element={<LandingPage />} />
                 <Route path="/pricing" element={<LandingPage />} />
                 <Route path="/terms"   element={<TermsPage />} />
                 <Route path="/privacy" element={<PrivacyPage />} />
-                <Route path="/otto"    element={<OttoPage />} />
                 <Route path="/docs" element={<DocsGate />} />
                 <Route path="/docs/:docSlug" element={<DocsGate />} />
                 <Route path="/marketplace" element={<PublicMarketApp><AgentsPage /></PublicMarketApp>} />

@@ -1,141 +1,67 @@
-import { Apple, Command, MousePointerClick, Brain, Hand, ShieldCheck } from 'lucide-react'
-import Topbar from '../layout/Topbar'
-import Button from '../ui/Button'
-import { usePageMeta } from '../seo/usePageMeta'
-import './OttoPage.css'
+import { useEffect } from 'react'
 
-const VERSION = '0.4.0'
-const DMG_HREF = `/assets/otto/Otto-${VERSION}.dmg`
-
-const FEATURES = [
-  {
-    icon: Command,
-    title: 'Summon in a tap',
-    body: 'Double-tap Right ⌘ for the typed bar, or hold Right ⌘ to talk. Otto appears over whatever you’re already doing.',
-  },
-  {
-    icon: MousePointerClick,
-    title: 'Acts in your real apps',
-    body: 'Drives the foreground app through the macOS accessibility tree, the browser (Arc, Chrome, Safari, Brave), or — when an app exposes no structure — by seeing the screen.',
-  },
-  {
-    icon: Brain,
-    title: 'Knows your context',
-    body: 'An always-on layer reads your screen on-device into a private memory, plus a profile you edit — so Otto acts with your context instead of stopping to ask.',
-  },
-  {
-    icon: Hand,
-    title: 'Stays in your control',
-    body: 'Otto asks when it’s unsure instead of inventing details, and you can stop it at any moment by clicking the mouse or double-tapping Esc.',
-  },
-]
+// Bumped automatically by update.sh on every release — do not edit by hand.
+const VERSION = '0.5.0'
+const DMG = `Otto-${VERSION}.dmg`
+const DMG_HREF = `/otto/${DMG}`
 
 export default function OttoPage() {
-  usePageMeta({
-    title: 'Otto — a native macOS agent that does your computer work',
-    description:
-      'Otto is a native macOS agent. Summon it, say what you want in plain words, and it operates your real apps and websites — watched, live — using what it already knows about you.',
-    ogImage: '/hero-adam-square.png',
-  })
-
-  const handleDownload = () => {
-    const a = document.createElement('a')
-    a.href = DMG_HREF
-    a.download = `Otto-${VERSION}.dmg`
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-  }
+  useEffect(() => { document.title = 'Otto – AI agent for your Mac' }, [])
 
   return (
-    <main className="otto">
-      <Topbar crumbs={[{ label: 'Otto' }]} />
-      <div className="otto__scroll">
-        <div className="otto__content">
-          {/* Hero */}
-          <section className="otto__hero">
-            <p className="otto__eyebrow">Native macOS app</p>
-            <h1 className="otto__h1">Otto does your computer work, as you.</h1>
-            <p className="otto__lead">
-              Summon Otto, say or type what you want in plain words, and it operates your real apps
-              and websites — watched, live — using what it already knows about you.
-            </p>
-            <div className="otto__cta-row">
-              <Button variant="primary" size="lg" icon={<Apple size={18} />} onClick={handleDownload}>
-                Download for macOS
-              </Button>
-            </div>
-            <p className="otto__meta">Version {VERSION} · macOS 14 Sonoma or later · Apple Silicon</p>
-          </section>
+    <div style={{
+      minHeight: '100vh',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: '#0f0f0f',
+      color: '#f5f0e8',
+      fontFamily: 'system-ui, -apple-system, sans-serif',
+      padding: '2rem',
+      textAlign: 'center',
+    }}>
+      <svg width="64" height="64" viewBox="0 0 64 64" fill="none" style={{ marginBottom: '1.5rem' }}>
+        <circle cx="32" cy="32" r="32" fill="#1a1a1a" />
+        {/* Octagram: two squares rotated 0° and 45° */}
+        {[0, 45].map(deg => {
+          const rad = deg * Math.PI / 180
+          const r = 22
+          const pts = [0, 1, 2, 3].map(i => {
+            const a = rad + i * Math.PI / 2
+            return `${32 + r * Math.cos(a)},${32 + r * Math.sin(a)}`
+          }).join(' ')
+          return <polygon key={deg} points={pts} fill="none" stroke="#2dd4bf" strokeWidth="3" strokeLinejoin="round" />
+        })}
+        <circle cx="32" cy="32" r="5" fill="#c05a3a" />
+      </svg>
 
-          {/* Install */}
-          <section className="otto__card otto__install">
-            <h2 className="otto__h2">Installing Otto</h2>
-            <p className="otto__muted">
-              Otto is a young app and isn’t notarized by Apple yet, so macOS asks you to confirm the
-              first launch. You only do this once.
-            </p>
-            <ol className="otto__steps">
-              <li>
-                Open the downloaded <strong>Otto.dmg</strong> and drag <strong>Otto</strong> onto the{' '}
-                <strong>Applications</strong> folder.
-              </li>
-              <li>
-                In <strong>Applications</strong>, <strong>right-click&nbsp;Otto</strong> (or
-                Control-click) and choose <strong>Open</strong>, then click <strong>Open</strong> in
-                the dialog. Opening it this way gives you the <strong>Open</strong> button — a plain
-                double-click only offers <em>Move&nbsp;to&nbsp;Bin</em>. You do this once; after that
-                Otto opens normally.
-              </li>
-            </ol>
-            <p className="otto__muted otto__alt">
-              Didn’t see an <strong>Open</strong> button? Open{' '}
-              <strong>System&nbsp;Settings → Privacy&nbsp;&amp;&nbsp;Security</strong>, scroll to the
-              message about Otto, and click <strong>Open&nbsp;Anyway</strong>. Or, in the terminal, run{' '}
-              <code>xattr -dr com.apple.quarantine /Applications/Otto.app</code> and open Otto normally.
-            </p>
-          </section>
+      <h1 style={{ fontSize: '2rem', fontWeight: 700, margin: '0 0 0.5rem' }}>Otto</h1>
+      <p style={{ fontSize: '1.1rem', color: '#a0978a', margin: '0 0 2rem', maxWidth: '380px' }}>
+        An AI agent that runs on your Mac — sees your screen, clicks things, and gets work done hands-free.
+      </p>
 
-          {/* Features */}
-          <section className="otto__features">
-            <h2 className="otto__h2 otto__h2--center">What it does</h2>
-            <div className="otto__grid">
-              {FEATURES.map(({ icon: Icon, title, body }) => (
-                <article key={title} className="otto__card otto__feature">
-                  <span className="otto__feature-icon">
-                    <Icon size={20} />
-                  </span>
-                  <h3 className="otto__feature-title">{title}</h3>
-                  <p className="otto__muted">{body}</p>
-                </article>
-              ))}
-            </div>
-          </section>
+      <a
+        href={DMG_HREF}
+        download
+        style={{
+          display: 'inline-block',
+          padding: '0.75rem 2rem',
+          background: '#2dd4bf',
+          color: '#0f0f0f',
+          borderRadius: '8px',
+          fontWeight: 600,
+          fontSize: '1rem',
+          textDecoration: 'none',
+          marginBottom: '0.75rem',
+        }}
+      >
+        Download Otto {VERSION}
+      </a>
 
-          {/* Privacy */}
-          <section className="otto__card otto__privacy">
-            <span className="otto__privacy-icon">
-              <ShieldCheck size={22} />
-            </span>
-            <div>
-              <h2 className="otto__h2">Private by design</h2>
-              <p className="otto__muted">
-                Screenshots are read as text on your Mac with Vision OCR — the image never leaves the
-                device. Your memory and profile live in <code>~/.otto</code>, readable only by you. When
-                you give a command, Otto sends just that task’s context to the model.
-              </p>
-            </div>
-          </section>
-
-          {/* Footer CTA */}
-          <footer className="otto__footer">
-            <Button variant="primary" size="lg" icon={<Apple size={18} />} onClick={handleDownload}>
-              Download Otto for macOS
-            </Button>
-            <p className="otto__meta">Version {VERSION} · macOS 14 Sonoma or later · Apple Silicon</p>
-          </footer>
-        </div>
-      </div>
-    </main>
+      <p style={{ fontSize: '0.8rem', color: '#6b6460', margin: 0 }}>
+        macOS 14 Sonoma or later · Apple Silicon &amp; Intel
+      </p>
+    </div>
   )
 }
