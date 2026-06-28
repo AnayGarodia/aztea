@@ -5,7 +5,7 @@ import { usePageMeta } from '../seo/usePageMeta'
 import './OttoPage.css'
 
 const VERSION = '0.4.0'
-const DMG_HREF = `/otto/Otto-${VERSION}.dmg`
+const DMG_HREF = `/assets/otto/Otto-${VERSION}.dmg`
 
 const FEATURES = [
   {

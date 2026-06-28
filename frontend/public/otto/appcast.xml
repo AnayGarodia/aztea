@@ -10,7 +10,7 @@
             <sparkle:shortVersionString>0.4.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://aztea.ai/otto/Otto-0.4.0.dmg" length="2769300" type="application/octet-stream" sparkle:edSignature="JbAIHITPOUMvnYpruzo4ojpqpJSgaqBiNn2hvvksTILQZIIspkm4YB1yJQtgyjs8R7IhB8/pgl86qnA8owQtAA=="/>
+            <enclosure url="https://aztea.ai/assets/otto/Otto-0.4.0.dmg" length="2769300" type="application/octet-stream" sparkle:edSignature="JbAIHITPOUMvnYpruzo4ojpqpJSgaqBiNn2hvvksTILQZIIspkm4YB1yJQtgyjs8R7IhB8/pgl86qnA8owQtAA=="/>
         </item>
     </channel>
 </rss>
