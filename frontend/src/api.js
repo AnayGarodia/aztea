@@ -674,6 +674,15 @@ export async function fetchAdminPlatformEarnings(key) {
   return body
 }
 
+// Otto product-telemetry dashboard. Omit `section` to get every section in one
+// payload (the dashboard's initial load); pass a section name to refresh one.
+export async function fetchOttoMetrics(key, { section, window = '30d' } = {}) {
+  const qs = new URLSearchParams({ window })
+  if (section) qs.set('section', section)
+  const { body } = await request(`/admin/otto/metrics?${qs.toString()}`, { key })
+  return body
+}
+
 export async function adminPlatformWithdraw(key, { source, amount_cents, memo } = {}) {
   const { body } = await request('/admin/platform/withdraw', {
     method: 'POST',

@@ -1,7 +1,7 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { motion } from 'motion/react'
 import {
-  LayoutDashboard, Wrench, Briefcase, Hammer, Wallet, Settings, LogOut, Shield, ListChecks, BookOpen, KeyRound, Coins, FilePlus, Workflow, FolderArchive
+  LayoutDashboard, Wrench, Briefcase, Hammer, Wallet, Settings, LogOut, Shield, ListChecks, BookOpen, KeyRound, Coins, FilePlus, Workflow, FolderArchive, Activity
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import Avatar from '../ui/Avatar'
@@ -107,6 +107,14 @@ export default function Sidebar() {
               <div className={`sidebar__link ${isActive ? 'sidebar__link--active' : ''}`}>
                 <Coins size={16} className="sidebar__link-icon" />
                 <span className="sidebar__link-label">Platform Earnings</span>
+              </div>
+            )}
+          </NavLink>
+          <NavLink to="/admin/otto" className="sidebar__link-wrap">
+            {({ isActive }) => (
+              <div className={`sidebar__link ${isActive ? 'sidebar__link--active' : ''}`}>
+                <Activity size={16} className="sidebar__link-icon" />
+                <span className="sidebar__link-label">Otto Telemetry</span>
               </div>
             )}
           </NavLink>

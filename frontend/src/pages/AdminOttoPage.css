@@ -1,0 +1,62 @@
+/* Otto telemetry dashboard. All colours/spacing via theme tokens. */
+
+.otto-dash { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.otto-dash__scroll { flex: 1; overflow-y: auto; }
+.otto-dash__content { max-width: var(--content-max); margin: 0 auto; padding: var(--sp-5) var(--sp-5) var(--sp-9); }
+
+.otto-dash__header { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-4); flex-wrap: wrap; margin-bottom: var(--sp-5); }
+.otto-dash__header h1 { font-family: var(--f-display); font-size: 30px; margin: 2px 0 4px; color: var(--text-primary); }
+.otto-dash__header p { color: var(--text-secondary); margin: 0; }
+.otto-dash__eyebrow { color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; }
+
+.otto-dash__windows { display: flex; gap: var(--sp-2); }
+.otto-chip, .otto-tab {
+  font: inherit; cursor: pointer; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-secondary);
+  border-radius: var(--r-pill); padding: 4px 14px; font-size: 13px;
+  transition: all var(--dur-sm) var(--ease);
+}
+.otto-chip--on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.otto-chip:hover, .otto-tab:hover { border-color: var(--border-bright); }
+
+.otto-tabs { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-bottom: var(--sp-5); border-bottom: 1px solid var(--border-soft); padding-bottom: var(--sp-4); }
+.otto-tab { border-radius: var(--r-sm); }
+.otto-tab--on { background: var(--accent-bg); color: var(--accent); border-color: var(--accent-border); font-weight: 600; }
+
+/* KPI cards */
+.otto-kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--sp-3); }
+.otto-kpi { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: var(--sp-4); }
+.otto-kpi__label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.otto-kpi__value { font-family: var(--f-display); font-size: 26px; color: var(--text-primary); margin: 4px 0; line-height: 1.1; }
+.otto-kpi__delta { font-size: 11px; color: var(--text-muted); }
+.otto-kpi__delta--up { color: var(--positive); }
+.otto-kpi__delta--down { color: var(--negative); }
+.otto-kpi__hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
+/* Section grid + panels */
+.otto-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
+.otto-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: var(--sp-4); min-width: 0; }
+.otto-panel--wide { grid-column: 1 / -1; }
+.otto-panel__head h3 { margin: 0; font-size: 15px; color: var(--text-primary); }
+.otto-panel__head p { margin: 2px 0 var(--sp-3); font-size: 12px; color: var(--text-muted); }
+.otto-panel__body { min-width: 0; }
+
+.otto-empty { padding: var(--sp-6); text-align: center; color: var(--text-muted); font-size: 13px; }
+.otto-error { padding: var(--sp-5); color: var(--negative); }
+
+/* Funnel */
+.otto-funnel { display: flex; flex-direction: column; gap: var(--sp-3); }
+.otto-funnel__meta { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+.otto-funnel__track { height: 16px; background: var(--surface-2); border-radius: var(--r-pill); overflow: hidden; }
+.otto-funnel__fill { height: 100%; background: var(--accent); border-radius: var(--r-pill); transition: width var(--dur-lg) var(--ease); }
+
+/* Tables */
+.otto-table-wrap { overflow-x: auto; }
+.otto-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.otto-table th { text-align: left; color: var(--text-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.otto-table td { padding: 7px 10px; border-bottom: 1px solid var(--border-soft); color: var(--text-primary); }
+.otto-table tbody tr:hover { background: var(--accent-bg); }
+
+@media (max-width: 720px) {
+  .otto-grid { grid-template-columns: 1fr; }
+}
