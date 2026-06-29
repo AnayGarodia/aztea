@@ -3,6 +3,19 @@
     <channel>
         <title>Otto</title>
         <item>
+            <title>0.5.7</title>
+            <pubDate>Mon, 29 Jun 2026 15:03:02 -0700</pubDate>
+            <link>https://aztea.ai/otto</link>
+            <sparkle:version>1782770523</sparkle:version>
+            <sparkle:shortVersionString>0.5.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://aztea.ai/otto/Otto-0.5.7.dmg" length="2907207" type="application/octet-stream"/>
+            <sparkle:deltas>
+                <enclosure url="https://aztea.ai/otto/Otto1782770523-1782764180.delta" sparkle:deltaFrom="1782764180" length="190294" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977712" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="01nE0oXYxrr2MGbRjWCaHrbsTWtIGIPjAv1504Y/hBMRVl9Q29RmlfqOlebDLaJXv3SSLVPQ7JsosBvC5dHyBw=="/>
+            </sparkle:deltas>
+        </item>
+        <item>
             <title>0.5.6</title>
             <pubDate>Mon, 29 Jun 2026 13:17:36 -0700</pubDate>
             <link>https://aztea.ai/otto</link>
