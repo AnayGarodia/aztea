@@ -83,14 +83,16 @@ outcome: "success" | "partial" | "failed" | "stopped"
 failure_reason: "none" | "element_not_found" | "stale_ref" | "verify_failed"
               | "vision_timeout" | "repeat_loop" | "user_stopped"
               | "model_refused" | "app_error" | "network"
-step_count: int
-action_count: int
-retries: int
-intervened: bool          // user corrected mid-run
-user_accepted: bool|null  // kept result vs undid/redid; null = unknown
+step_count: int           // model turns
+action_count: int         // individual actions executed (>= step_count; a turn can batch)
 from_recipe: bool         // ran from a learned open-loop recipe (a repeat)
+// Reserved — accepted by the server but not yet emitted by the app:
+retries?: int
+intervened?: bool         // user corrected mid-run
+user_accepted?: bool|null // kept result vs undid/redid; null = unknown
 latency_ms: {             // sums across the whole task
-  ttfa: int               // ask -> first action (perceived responsiveness)
+  ttfa: int               // ask -> first action (perceived responsiveness).
+                          //   OMITTED when no action ran (e.g. an immediate refusal)
   total: int              // ask -> done (wall clock)
   perceive: int           // building AX tree / DOM / vision capture
   model: int              // LLM round trips
@@ -124,10 +126,12 @@ utm_campaign?: string
 
 ## Server storage
 
-- Raw append-only table `otto_events` (one row per event, `event_id` UNIQUE for
-  idempotency, `props` as JSON/JSONB via `core/db.py`).
-- Aggregates computed by query/materialized views; see
-  `core/otto_telemetry/` and the `/admin/otto/*` metrics API.
+- Raw append-only table `otto_telemetry_events` (one row per event, `event_id`
+  UNIQUE for idempotency, `props` as TEXT via `core/db.py`, plus denormalized hot
+  columns for the frequently-sliced `task` fields). Migration `0086`.
+- Aggregates computed on demand by indexed read-only queries (no materialized
+  views — keeps SQLite/Postgres parity); see `core/otto_telemetry/` and the
+  `/admin/otto/metrics` API.
 
 ## Notes
 
