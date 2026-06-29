@@ -3,14 +3,27 @@
     <channel>
         <title>Otto</title>
         <item>
-            <title>0.5.1</title>
-            <pubDate>Sun, 28 Jun 2026 17:54:05 -0700</pubDate>
+            <title>0.5.5</title>
+            <pubDate>Sun, 28 Jun 2026 23:40:12 -0700</pubDate>
             <link>https://aztea.ai/otto</link>
-            <sparkle:version>1782694380</sparkle:version>
-            <sparkle:shortVersionString>0.5.1</sparkle:shortVersionString>
+            <sparkle:version>1782715146</sparkle:version>
+            <sparkle:shortVersionString>0.5.5</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://aztea.ai/otto/Otto-0.5.1.dmg" length="2883627" type="application/octet-stream"/>
+            <enclosure url="https://aztea.ai/otto/Otto-0.5.5.dmg" length="2900866" type="application/octet-stream"/>
+            <sparkle:deltas>
+                <enclosure url="https://aztea.ai/otto/Otto1782715146-1782715136.delta" sparkle:deltaFrom="1782715136" length="5430" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977712" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="CyVq726wtcN8QQole/twsaHM24gKUjd/flVjrmSvFBRdvKzOaWdWlBYSk9cOW3D4uOSQj5nLnRo+bzEU0FusDQ=="/>
+            </sparkle:deltas>
+        </item>
+        <item>
+            <title>0.5.4</title>
+            <pubDate>Sun, 28 Jun 2026 23:40:11 -0700</pubDate>
+            <link>https://aztea.ai/otto</link>
+            <sparkle:version>1782715136</sparkle:version>
+            <sparkle:shortVersionString>0.5.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://aztea.ai/otto/Otto-0.5.4.dmg" length="2902188" type="application/octet-stream"/>
         </item>
     </channel>
 </rss>
