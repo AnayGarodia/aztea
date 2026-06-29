@@ -1527,6 +1527,12 @@ def auth_me(
             status_code=403, detail="Agent-scoped keys cannot access /auth/me."
         )
     user = caller["user"]
+    # Surface the email-allowlist admin grant in the profile too, so the web UI
+    # (sidebar + RequireAdmin gate, which read user.scopes) sees admin even
+    # though the underlying session key carries only its minted default scopes.
+    scopes = list(caller.get("scopes") or [])
+    if _caller_is_admin_email(caller) and "admin" not in scopes:
+        scopes.append("admin")
     return JSONResponse(
         content={
             "user_id": user["user_id"],
@@ -1535,7 +1541,7 @@ def auth_me(
             "full_name": user.get("full_name"),
             "phone": user.get("phone"),
             "role": user.get("role") or "both",
-            "scopes": caller.get("scopes") or [],
+            "scopes": scopes,
             **_auth_legal_payload(user),
         }
     )
@@ -1691,6 +1697,9 @@ def auth_update_profile(
             status_code=400,
             detail=_envelope_from_value_error(exc, "auth"),
         )
+    profile_scopes = list(caller.get("scopes") or [])
+    if _caller_is_admin_email(caller) and "admin" not in profile_scopes:
+        profile_scopes.append("admin")
     return JSONResponse(
         content={
             "user_id": updated["user_id"],
@@ -1699,7 +1708,7 @@ def auth_update_profile(
             "full_name": updated.get("full_name"),
             "phone": updated.get("phone"),
             "role": updated.get("role") or "both",
-            "scopes": caller.get("scopes") or [],
+            "scopes": profile_scopes,
             **_auth_legal_payload(updated),
         }
     )

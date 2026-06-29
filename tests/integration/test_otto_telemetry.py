@@ -128,6 +128,33 @@ def test_metrics_requires_admin(client):
     assert r.status_code == 403, r.text
 
 
+def test_admin_email_allowlist_grants_dashboard(client, monkeypatch):
+    """A user whose email is in ADMIN_EMAILS reaches the dashboard with only
+    default (caller,worker) key scopes — admin is derived from the email, so it
+    survives session-key re-minting. And /auth/me reports admin so the UI gate
+    opens."""
+    import uuid as _uuid
+
+    from core import auth
+
+    email = f"founder-{_uuid.uuid4().hex[:8]}@example.com"
+    user = auth.register_user(username=f"f{_uuid.uuid4().hex[:6]}", email=email, password="password123")
+    key = user["raw_api_key"]
+
+    # Without the allowlist: plain user → 403.
+    denied = client.get("/admin/otto/metrics?section=overview", headers=_auth_headers(key))
+    assert denied.status_code == 403, denied.text
+
+    # With the allowlist: same key, now admin via email.
+    monkeypatch.setenv("ADMIN_EMAILS", f"someone@else.com,{email.upper()}")
+    ok = client.get("/admin/otto/metrics?section=overview", headers=_auth_headers(key))
+    assert ok.status_code == 200, ok.text
+
+    me = client.get("/auth/me", headers=_auth_headers(key))
+    assert me.status_code == 200, me.text
+    assert "admin" in me.json()["scopes"]
+
+
 def test_metrics_overview_reflects_ingest(client):
     client.post("/otto/telemetry", headers=_otto_headers(), json={"events": [
         _task_event(device_id="dev-a", props={"outcome": "success"}),

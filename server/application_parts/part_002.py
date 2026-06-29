@@ -191,8 +191,36 @@ def _get_owner_email(owner_id: str) -> str | None:
         return None
 
 
+def _admin_email_allowlist() -> set[str]:
+    """Emails (lowercased) granted admin regardless of their key's stored scopes.
+
+    Why: session keys are re-minted on login with DEFAULT_KEY_SCOPES, so admin
+    granted on a key doesn't survive the next sign-in. Deriving admin from the
+    user's email instead makes it durable — set ADMIN_EMAILS=a@x,b@y and restart.
+    """
+    raw = os.environ.get("ADMIN_EMAILS", "")
+    return {e.strip().lower() for e in raw.split(",") if e.strip()}
+
+
+def _caller_email(caller: core_models.CallerContext) -> str | None:
+    user = caller.get("user") if isinstance(caller, dict) else None
+    email = user.get("email") if isinstance(user, dict) else None
+    return email.strip().lower() if isinstance(email, str) and email.strip() else None
+
+
+def _caller_is_admin_email(caller: core_models.CallerContext) -> bool:
+    allow = _admin_email_allowlist()
+    if not allow:
+        return False
+    email = _caller_email(caller)
+    return email is not None and email in allow
+
+
 def _caller_has_scope(caller: core_models.CallerContext, required_scope: str) -> bool:
     if caller["type"] == "master":
+        return True
+    # Email-based admin allowlist: durable across session-key re-minting.
+    if _caller_is_admin_email(caller):
         return True
     if caller["type"] == "agent_key":
         return required_scope == "worker"
