@@ -25,6 +25,28 @@ model_list:
     # Add fallback providers here later, e.g. a second Azure region or openai/gpt-5.5,
     # then list them under router_settings.fallbacks.
 
+  # Transparent acting backends: the Otto proxy forwards the app's OWN per-step model name
+  # (multimodel routing — gpt-5.4-mini on easy steps, gpt-5.5 on hard) straight through, so
+  # downloaded users get the SAME routing as a direct-Azure power user with no proxy/per-model
+  # code. Adding a future model = one entry here, nothing else.
+  - model_name: gpt-5.5
+    litellm_params:
+      model: azure/responses/gpt-5.5
+      api_base: os.environ/AZURE_RESPONSES_URL
+      api_key: os.environ/AZURE_RESPONSES_KEY
+      api_version: "2025-04-01-preview"
+      input_cost_per_token: 0.000002
+      output_cost_per_token: 0.00001
+  - model_name: gpt-5.4-mini
+    litellm_params:
+      model: azure/responses/gpt-5.4-mini
+      api_base: os.environ/AZURE_RESPONSES_URL
+      api_key: os.environ/AZURE_RESPONSES_KEY
+      api_version: "2025-04-01-preview"
+      # gpt-5.4-mini is cheaper; these are conservative (5.5-level) so the budget never under-counts.
+      input_cost_per_token: 0.000002
+      output_cost_per_token: 0.00001
+
   # Realtime voice — Azure realtime over WebSocket. aztea relays its upstream socket to
   # /v1/realtime?model=otto-realtime with the realtime virtual key.
   - model_name: otto-realtime
