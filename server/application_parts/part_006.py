@@ -1247,6 +1247,19 @@ def auth_google(
             )
         except Exception:  # pragma: no cover - welcome email is non-fatal
             _LOG.exception("Welcome email failed for Google signup")
+    # Always hand back a USABLE raw key. For an existing user, login_or_register_via_google
+    # reuses the live session key and returns raw_api_key=None (the raw value can't be
+    # recovered), so the response would carry no api_key — and the Otto desktop proxy then
+    # bounced the user with `no_key_in_response`. Mint a fresh session key in that case,
+    # matching /auth/otto/google/callback's rotate-on-login behaviour.
+    if not (result.get("raw_api_key") or result.get("api_key")):
+        try:
+            minted = _auth._create_key_for_user(result["user_id"], "Session key")
+            result["raw_api_key"] = minted["raw_key"]
+            result["api_key"] = minted["raw_key"]
+            result["key_id"] = minted["key_id"]
+        except Exception:
+            _LOG.exception("Failed to mint a fresh session key for Google sign-in")
     return JSONResponse(content={**result, **_auth_legal_payload(result)})
 
 
