@@ -47,6 +47,8 @@ services:
       # Upstream provider creds consumed by config.yaml (os.environ/...).
       AZURE_RESPONSES_URL: ${AZURE_RESPONSES_URL}
       AZURE_RESPONSES_KEY: ${AZURE_RESPONSES_KEY}
+      AZURE_EMBEDDINGS_URL: ${AZURE_EMBEDDINGS_URL}
+      AZURE_EMBEDDINGS_KEY: ${AZURE_EMBEDDINGS_KEY}
       AZURE_REALTIME_URL: ${AZURE_REALTIME_URL}
       AZURE_REALTIME_KEY: ${AZURE_REALTIME_KEY}
     healthcheck:

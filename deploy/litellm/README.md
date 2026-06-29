@@ -1,7 +1,8 @@
 # LiteLLM gateway for the Otto proxies
 
 LiteLLM sits **privately** behind aztea on the VM (`127.0.0.1:4001`, never public) and is the
-upstream for the GPT-5.5 (`/otto/responses`) and realtime voice (`/otto/realtime`) paths.
+upstream for the GPT-5.5 (`/otto/responses`), embeddings (`/otto/embeddings`), and realtime voice
+(`/otto/realtime`) paths.
 aztea stays the public front door: it validates the app's `OTTO_APP_TOKEN`, then forwards to
 LiteLLM, which holds the Azure keys, does provider routing/fallback, and enforces budgets.
 
@@ -22,9 +23,10 @@ docker compose -f deploy/litellm/docker-compose.yml logs -f litellm   # wait for
 curl -s http://127.0.0.1:4001/health/liveliness                       # -> "I'm alive!"
 ```
 
-## 2. Mint the two budgeted virtual keys
+## 2. Mint the three budgeted virtual keys
 
-The `$150` responses cap and the `$300` realtime backstop live on these keys' `max_budget`.
+The `$150` responses cap, `$300` realtime backstop, and `$50` embeddings cap live on these keys'
+`max_budget`.
 
 ```bash
 MASTER=sk-...   # = LITELLM_MASTER_KEY
@@ -38,6 +40,11 @@ curl -s http://127.0.0.1:4001/key/generate \
 curl -s http://127.0.0.1:4001/key/generate \
   -H "Authorization: Bearer $MASTER" -H "Content-Type: application/json" \
   -d '{"models":["otto-realtime"],"max_budget":300,"key_alias":"otto-realtime"}'
+
+# Embeddings key — $50 pool, scoped to the otto-embeddings model alias (semantic RECALL).
+curl -s http://127.0.0.1:4001/key/generate \
+  -H "Authorization: Bearer $MASTER" -H "Content-Type: application/json" \
+  -d '{"models":["otto-embeddings"],"max_budget":50,"key_alias":"otto-embeddings"}'
 ```
 
 Put the returned keys into aztea's env (see step 3). Re-running `/key/generate` makes a new
@@ -55,10 +62,17 @@ OTTO_RESPONSES_LITELLM_URL=http://127.0.0.1:4001
 OTTO_RESPONSES_LITELLM_KEY=<responses key from step 2>
 OTTO_REALTIME_LITELLM_URL=ws://127.0.0.1:4001
 OTTO_REALTIME_LITELLM_KEY=<realtime key from step 2>
+OTTO_EMBEDDINGS_LITELLM_URL=http://127.0.0.1:4001
+OTTO_EMBEDDINGS_LITELLM_KEY=<embeddings key from step 2>
 # Optional alias overrides (defaults shown):
 # OTTO_RESPONSES_LITELLM_MODEL=otto-responses
 # OTTO_REALTIME_LITELLM_MODEL=otto-realtime
+# OTTO_EMBEDDINGS_LITELLM_MODEL=otto-embeddings
 ```
+
+> Embeddings also needs the Azure deployment behind the `otto-embeddings` alias: set
+> `AZURE_EMBEDDINGS_URL` / `AZURE_EMBEDDINGS_KEY` in `deploy/litellm/.env` (they may equal the
+> `AZURE_RESPONSES_*` values if text-embedding-3-large lives on the same resource).
 
 Then restart aztea in a **foreground** SSH session with plain `systemctl` and watch health
 from outside the box (per the aztea-ops runbook — never deploy via a backgrounded SSH).

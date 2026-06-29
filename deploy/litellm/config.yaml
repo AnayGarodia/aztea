@@ -47,6 +47,18 @@ model_list:
       input_cost_per_token: 0.000002
       output_cost_per_token: 0.00001
 
+  # Embeddings backend — Azure text-embedding-3-large for Otto's semantic RECALL (procedural /
+  # corrective memory). aztea POSTs to /v1/embeddings with the embeddings virtual key; this alias
+  # resolves the deployment + budget attribution. Pass `dimensions` through (3-large can shrink to
+  # 1024). text-embedding-3-large isn't in LiteLLM's cost map, so set the rate or max_budget never trips.
+  - model_name: otto-embeddings
+    litellm_params:
+      model: azure/text-embedding-3-large
+      api_base: os.environ/AZURE_EMBEDDINGS_URL   # may equal AZURE_RESPONSES_URL if the same resource
+      api_key: os.environ/AZURE_EMBEDDINGS_KEY
+      api_version: "2024-12-01-preview"
+      input_cost_per_token: 0.00000013            # ~$0.13 / 1M tokens; tune to your Azure rate card
+
   # Realtime voice — Azure realtime over WebSocket. aztea relays its upstream socket to
   # /v1/realtime?model=otto-realtime with the realtime virtual key.
   - model_name: otto-realtime

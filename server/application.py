@@ -59,12 +59,23 @@ def _part_paths() -> list[Path]:
     if not part_paths:
         raise RuntimeError("server.application_parts has no part_*.py files")
 
-    expected = [f"part_{idx:03d}.py" for idx in range(len(part_paths))]
+    # Shards normally must be contiguous (part_000..part_N) so a botched/partial deploy that drops
+    # a shard fails fast instead of booting with a missing route. RESERVED_PENDING holds indices that
+    # may be TEMPORARILY absent because their owner is landing them on main out-of-band; any OTHER
+    # gap still fails fast, so the dropped-shard guard stays intact for every real shard.
+    # part_019 = a LEGACY analytics shard that exists only as an untracked file on the production box.
+    # The analytics/telemetry pipeline was migrated to server/routes/otto_telemetry.py (a module, not a
+    # shard), so part_019 will NOT be added to git. The gap is reserved so fresh checkouts (which lack
+    # the box's legacy file) still boot; remove 19 here once that legacy file is retired from the box.
+    RESERVED_PENDING = {19}
     actual = [path.name for path in part_paths]
-    if actual != expected:
+    indices = sorted(int(p.name[len("part_") : -len(".py")]) for p in part_paths)
+    missing = set(range(max(indices) + 1)) - set(indices)
+    unexpected = missing - RESERVED_PENDING
+    if unexpected:
         raise RuntimeError(
-            "server.application_parts must be contiguous part_000..part_N files; "
-            f"found {actual}"
+            "server.application_parts is missing shard(s) "
+            f"{sorted('part_%03d.py' % i for i in unexpected)} (contiguity guard); found {actual}"
         )
     return part_paths
 

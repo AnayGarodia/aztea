@@ -12,6 +12,7 @@ Otto app ──Bearer OTTO_APP_TOKEN──▶ aztea (auth) ──▶ LiteLLM (12
 | Route | Purpose | Upstream |
 |---|---|---|
 | `POST /otto/responses` | GPT-5.5 acting (Azure Responses API) — `part_018.py` | LiteLLM `/v1/responses` |
+| `POST /otto/embeddings` | Semantic RECALL (Azure text-embedding-3-large) — `part_020.py` | LiteLLM `/v1/embeddings` |
 | `WS /otto/realtime` | Voice (Azure realtime) — `part_016.py` | LiteLLM `/v1/realtime` (aztea relays the socket) |
 | `POST /otto/composio/{path}` | Composio connector relay — `part_017.py` | Composio (direct; not an LLM call) |
 | ~~`POST /otto/chat`~~ | **Removed** — the app no longer ships an Anthropic client | — |
@@ -29,6 +30,7 @@ Shared:
 | `OTTO_APP_TOKEN` | shared bearer secret — **must equal the app's baked-in token** | (required) |
 | `OTTO_USE_LITELLM` | `1` → route **both** LLM paths via LiteLLM (shared fallback flag) | unset |
 | `OTTO_RESPONSES_USE_LITELLM` | `1` → route only `/otto/responses` via LiteLLM (overrides shared) | unset |
+| `OTTO_EMBEDDINGS_USE_LITELLM` | `1` → route only `/otto/embeddings` via LiteLLM (overrides shared) | unset |
 | `OTTO_REALTIME_USE_LITELLM` | `1` → route only `/otto/realtime` via LiteLLM (overrides shared) | unset |
 
 > Current production: `OTTO_RESPONSES_USE_LITELLM=1` (responses via gateway), realtime left on
@@ -43,6 +45,9 @@ LiteLLM gateway path (`OTTO_USE_LITELLM=1`):
 | `OTTO_RESPONSES_LITELLM_URL` | LiteLLM base for responses | `http://127.0.0.1:4001` |
 | `OTTO_RESPONSES_LITELLM_KEY` | LiteLLM virtual key, `max_budget=$150` | (required) |
 | `OTTO_RESPONSES_LITELLM_MODEL` | model alias to pin | `otto-responses` |
+| `OTTO_EMBEDDINGS_LITELLM_URL` | LiteLLM base for embeddings | `http://127.0.0.1:4001` |
+| `OTTO_EMBEDDINGS_LITELLM_KEY` | LiteLLM virtual key, `max_budget=$50` | (required) |
+| `OTTO_EMBEDDINGS_LITELLM_MODEL` | model alias to pin | `otto-embeddings` |
 | `OTTO_REALTIME_LITELLM_URL` | LiteLLM ws base for realtime | `ws://127.0.0.1:4001` |
 | `OTTO_REALTIME_LITELLM_KEY` | LiteLLM virtual key, `max_budget=$300` (backstop) | (required) |
 | `OTTO_REALTIME_LITELLM_MODEL` | model alias to pin | `otto-realtime` |
@@ -57,6 +62,9 @@ Legacy / rollback path (`OTTO_USE_LITELLM` off):
 |---|---|---|
 | `AZURE_RESPONSES_URL` / `AZURE_RESPONSES_KEY` | Azure Responses upstream (server-side) | (required) |
 | `AZURE_RESPONSES_API_VERSION` / `AZURE_RESPONSES_MODEL` | api-version / deployment pin | `2025-04-01-preview` / — |
+| `AZURE_EMBEDDINGS_URL` / `AZURE_EMBEDDINGS_KEY` | Azure Embeddings upstream (server-side) | (required) |
+| `AZURE_EMBEDDINGS_API_VERSION` / `AZURE_EMBEDDINGS_MODEL` | api-version / deployment | `2024-12-01-preview` / `text-embedding-3-large` |
+| `OTTO_EMBEDDINGS_BUDGET_CAP_CENTS` | SQLite embeddings cap | `5000` ($50) |
 | `AZURE_REALTIME_URL` / `AZURE_REALTIME_KEY` | Azure realtime upstream (server-side) | (required) |
 | `OTTO_RESPONSES_BUDGET_CAP_CENTS` | SQLite responses cap | `15000` ($150) |
 | `OTTO_RT_BUDGET_CAP_CENTS` | realtime cap (always active — see below) | `30000` ($300) |
@@ -68,6 +76,9 @@ Legacy / rollback path (`OTTO_USE_LITELLM` off):
   `max_budget`; LiteLLM rejects over-budget calls and aztea maps that to the app's
   `402 payment.spend_limit_exceeded` contract. On the legacy path it's the SQLite
   `otto_responses_budget` counter.
+- **Embeddings ($50):** same model as responses — virtual-key `max_budget` on the LiteLLM
+  path, SQLite `otto_embeddings_budget` counter on the legacy path. text-embedding-3-large
+  is cheap (~$0.13/1M tokens), so this cap is mostly a runaway-guard.
 - **Realtime ($300):** aztea **always** meters realtime spend itself from the relayed
   `response.done` usage frames (`part_016.py`), independent of upstream — so the voice cap
   holds whether or not LiteLLM tracks audio spend. The realtime virtual key's `max_budget`
