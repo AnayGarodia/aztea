@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 
 // Bumped automatically by update.sh on every release — do not edit by hand.
-const VERSION = '0.5.5'
+const VERSION = '0.5.6'
 const DMG = `Otto-${VERSION}.dmg`
 const DMG_HREF = `/otto/${DMG}`
 
