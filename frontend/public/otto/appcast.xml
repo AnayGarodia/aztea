@@ -4,36 +4,13 @@
         <title>Otto</title>
         <item>
             <title>0.5.1</title>
-            <pubDate>Sun, 28 Jun 2026 16:43:16 -0700</pubDate>
+            <pubDate>Sun, 28 Jun 2026 17:54:05 -0700</pubDate>
             <link>https://aztea.ai/otto</link>
-            <sparkle:version>1782690173</sparkle:version>
+            <sparkle:version>1782694380</sparkle:version>
             <sparkle:shortVersionString>0.5.1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://aztea.ai/otto/Otto-0.5.1.dmg" length="2883116" type="application/octet-stream"/>
-            <sparkle:deltas>
-                <enclosure url="https://aztea.ai/otto/Otto1782690173-1782688543.delta" sparkle:deltaFrom="1782688543" length="332562" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977712" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="Axex9BHfmk9WVgo2KTuZk9C7+RGoeFfImic6Ty3b4GOP+/iv0QPM2RVjhJabMGC99lGibWXXUFILR2o/7cOPCA=="/>
-            </sparkle:deltas>
-        </item>
-        <item>
-            <title>0.4.0</title>
-            <pubDate>Sun, 28 Jun 2026 04:02:16 -0700</pubDate>
-            <link>https://aztea.ai/otto</link>
-            <sparkle:version>1782688543</sparkle:version>
-            <sparkle:shortVersionString>0.4.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://aztea.ai/otto/Otto-0.4.0.dmg" length="2770512" type="application/octet-stream" sparkle:edSignature="DjULQNFJGzG7NxTggcSQz9sKPROkbbsEZhweS+ZUwY4T651Da+w5G/T8zdlVoUGjLhVIXHsIf0Trjx4/rZxLBQ=="/>
-        </item>
-        <item>
-            <title>0.4.0</title>
-            <pubDate>Sun, 28 Jun 2026 04:02:16 -0700</pubDate>
-            <link>https://aztea.ai/otto</link>
-            <sparkle:version>1782644511</sparkle:version>
-            <sparkle:shortVersionString>0.4.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://aztea.ai/otto/Otto-0.4.0.dmg" length="2768164" type="application/octet-stream" sparkle:edSignature="2Nmil0wB9xYEQN8CGeuvaGqUfPxPKqEIsmNrmEgZBd1/DuKtoF8NhjDlwviqXRw5ndxSNedwJqK3iTJRzeJPAQ=="/>
+            <enclosure url="https://aztea.ai/otto/Otto-0.5.1.dmg" length="2883627" type="application/octet-stream"/>
         </item>
     </channel>
 </rss>
