@@ -2498,21 +2498,7 @@ app.include_router(
 )
 
 
-# Otto product telemetry: POST /otto/telemetry (ingest), GET /admin/otto/metrics
-# (dashboard), GET /otto/download (counted website download → DMG redirect).
-# Mounted here, before the SPA catch-all in part_014, so the GET routes aren't
-# shadowed by it. `_otto_proxy_auth_ok` lives in part_016 (loaded after this
-# shard), so it's bound through a thunk that resolves the name at call time —
-# same pattern as `_mcp_active_agents` below.
-app.include_router(
-    _otto_telemetry_routes.create_router(
-        require_api_key=_require_api_key,
-        require_scope=_require_scope,
-        require_admin_ip_allowlist=_require_admin_ip_allowlist,
-        otto_proxy_auth_ok=lambda token: _otto_proxy_auth_ok(token),
-        limiter=limiter,
-    )
-)
+# Otto telemetry router — REMOVED (Otto decoupled from aztea).
 
 
 # Owner-facing hosted-skill learnings review (/skills/{id}/learnings...).
