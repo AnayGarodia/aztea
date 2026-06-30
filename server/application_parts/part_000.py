@@ -213,7 +213,6 @@ from server.error_handlers import (
     register_exception_handlers,
 )
 from server.routes import admin_usage as _admin_usage_routes
-from server.routes import otto_telemetry as _otto_telemetry_routes
 from server.routes import playground as _playground_routes
 from server.routes import public_integrations as _public_integrations_routes
 from server.routes import skill_learnings as _skill_learnings_routes

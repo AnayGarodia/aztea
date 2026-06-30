@@ -110,14 +110,6 @@ export default function Sidebar() {
               </div>
             )}
           </NavLink>
-          <NavLink to="/admin/otto" className="sidebar__link-wrap">
-            {({ isActive }) => (
-              <div className={`sidebar__link ${isActive ? 'sidebar__link--active' : ''}`}>
-                <Activity size={16} className="sidebar__link-icon" />
-                <span className="sidebar__link-label">Otto Telemetry</span>
-              </div>
-            )}
-          </NavLink>
         </nav>
       )}
 

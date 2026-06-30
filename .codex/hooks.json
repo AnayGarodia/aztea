@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '\n── Session end checklist ──────────────────────────────────────\n  1. Move completed items in .agents/TODO.md (open → done)\n  2. Append one line to .agents/SESSIONS.md (date + what shipped)\n  3. Update .agents/ROADMAP.md status table if something shipped\n────────────────────────────────────────────────────────────────'"
+          }
+        ]
+      }
+    ]
+  }
+}

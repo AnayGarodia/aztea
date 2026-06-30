@@ -28,7 +28,6 @@ const WalletPage = lazy(() => import('./pages/WalletPage'))
 const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 const AdminDisputesPage = lazy(() => import('./pages/AdminDisputesPage'))
 const AdminEarningsPage = lazy(() => import('./pages/AdminEarningsPage'))
-const AdminOttoPage = lazy(() => import('./pages/AdminOttoPage'))
 const MyAgentsPage = lazy(() => import('./pages/MyAgentsPage'))
 const RegisterAgentPage = lazy(() => import('./pages/RegisterAgentPage'))
 const SkillUploadPage = lazy(() => import('./pages/SkillUploadPage'))
@@ -39,7 +38,6 @@ const IntegrationsPage = lazy(() => import('./pages/IntegrationsPage'))
 const BuilderProfilePage = lazy(() => import('./pages/BuilderProfile'))
 const BuildPage = lazy(() => import('./pages/BuildPage'))
 const WebActorPlaygroundPage = lazy(() => import('./pages/WebActorPlaygroundPage'))
-const OttoPage = lazy(() => import('./pages/OttoPage'))
 
 function PublicMarketApp({ children }) {
   const { apiKey, booting } = useAuth()
@@ -130,7 +128,6 @@ function AuthedApp() {
               <Route path="/integrations" element={<IntegrationsPage />} />
               <Route path="/admin/disputes" element={<RequireAdmin><AdminDisputesPage /></RequireAdmin>} />
               <Route path="/admin/earnings" element={<RequireAdmin><AdminEarningsPage /></RequireAdmin>} />
-              <Route path="/admin/otto" element={<RequireAdmin><AdminOttoPage /></RequireAdmin>} />
               <Route path="*"         element={<Navigate to="/overview" replace />} />
             </Route>
           </Routes>
@@ -172,7 +169,6 @@ export default function App() {
           <ErrorBoundary>
             <Suspense fallback={<AppBoot />}>
               <Routes>
-                <Route path="/otto" element={<OttoPage />} />
                 <Route path="/welcome" element={<LandingPage />} />
                 <Route path="/pricing" element={<LandingPage />} />
                 <Route path="/terms"   element={<TermsPage />} />
